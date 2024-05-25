@@ -1,18 +1,21 @@
+mod nanotdf;
+
 use std::fs;
 use std::sync::Arc;
 
 use data_encoding::HEXUPPER;
 use futures_util::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
+use nanotdf::NanoTDF;
 use openssl::ec::PointConversionForm;
 use openssl::pkey::PKey;
 use ring::{agreement, digest, rand};
 use serde::{Deserialize, Serialize};
+use std::sync::RwLock;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
-use std::sync::RwLock;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct PublicKeyMessage {
@@ -53,6 +56,7 @@ lazy_static! {
 
 #[tokio::main]
 async fn main() {
+    let _nanotdf = NanoTDF::from_bytes(&[]);
     println!("OpenSSL build info: {}", openssl::version::version());
     // KAS public key
     // Load the PEM file
@@ -64,11 +68,16 @@ async fn main() {
     let ec_group = private_key.group();
     let public_key = private_key.public_key();
     let mut bn_ctx = openssl::bn::BigNumContext::new().unwrap();
-    let public_key_bytes = public_key.to_bytes(&ec_group, PointConversionForm::UNCOMPRESSED, &mut bn_ctx).unwrap();
+    let public_key_bytes = public_key
+        .to_bytes(&ec_group, PointConversionForm::UNCOMPRESSED, &mut bn_ctx)
+        .unwrap();
     // Hash the public key to get the fingerprint
     let fingerprint = digest::digest(&digest::SHA256, &*public_key_bytes);
     // Print the fingerprint in hexadecimal format
-    println!("KAS Public Key Fingerprint: {}", HEXUPPER.encode(fingerprint.as_ref()));
+    println!(
+        "KAS Public Key Fingerprint: {}",
+        HEXUPPER.encode(fingerprint.as_ref())
+    );
     // Set static KAS_PUBLIC_KEY_DER
     {
         // let mut kas_public_key_der = KAS_PUBLIC_KEY_DER.lock().await;
@@ -110,7 +119,9 @@ async fn handle_connection(stream: TcpStream, connection_state: Arc<Mutex<Connec
         match message {
             Ok(msg) => {
                 println!("Received message: {:?}", msg);
-                if let Some(response) = handle_binary_message(connection_state.clone(), msg.into_data()).await {
+                if let Some(response) =
+                    handle_binary_message(connection_state.clone(), msg.into_data()).await
+                {
                     let response = response.into();
                     ws_sender.send(response).await.unwrap();
                 }
@@ -123,7 +134,10 @@ async fn handle_connection(stream: TcpStream, connection_state: Arc<Mutex<Connec
     }
 }
 
-async fn handle_binary_message(connection_state: Arc<Mutex<ConnectionState>>, data: Vec<u8>) -> Option<Message> {
+async fn handle_binary_message(
+    connection_state: Arc<Mutex<ConnectionState>>,
+    data: Vec<u8>,
+) -> Option<Message> {
     if data.len() < 1 {
         println!("Invalid message format");
         return None;
@@ -137,12 +151,17 @@ async fn handle_binary_message(connection_state: Arc<Mutex<ConnectionState>>, da
         None => {
             println!("Unknown message type");
             None
-        },
+        }
     }
 }
 
-async fn handle_public_key(connection_state: Arc<Mutex<ConnectionState>>, payload: &[u8]) -> Option<Message> {
-    let private_key = agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, &rand::SystemRandom::new()).unwrap();
+async fn handle_public_key(
+    connection_state: Arc<Mutex<ConnectionState>>,
+    payload: &[u8],
+) -> Option<Message> {
+    let private_key =
+        agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, &rand::SystemRandom::new())
+            .unwrap();
     let server_public_key = private_key.compute_public_key().unwrap();
     // Hex
     let server_public_key_hex = hex::encode(server_public_key.as_ref());
@@ -150,14 +169,11 @@ async fn handle_public_key(connection_state: Arc<Mutex<ConnectionState>>, payloa
     let peer_public_key = agreement::UnparsedPublicKey::new(&agreement::ECDH_P256, payload);
     {
         let mut state = connection_state.lock().await;
-        let temp_secret = agreement::agree_ephemeral(
-            private_key,
-            &peer_public_key,
-            |key_material| {
+        let temp_secret =
+            agreement::agree_ephemeral(private_key, &peer_public_key, |key_material| {
                 // consume key_material here and generally perform desired computations
                 Ok::<_, ring::error::Unspecified>(key_material.to_vec())
-            },
-        );
+            });
         match temp_secret {
             Ok(shared_secret) => {
                 if let Ok(secret) = shared_secret {
@@ -182,7 +198,7 @@ async fn handle_kas_public_key(payload: &[u8]) -> Option<Message> {
     if let Some(ref public_key) = *kas_public_key_der {
         return Some(Message::Binary(public_key.clone()));
     }
-    return None
+    return None;
 }
 
 // async fn get_compressed_public_key() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
