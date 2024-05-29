@@ -6,7 +6,7 @@ use std::sync::Arc;
 use data_encoding::HEXUPPER;
 use futures_util::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
-use nanotdf::NanoTDF;
+use nanotdf::BinaryParser;
 use openssl::ec::PointConversionForm;
 use openssl::pkey::PKey;
 use ring::{agreement, digest, rand};
@@ -54,9 +54,16 @@ lazy_static! {
     static ref KAS_PUBLIC_KEY_DER: RwLock<Option<Vec<u8>>> = RwLock::new(None);
 }
 
+const ENCRYPTED_PAYLOAD: &str = "\
+                4c 31 4c 01 0e 6b 61 73 2e 76 69 72 74 72 75 2e 63 6f 6d 80\
+                80 00 01 15 6b 61 73 2e 76 69 72 74 72 75 2e 63 6f 6d 2f 70\
+                6f 6c 69 63 79 b5 e4 13 a6 02 11 e5 f1 7b 22 34 a0 cd 3f 36\
+                ff 7b ba 6d 8f e8 df 23 f6 2c 9d 09 35 6f 85 82 f8 a9 cf 15\
+                12 6c 8a 9d a4 6c 5e 4e 0c bc c8 26 97 19 ac 05 1b 80 62 5c\
+                c7 54 03 03 6f fb 82 87 1f 02 f7 7f ba e5 26 09 da";
+
 #[tokio::main]
 async fn main() {
-    let _nanotdf = NanoTDF::from_bytes(&[]);
     println!("OpenSSL build info: {}", openssl::version::version());
     // KAS public key
     // Load the PEM file
@@ -103,6 +110,10 @@ async fn main() {
 }
 
 async fn handle_connection(stream: TcpStream, connection_state: Arc<Mutex<ConnectionState>>) {
+    // FIXME read from rewrap
+    let ec_bytes: Vec<u8> = hex::decode(ENCRYPTED_PAYLOAD.replace(" ", "")).unwrap();
+    let _nanotdf = BinaryParser::new(ec_bytes);
+
     let ws_stream = match accept_async(stream).await {
         Ok(ws) => ws,
         Err(e) => {

@@ -30,7 +30,6 @@ mod tests {
 
             let bytes = hex::decode(hex_string.replace(" ", ""))?;
             println!("{:?}", bytes);
-            // Process bytes as needed
             Ok(())
         }
 
