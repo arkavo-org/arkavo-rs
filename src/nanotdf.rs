@@ -5,6 +5,7 @@ extern crate serde_json;
 
 use std::error::Error;
 use std::fmt;
+
 use crypto::aead::{AeadDecryptor, AeadEncryptor};
 use crypto::aes::KeySize::KeySize256;
 use crypto::aes_gcm::AesGcm;
@@ -175,7 +176,7 @@ impl BinaryParser {
         };
         let body_length = self.read(1)?[0] as usize;
         let body = String::from_utf8(self.read(body_length)?).map_err(|_| ParsingError::InvalidKas)?;
-
+        println!("read_kas_field: {}", body);
         Ok(ResourceLocator {
             protocol_enum,
             body,
@@ -214,14 +215,30 @@ impl BinaryParser {
     }
 
     fn read_ecc_and_binding_mode(&mut self) -> Result<ECCAndBindingMode, ParsingError> {
-        let use_ecdsa_binding = self.read(1)?[0] != 0;
-        let ephemeral_ecc_params_enum = match self.read(1)?[0] {
+        println!("readEccAndBindingMode");
+
+        let ecc_and_binding_mode_data = self.read(1)?;
+        let ecc_and_binding_mode = ecc_and_binding_mode_data[0];
+
+        let ecc_mode_hex = format!("{:02x}", ecc_and_binding_mode);
+        println!("ECC Mode Hex: {}", ecc_mode_hex);
+
+        let use_ecdsa_binding = (ecc_and_binding_mode & (1 << 7)) != 0;
+        let ephemeral_ecc_params_enum_value = ecc_and_binding_mode & 0x07;
+
+        let ephemeral_ecc_params_enum = match ephemeral_ecc_params_enum_value {
             0x00 => ECDSAParams::Secp256r1,
             0x01 => ECDSAParams::Secp384r1,
             0x02 => ECDSAParams::Secp521r1,
             0x03 => ECDSAParams::Secp256k1,
-            _ => return Err(ParsingError::InvalidEccMode),
+            _ => {
+                println!("Unsupported Ephemeral ECC Params Enum value");
+                return Err(ParsingError::InvalidEccMode);
+            }
         };
+
+        println!("useECDSABinding: {}", use_ecdsa_binding);
+        println!("ephemeralECCParamsEnum: {:?}", ephemeral_ecc_params_enum);
 
         Ok(ECCAndBindingMode {
             use_ecdsa_binding,
@@ -230,31 +247,43 @@ impl BinaryParser {
     }
 
     fn read_symmetric_and_payload_config(&mut self) -> Result<SymmetricAndPayloadConfig, ParsingError> {
-        let has_signature = self.read(1)?[0] != 0;
-        let signature_ecc_mode = if has_signature {
-            Some(match self.read(1)?[0] {
-                0x00 => ECDSAParams::Secp256r1,
-                0x01 => ECDSAParams::Secp384r1,
-                0x02 => ECDSAParams::Secp521r1,
-                0x03 => ECDSAParams::Secp256k1,
-                _ => return Err(ParsingError::InvalidEccMode),
-            })
-        } else {
-            None
+        println!("readSymmetricAndPayloadConfig");
+
+        let symmetric_and_payload_config_data = self.read(1)?;
+        let symmetric_and_payload_config = symmetric_and_payload_config_data[0];
+
+        let symmetric_and_payload_config_hex = format!("{:02x}", symmetric_and_payload_config);
+        println!("Symmetric And Payload Config Hex: {}", symmetric_and_payload_config_hex);
+
+        let has_signature = (symmetric_and_payload_config & 0x80) >> 7 != 0;
+        let signature_ecc_mode_enum_value = (symmetric_and_payload_config & 0x70) >> 4;
+        let symmetric_cipher_enum_value = symmetric_and_payload_config & 0x0F;
+
+        let signature_ecc_mode_enum = match signature_ecc_mode_enum_value {
+            0x00 => Some(ECDSAParams::Secp256r1),
+            0x01 => Some(ECDSAParams::Secp384r1),
+            0x02 => Some(ECDSAParams::Secp521r1),
+            0x03 => Some(ECDSAParams::Secp256k1),
+            _ => None,
         };
-        let symmetric_cipher_enum = Some(match self.read(1)?[0] {
-            0x00 => SymmetricCiphers::Gcm64,
-            0x01 => SymmetricCiphers::Gcm96,
-            0x02 => SymmetricCiphers::Gcm104,
-            0x03 => SymmetricCiphers::Gcm112,
-            0x04 => SymmetricCiphers::Gcm120,
-            0x05 => SymmetricCiphers::Gcm128,
-            _ => return Err(ParsingError::InvalidPayloadSigMode),
-        });
+
+        let symmetric_cipher_enum = match symmetric_cipher_enum_value {
+            0x00 => Some(SymmetricCiphers::Gcm64),
+            0x01 => Some(SymmetricCiphers::Gcm96),
+            0x02 => Some(SymmetricCiphers::Gcm104),
+            0x03 => Some(SymmetricCiphers::Gcm112),
+            0x04 => Some(SymmetricCiphers::Gcm120),
+            0x05 => Some(SymmetricCiphers::Gcm128),
+            _ => None,
+        };
+
+        println!("hasSignature: {}", has_signature);
+        println!("signatureECCModeEnum: {:?}", signature_ecc_mode_enum);
+        println!("symmetricCipherEnum: {:?}", symmetric_cipher_enum);
 
         Ok(SymmetricAndPayloadConfig {
             has_signature,
-            signature_ecc_mode,
+            signature_ecc_mode: signature_ecc_mode_enum,
             symmetric_cipher_enum,
         })
     }
@@ -326,6 +355,7 @@ impl Error for ParsingError {}
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+
     use super::*;
 
     struct NanoTDFTests;
@@ -351,6 +381,42 @@ mod tests {
                 c7 54 03 03 6f fb 82 87 1f 02 f7 7f ba e5 26 09 da";
 
             let bytes = hex::decode(hex_string.replace(" ", ""))?;
+            println!("{:?}", bytes);
+            let mut parser = BinaryParser::new(bytes);
+            let header = parser.parse_header()?;
+            println!("{:?}", header);
+            // Process header as needed
+            Ok(())
+        }
+
+        fn test_spec_example_decrypt_payload() -> Result<(), Box<dyn Error>> {
+            let encrypted_payload = "\
+                4c 31 4c 01 0e 6b 61 73 2e 76 69 72 74 72 75 2e 63 6f 6d 80\
+                80 00 01 15 6b 61 73 2e 76 69 72 74 72 75 2e 63 6f 6d 2f 70\
+                6f 6c 69 63 79 b5 e4 13 a6 02 11 e5 f1 7b 22 34 a0 cd 3f 36\
+                ff 7b ba 6d 8f e8 df 23 f6 2c 9d 09 35 6f 85 82 f8 a9 cf 15\
+                12 6c 8a 9d a4 6c 5e 4e 0c bc c8 26 97 19 ac 05 1b 80 62 5c\
+                c7 54 03 03 6f fb 82 87 1f 02 f7 7f ba e5 26 09 da";
+
+            let bytes = hex::decode(encrypted_payload.replace(" ", ""))?;
+            println!("{:?}", bytes);
+            let mut parser = BinaryParser::new(bytes);
+            let header = parser.parse_header()?;
+            println!("{:?}", header);
+            Ok(())
+        }
+
+        fn test_no_signature_spec_example_binary_parser() -> Result<(), Box<dyn Error>> {
+            let hex_string = "\
+                4c 31 4c 01 0e 6b 61 73 2e 76 69 72 74 72 75 2e 63 6f 6d 80\
+                80 00 01 15 6b 61 73 2e 76 69 72 74 72 75 2e 63 6f 6d 2f 70\
+                6f 6c 69 63 79 b5 e4 13 a6 02 11 e5 f1 7b 22 34 a0 cd 3f 36\
+                ff 7b ba 6d 8f e8 df 23 f6 2c 9d 09 35 6f 85 82 f8 a9 cf 15\
+                12 6c 8a 9d a4 6c 5e 4e 0c bc c8 26 97 19 ac 05 1b 80 62 5c\
+                c7 54 03 03 6f fb 82 87 1f 02 f7 7f ba e5 26 09 da";
+
+            let bytes = hex::decode(hex_string.replace(" ", ""))?;
+            println!("{:?}", bytes);
             let mut parser = BinaryParser::new(bytes);
             let header = parser.parse_header()?;
             println!("{:?}", header);
@@ -363,6 +429,8 @@ mod tests {
     fn run_tests() -> Result<(), Box<dyn Error>> {
         NanoTDFTests::setup()?;
         NanoTDFTests::test_spec_example_binary_parser()?;
+        NanoTDFTests::test_spec_example_decrypt_payload()?;
+        NanoTDFTests::test_no_signature_spec_example_binary_parser()?;
         NanoTDFTests::teardown()?;
         Ok(())
     }
