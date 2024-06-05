@@ -1,18 +1,21 @@
+mod nanotdf;
+
 use std::fs;
 use std::sync::Arc;
 
 use data_encoding::HEXUPPER;
 use futures_util::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
+use nanotdf::BinaryParser;
 use openssl::ec::PointConversionForm;
 use openssl::pkey::PKey;
 use ring::{agreement, digest, rand};
 use serde::{Deserialize, Serialize};
+use std::sync::RwLock;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
-use std::sync::RwLock;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct PublicKeyMessage {
@@ -51,6 +54,14 @@ lazy_static! {
     static ref KAS_PUBLIC_KEY_DER: RwLock<Option<Vec<u8>>> = RwLock::new(None);
 }
 
+const ENCRYPTED_PAYLOAD: &str = "\
+                4c 31 4c 01 0e 6b 61 73 2e 76 69 72 74 72 75 2e 63 6f 6d 80\
+                80 00 01 15 6b 61 73 2e 76 69 72 74 72 75 2e 63 6f 6d 2f 70\
+                6f 6c 69 63 79 b5 e4 13 a6 02 11 e5 f1 7b 22 34 a0 cd 3f 36\
+                ff 7b ba 6d 8f e8 df 23 f6 2c 9d 09 35 6f 85 82 f8 a9 cf 15\
+                12 6c 8a 9d a4 6c 5e 4e 0c bc c8 26 97 19 ac 05 1b 80 62 5c\
+                c7 54 03 03 6f fb 82 87 1f 02 f7 7f ba e5 26 09 da";
+
 #[tokio::main]
 async fn main() {
     println!("OpenSSL build info: {}", openssl::version::version());
@@ -64,11 +75,16 @@ async fn main() {
     let ec_group = private_key.group();
     let public_key = private_key.public_key();
     let mut bn_ctx = openssl::bn::BigNumContext::new().unwrap();
-    let public_key_bytes = public_key.to_bytes(&ec_group, PointConversionForm::UNCOMPRESSED, &mut bn_ctx).unwrap();
+    let public_key_bytes = public_key
+        .to_bytes(&ec_group, PointConversionForm::UNCOMPRESSED, &mut bn_ctx)
+        .unwrap();
     // Hash the public key to get the fingerprint
     let fingerprint = digest::digest(&digest::SHA256, &*public_key_bytes);
     // Print the fingerprint in hexadecimal format
-    println!("KAS Public Key Fingerprint: {}", HEXUPPER.encode(fingerprint.as_ref()));
+    println!(
+        "KAS Public Key Fingerprint: {}",
+        HEXUPPER.encode(fingerprint.as_ref())
+    );
     // Set static KAS_PUBLIC_KEY_DER
     {
         // let mut kas_public_key_der = KAS_PUBLIC_KEY_DER.lock().await;
@@ -94,6 +110,10 @@ async fn main() {
 }
 
 async fn handle_connection(stream: TcpStream, connection_state: Arc<Mutex<ConnectionState>>) {
+    // FIXME read from rewrap
+    let ec_bytes: Vec<u8> = hex::decode(ENCRYPTED_PAYLOAD.replace(" ", "")).unwrap();
+    let _nanotdf = BinaryParser::new(ec_bytes);
+
     let ws_stream = match accept_async(stream).await {
         Ok(ws) => ws,
         Err(e) => {
@@ -110,7 +130,9 @@ async fn handle_connection(stream: TcpStream, connection_state: Arc<Mutex<Connec
         match message {
             Ok(msg) => {
                 println!("Received message: {:?}", msg);
-                if let Some(response) = handle_binary_message(connection_state.clone(), msg.into_data()).await {
+                if let Some(response) =
+                    handle_binary_message(connection_state.clone(), msg.into_data()).await
+                {
                     let response = response.into();
                     ws_sender.send(response).await.unwrap();
                 }
@@ -123,7 +145,10 @@ async fn handle_connection(stream: TcpStream, connection_state: Arc<Mutex<Connec
     }
 }
 
-async fn handle_binary_message(connection_state: Arc<Mutex<ConnectionState>>, data: Vec<u8>) -> Option<Message> {
+async fn handle_binary_message(
+    connection_state: Arc<Mutex<ConnectionState>>,
+    data: Vec<u8>,
+) -> Option<Message> {
     if data.len() < 1 {
         println!("Invalid message format");
         return None;
@@ -137,12 +162,17 @@ async fn handle_binary_message(connection_state: Arc<Mutex<ConnectionState>>, da
         None => {
             println!("Unknown message type");
             None
-        },
+        }
     }
 }
 
-async fn handle_public_key(connection_state: Arc<Mutex<ConnectionState>>, payload: &[u8]) -> Option<Message> {
-    let private_key = agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, &rand::SystemRandom::new()).unwrap();
+async fn handle_public_key(
+    connection_state: Arc<Mutex<ConnectionState>>,
+    payload: &[u8],
+) -> Option<Message> {
+    let private_key =
+        agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, &rand::SystemRandom::new())
+            .unwrap();
     let server_public_key = private_key.compute_public_key().unwrap();
     // Hex
     let server_public_key_hex = hex::encode(server_public_key.as_ref());
@@ -150,14 +180,11 @@ async fn handle_public_key(connection_state: Arc<Mutex<ConnectionState>>, payloa
     let peer_public_key = agreement::UnparsedPublicKey::new(&agreement::ECDH_P256, payload);
     {
         let mut state = connection_state.lock().await;
-        let temp_secret = agreement::agree_ephemeral(
-            private_key,
-            &peer_public_key,
-            |key_material| {
+        let temp_secret =
+            agreement::agree_ephemeral(private_key, &peer_public_key, |key_material| {
                 // consume key_material here and generally perform desired computations
                 Ok::<_, ring::error::Unspecified>(key_material.to_vec())
-            },
-        );
+            });
         match temp_secret {
             Ok(shared_secret) => {
                 if let Ok(secret) = shared_secret {
@@ -182,7 +209,7 @@ async fn handle_kas_public_key(payload: &[u8]) -> Option<Message> {
     if let Some(ref public_key) = *kas_public_key_der {
         return Some(Message::Binary(public_key.clone()));
     }
-    return None
+    return None;
 }
 
 // async fn get_compressed_public_key() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
