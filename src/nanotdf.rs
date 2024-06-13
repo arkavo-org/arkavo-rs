@@ -1,14 +1,10 @@
 extern crate crypto;
 extern crate hex;
 extern crate serde;
-extern crate serde_json;
 
 use std::error::Error;
 use std::fmt;
 
-use crypto::aead::{AeadDecryptor, AeadEncryptor};
-use crypto::aes::KeySize::KeySize256;
-use crypto::aes_gcm::AesGcm;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -42,7 +38,7 @@ struct NanoTDFPayload {
 }
 
 #[derive(Debug)]
-struct Header {
+pub(crate) struct Header {
     magic_number: Vec<u8>,
     version: Vec<u8>,
     kas: ResourceLocator,
@@ -50,6 +46,15 @@ struct Header {
     payload_sig_mode: SymmetricAndPayloadConfig,
     policy: Policy,
     ephemeral_key: Vec<u8>,
+}
+
+impl Header {
+    pub fn get_ephemeral_key(&self) -> &Vec<u8> {
+        &self.ephemeral_key
+    }
+    pub fn get_policy(&self) -> &Policy {
+        &self.policy
+    }
 }
 
 #[derive(Debug)]
@@ -72,11 +77,24 @@ enum PolicyType {
 }
 
 #[derive(Debug)]
-struct Policy {
+pub(crate) struct Policy {
     policy_type: PolicyType,
     body: Option<Vec<u8>>,
     remote: Option<ResourceLocator>,
+    // TODO change to PolicyBindingConfig
     binding: Option<Vec<u8>>,
+}
+
+impl Policy {
+    pub fn get_binding(&self) -> &Option<Vec<u8>> {
+        &self.binding
+    }
+}
+
+#[derive(Debug)]
+struct PolicyBindingConfig {
+    ecdsa_binding: bool,
+    curve: ECDSAParams,
 }
 
 struct EmbeddedPolicyBody {
@@ -92,6 +110,7 @@ enum ECDSAParams {
     Secp521r1 = 0x02,
     Secp256k1 = 0x03,
 }
+
 #[derive(Debug)]
 enum SymmetricCiphers {
     Gcm64 = 0x00,
@@ -109,41 +128,23 @@ struct Payload {
     payload_mac: Vec<u8>,
 }
 
-fn encrypt(data: &[u8], key: &[u8]) -> Option<Vec<u8>> {
-    let iv = [0u8; 12]; // Initialization vector
-    let mut gcm = AesGcm::new(KeySize256, key, &iv, &[]);
-    let mut ciphertext = vec![0u8; data.len()];
-    let mut tag = [0u8; 16];
-    gcm.encrypt(data, &mut ciphertext, &mut tag);
-    Some([ciphertext, tag.to_vec()].concat())
-}
-
-fn decrypt(data: &[u8], key: &[u8]) -> Option<Vec<u8>> {
-    let iv = [0u8; 12]; // Initialization vector
-    let mut gcm = AesGcm::new(KeySize256, key, &iv, &[]);
-    let mut plaintext = vec![0u8; data.len() - 16];
-    let mut tag = &data[data.len() - 16..];
-    // AesGcm::decrypt(&mut gcm, &data[..data.len() - 16], tag, &mut plaintext);
-    Some(plaintext)
-}
-
-pub(crate) struct BinaryParser {
-    data: Vec<u8>,
+pub(crate) struct BinaryParser<'a> {
+    data: &'a [u8],
     position: usize,
 }
 
-impl BinaryParser {
-    pub(crate) fn new(data: Vec<u8>) -> Self {
+impl<'a> BinaryParser<'a> {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
         BinaryParser { data, position: 0 }
     }
 
-    fn parse_header(&mut self) -> Result<Header, ParsingError> {
+    pub(crate) fn parse_header(&mut self) -> Result<Header, ParsingError> {
         let magic_number = self.read(MAGIC_NUMBER_SIZE)?;
         let version = self.read(VERSION_SIZE)?;
         let kas = self.read_kas_field()?;
         let ecc_mode = self.read_ecc_and_binding_mode()?;
         let payload_sig_mode = self.read_symmetric_and_payload_config()?;
-        let policy = self.read_policy_field()?;
+        let policy = self.read_policy_field(&ecc_mode)?;
         let ephemeral_key = self.read(MIN_EPHEMERAL_KEY_SIZE)?;
 
         Ok(Header {
@@ -183,7 +184,7 @@ impl BinaryParser {
         })
     }
 
-    fn read_policy_field(&mut self) -> Result<Policy, ParsingError> {
+    fn read_policy_field(&mut self, binding_mode: &ECCAndBindingMode) -> Result<Policy, ParsingError> {
         let policy_type = match self.read(1)?[0] {
             0x00 => PolicyType::Remote,
             0x01 => PolicyType::Embedded,
@@ -193,25 +194,51 @@ impl BinaryParser {
         match policy_type {
             PolicyType::Remote => {
                 let remote = self.read_kas_field()?;
+                let binding = self.read_policy_binding(binding_mode).unwrap();
                 Ok(Policy {
                     policy_type,
                     body: None,
                     remote: Some(remote),
-                    binding: None,
+                    binding: Option::from(binding),
                 })
             }
             PolicyType::Embedded => {
                 let body_length = self.read(2)?;
                 let length = u16::from_be_bytes([body_length[0], body_length[1]]) as usize;
                 let body = self.read(length)?;
+                let binding = self.read_policy_binding(binding_mode).unwrap();
                 Ok(Policy {
                     policy_type,
                     body: Some(body),
                     remote: None,
-                    binding: None,
+                    binding: Option::from(binding),
                 })
             }
         }
+    }
+
+    fn read_policy_binding(&mut self, binding_mode: &ECCAndBindingMode) -> Result<Vec<u8>, ParsingError> {
+        let binding_size = if binding_mode.use_ecdsa_binding {
+            match binding_mode.ephemeral_ecc_params_enum {
+                ECDSAParams::Secp256r1 | ECDSAParams::Secp256k1 => {
+                    64
+                }
+                ECDSAParams::Secp384r1 => {
+                    96
+                }
+                ECDSAParams::Secp521r1 => {
+                    132
+                }
+            }
+        } else {
+            // GMAC Tag Binding
+            16
+        };
+
+        println!("bindingSize: {}", binding_size);
+
+        // Assuming `read` reads length bytes from some source and returns an Option<Vec<u8>>
+        return self.read(binding_size);
     }
 
     fn read_ecc_and_binding_mode(&mut self) -> Result<ECCAndBindingMode, ParsingError> {
@@ -324,7 +351,7 @@ const MIN_EPHEMERAL_KEY_SIZE: usize = 33;
 const MAX_EPHEMERAL_KEY_SIZE: usize = 133;
 
 #[derive(Debug)]
-enum ParsingError {
+pub(crate) enum ParsingError {
     InvalidFormat,
     InvalidMagicNumber,
     InvalidVersion,
@@ -382,7 +409,7 @@ mod tests {
 
             let bytes = hex::decode(hex_string.replace(" ", ""))?;
             println!("{:?}", bytes);
-            let mut parser = BinaryParser::new(bytes);
+            let mut parser = BinaryParser::new(&*bytes);
             let header = parser.parse_header()?;
             println!("{:?}", header);
             // Process header as needed
@@ -400,7 +427,7 @@ mod tests {
 
             let bytes = hex::decode(encrypted_payload.replace(" ", ""))?;
             println!("{:?}", bytes);
-            let mut parser = BinaryParser::new(bytes);
+            let mut parser = BinaryParser::new(&*bytes);
             let header = parser.parse_header()?;
             println!("{:?}", header);
             Ok(())
@@ -417,7 +444,7 @@ mod tests {
 
             let bytes = hex::decode(hex_string.replace(" ", ""))?;
             println!("{:?}", bytes);
-            let mut parser = BinaryParser::new(bytes);
+            let mut parser = BinaryParser::new(&*bytes);
             let header = parser.parse_header()?;
             println!("{:?}", header);
             // Process header as needed

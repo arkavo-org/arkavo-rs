@@ -18,22 +18,16 @@ Implementation of KAS from [OpenTDF specification](https://github.com/opentdf/sp
 
 1. Clone the repository:
 
-    ```sh
-    git clone https://github.com/yourusername/nanotdf-websocket-server.git
-    cd nanotdf-websocket-server
-    ```
+```shell
+git clone https://github.com/arkavo-org/backend-rust.git
+cd backend-rust
+```
 
-2. Add dependencies in `Cargo.toml`:
+2. Build the project to download and compile the dependencies:
 
-    ```toml
-    [dependencies]
-    ring = "0.16.20"
-    pem = "1.0.2"
-    lazy_static = "1.4"
-    tokio = { version = "1", features = ["full"] }
-    data-encoding = "2.3.2"
-    tokio-tungstenite = "0.15"
-    ```
+```shell
+cargo build
+```
 
 ### Running the Server
 
@@ -41,9 +35,9 @@ Implementation of KAS from [OpenTDF specification](https://github.com/opentdf/sp
 
 2. Start the server:
 
-    ```sh
-    cargo run
-    ```
+```shell
+cargo run
+```
 
 ### Usage
 

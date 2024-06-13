@@ -1,28 +1,36 @@
-mod nanotdf;
-
 use std::fs;
 use std::sync::Arc;
+use std::sync::RwLock;
 
+use aes_gcm::{aead::{Aead, AeadCore, KeyInit, OsRng}, Aes256Gcm, Key};
+use aes_gcm::aead::generic_array::GenericArray;
 use data_encoding::HEXUPPER;
 use futures_util::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
-use nanotdf::BinaryParser;
 use openssl::ec::PointConversionForm;
 use openssl::pkey::PKey;
-use ring::{agreement, digest, rand};
+use rand::Rng;
+use ring::digest;
 use serde::{Deserialize, Serialize};
-use std::sync::RwLock;
+use sha2::{Digest, Sha256};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
+use x25519_dalek::{EphemeralSecret, PublicKey};
+
+use nanotdf::BinaryParser;
+
+use crate::nanotdf::Header;
+
+mod nanotdf;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct PublicKeyMessage {
     public_key: Vec<u8>,
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct ConnectionState {
     shared_secret: Option<Vec<u8>>,
 }
@@ -35,9 +43,11 @@ impl ConnectionState {
     }
 }
 
+#[derive(Debug)]
 enum MessageType {
     PublicKey = 0x01,
     KasPublicKey = 0x02,
+    Rewrap = 0x03,
 }
 
 impl MessageType {
@@ -45,6 +55,7 @@ impl MessageType {
         match value {
             0x01 => Some(MessageType::PublicKey),
             0x02 => Some(MessageType::KasPublicKey),
+            0x03 => Some(MessageType::Rewrap),
             _ => None,
         }
     }
@@ -112,7 +123,7 @@ async fn main() {
 async fn handle_connection(stream: TcpStream, connection_state: Arc<Mutex<ConnectionState>>) {
     // FIXME read from rewrap
     let ec_bytes: Vec<u8> = hex::decode(ENCRYPTED_PAYLOAD.replace(" ", "")).unwrap();
-    let _nanotdf = BinaryParser::new(ec_bytes);
+    let _nanotdf = BinaryParser::new(&*ec_bytes);
 
     let ws_stream = match accept_async(stream).await {
         Ok(ws) => ws,
@@ -130,6 +141,10 @@ async fn handle_connection(stream: TcpStream, connection_state: Arc<Mutex<Connec
         match message {
             Ok(msg) => {
                 println!("Received message: {:?}", msg);
+                if msg.is_close() {
+                    println!("Received a close message.");
+                    return;
+                }
                 if let Some(response) =
                     handle_binary_message(connection_state.clone(), msg.into_data()).await
                 {
@@ -159,47 +174,122 @@ async fn handle_binary_message(
     match message_type {
         Some(MessageType::PublicKey) => handle_public_key(connection_state, payload).await,
         Some(MessageType::KasPublicKey) => handle_kas_public_key(payload).await,
+        Some(MessageType::Rewrap) => handle_rewrap(connection_state, payload).await,
         None => {
-            println!("Unknown message type");
+            println!("Unknown message type: {:?}", message_type);
             None
         }
     }
+}
+
+async fn handle_rewrap(
+    connection_state: Arc<Mutex<ConnectionState>>,
+    payload: &[u8],
+) -> Option<Message> {
+    let session_shared_secret = {
+        let connection_state = connection_state.lock().await;
+        // Ensure we have a shared secret
+        match &connection_state.shared_secret {
+            Some(secret) => Some(secret.clone()),
+            None => {
+                eprintln!("No shared secret available");
+                None
+            }
+        }
+    };
+    println!("session shared_secret {:?}", session_shared_secret);
+    // Parse NanoTDF header
+    let mut parser = BinaryParser::new(payload);
+    let header = match BinaryParser::parse_header(&mut parser) {
+        Ok(header) => header,
+        Err(e) => {
+            println!("Error parsing header: {:?}", e);
+            return None;
+        }
+    };
+    // Extract the policy
+    let policy = Header::get_policy(&header);
+    println!("policy {:?}", policy);
+    let policy = header.get_policy();
+    println!("policy binding hex: {}", hex::encode(policy.get_binding().clone().unwrap()));
+    println!("tdf_ephemeral_key {:?}", header.get_ephemeral_key());
+    println!("tdf_ephemeral_key hex: {}", hex::encode(header.get_ephemeral_key()));
+    let tdf_ephemeral_key_bytes = header.get_ephemeral_key();
+    // Deserialize the public key sent by the client
+    if tdf_ephemeral_key_bytes.len() != 33 {
+        return None;
+    }
+    // If length is 33, it is possible that the public key was prefixed with 0x04, which is common in some implementations
+    let payload_arr = <[u8; 32]>::try_from(&tdf_ephemeral_key_bytes[1..]).unwrap();
+    let tdf_ephemeral_public_key = PublicKey::from(payload_arr);
+    println!("tdf_ephemeral_key {:?}", tdf_ephemeral_public_key);
+
+    // TODO Verify the policy binding
+    // TODO Access check
+    // Generate Symmetric Key
+    // TODO use KAS private key in key agreement to find the DEK symmetric key
+    // // Read the DER-encoded private key
+    // let der = KAS_PUBLIC_KEY_DER.read().unwrap().as_ref().unwrap().clone();
+    // let kas_private_key = PKey::private_key_from_der(&der).unwrap();
+    // let session_key = private_key.diffie_hellman(&public_key);
+    // // salt
+    // let mut hasher = Sha256::new();
+    // hasher.update(b"L1L");
+    // let salt = hasher.finalize();
+    // // Key derivative
+    // let (derived_key, _, _) = Hkdf::<Sha256>::new(Some(&salt[..]), &session_key);
+    // let derived_key_bytes = derived_key.to_bytes();
+    let dek_shared_secret: Vec<u8> = vec![0; 32];
+    println!("dek_shared_secret {:?}", dek_shared_secret);
+    // Encrypt dek_shared_secret with session_shared_secret using AES GCM
+    // Assuming `dek_shared_secret` and `session_shared_secret` as following,
+    // let session_shared_secret: Vec<u8> = vec![0; 32];
+    let session_shared_secret = session_shared_secret.unwrap();
+    let key = Key::<Aes256Gcm>::from_slice(&session_shared_secret);
+    let cipher = Aes256Gcm::new(&key);
+    let nonce: [u8; 12] = rand::thread_rng().gen(); // NONCE MUST BE UNIQUE FOR EACH MESSAGE
+    let nonce = GenericArray::from_slice(&nonce);
+    let wrapped_dek_shared_secret = cipher.encrypt(nonce, dek_shared_secret.as_ref())
+        .expect("encryption failure!");
+    Some(Message::Binary(Vec::from(wrapped_dek_shared_secret)))
 }
 
 async fn handle_public_key(
     connection_state: Arc<Mutex<ConnectionState>>,
     payload: &[u8],
 ) -> Option<Message> {
-    let private_key =
-        agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, &rand::SystemRandom::new())
-            .unwrap();
-    let server_public_key = private_key.compute_public_key().unwrap();
-    // Hex
-    let server_public_key_hex = hex::encode(server_public_key.as_ref());
-    println!("Server Public Key: {}", server_public_key_hex);
-    let peer_public_key = agreement::UnparsedPublicKey::new(&agreement::ECDH_P256, payload);
-    {
-        let mut state = connection_state.lock().await;
-        let temp_secret =
-            agreement::agree_ephemeral(private_key, &peer_public_key, |key_material| {
-                // consume key_material here and generally perform desired computations
-                Ok::<_, ring::error::Unspecified>(key_material.to_vec())
-            });
-        match temp_secret {
-            Ok(shared_secret) => {
-                if let Ok(secret) = shared_secret {
-                    println!("Shared secret stored: {:?}", secret);
-                    state.shared_secret = Some(secret);
-                }
-            }
-            Err(e) => {
-                println!("Failed to get shared_secret: {}", e);
-                return None;
-            }
-        }
+    // Generate an ephemeral private key
+    let my_private_key = EphemeralSecret::random_from_rng(OsRng);
+    let my_public_key = PublicKey::from(&my_private_key);
+    println!("Server Public Key: {}", hex::encode(my_public_key.as_ref()));
+
+    let payload_arr: [u8; 32];
+    // Deserialize the public key sent by the client
+    if payload.len() == 33 {
+        // If payload length is 33, it is possible that the public key was prefixed with 0x04, which is common in some implementations
+        payload_arr = <[u8; 32]>::try_from(&payload[1..]).unwrap();
+    } else if payload.len() != 32 {
+        return None;
+    } else {
+        payload_arr = payload.try_into().unwrap();
     }
-    // Send server_public_key in DER format
-    Some(Message::Binary(server_public_key.as_ref().to_vec()))
+    let peer_public_key = PublicKey::from(payload_arr);
+    println!("Peer Public Key: {}", hex::encode(peer_public_key.as_ref()));
+
+    // Perform the key agreement
+    let shared_secret = my_private_key.diffie_hellman(&peer_public_key);
+    let shared_secret_bytes = shared_secret.as_bytes();
+
+    // Hash the shared secret
+    let mut hasher = Sha256::new();
+    hasher.update(shared_secret_bytes);
+    let hashed_secret = hasher.finalize();
+    println!("Shared Secret: {}", hex::encode(hashed_secret.to_vec()));
+    // Update the connection state with the hashed shared secret
+    let mut connection_state = connection_state.lock().await;
+    connection_state.shared_secret = Some(hashed_secret.to_vec());
+
+    Some(Message::Binary(my_public_key.as_ref().to_vec()))
 }
 
 async fn handle_kas_public_key(payload: &[u8]) -> Option<Message> {
