@@ -38,8 +38,22 @@ jobs:
             target: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source $HOME/.cargo/env
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+        env:
+          CARGO_HOME: ${{ github.workspace }}/.cargo
+          RUSTUP_HOME: ${{ github.workspace }}/.rustup
+          PATH: ${{ github.workspace }}/.cargo/bin:${{ env.PATH }}
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_HOME: ${{ github.workspace }}/.cargo
+          RUSTUP_HOME: ${{ github.workspace }}/.rustup
+          PATH: ${{ github.workspace }}/.cargo/bin:${{ env.PATH }}
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
