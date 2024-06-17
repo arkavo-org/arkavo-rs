@@ -22,24 +22,20 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ ubuntu-latest, macos-latest ]
+        os: [ ubuntu-latest ]
         target:
           [
             aarch64-unknown-linux-gnu,
             x86_64-unknown-linux-gnu,
-            aarch64-apple-darwin,
           ]
         include:
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: macos-latest
-            target: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies on Linux
-        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y openssl
