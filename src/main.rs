@@ -4,13 +4,11 @@ use std::sync::RwLock;
 
 use aes_gcm::{aead::{Aead, KeyInit, OsRng}, Aes256Gcm, Key};
 use aes_gcm::aead::generic_array::GenericArray;
-use data_encoding::HEXUPPER;
 use futures_util::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
-use openssl::ec::PointConversionForm;
-use openssl::pkey::PKey;
+use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::SecretKey;
 use rand::Rng;
-use ring::digest;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::net::{TcpListener, TcpStream};
@@ -77,33 +75,33 @@ const ENCRYPTED_PAYLOAD: &str = "\
 
 #[tokio::main]
 async fn main() {
-    println!("OpenSSL build info: {}", openssl::version::version());
     // KAS public key
     // Load the PEM file
     let pem_content = fs::read_to_string("recipient_private_key.pem").unwrap();
     // Load the private key from PEM format
-    let pkey = PKey::private_key_from_pem(pem_content.as_bytes());
-    let private_key = pkey.unwrap().ec_key().unwrap();
-    // Extract public key
-    let ec_group = private_key.group();
-    let public_key = private_key.public_key();
-    let mut bn_ctx = openssl::bn::BigNumContext::new().unwrap();
-    let public_key_bytes = public_key
-        .to_bytes(&ec_group, PointConversionForm::UNCOMPRESSED, &mut bn_ctx)
-        .unwrap();
-    // Hash the public key to get the fingerprint
-    let fingerprint = digest::digest(&digest::SHA256, &*public_key_bytes);
-    // Print the fingerprint in hexadecimal format
-    println!(
-        "KAS Public Key Fingerprint: {}",
-        HEXUPPER.encode(fingerprint.as_ref())
-    );
-    // Set static KAS_PUBLIC_KEY_DER
-    {
-        // let mut kas_public_key_der = KAS_PUBLIC_KEY_DER.lock().await;
-        // *kas_public_key_der = public_key_bytes;
-        let mut kas_public_key_der = KAS_PUBLIC_KEY_DER.write().unwrap();
-        *kas_public_key_der = Some(public_key_bytes);
+    let ec_pem_contents = pem_content.as_bytes();
+    // Parse the pem file
+    let pem = pem::parse(ec_pem_contents).expect("Failed to parse the PEM.");
+    // Ensure it's an EC private key
+    if pem.tag() != "EC PRIVATE KEY" {
+        println!("Not an EC private key: {:?}", pem.tag());
+    }
+    // Parse the private key
+    let kas_private_key = SecretKey::from_sec1_der(pem.contents());
+    // Check if successful and continue if Ok
+    match kas_private_key {
+        Ok(kas_private_key) => {
+            // Derive the corresponding public key
+            let kas_public_key = kas_private_key.public_key();
+            let kas_public_key_der = kas_public_key.to_encoded_point(true);
+            let kas_public_key_der_bytes = kas_public_key_der.as_bytes().to_vec();
+            // Set static KAS_PUBLIC_KEY_DER
+            {
+                let mut kas_public_key_der = KAS_PUBLIC_KEY_DER.write().unwrap();
+                *kas_public_key_der = Some(kas_public_key_der_bytes);
+            }
+        }
+        Err(error) => println!("Problem with the secret key: {:?}", error),
     }
     // Bind the server to localhost on port 8080
     let try_socket = TcpListener::bind("0.0.0.0:8080").await;
