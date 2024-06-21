@@ -27,6 +27,7 @@ struct PublicKeyMessage {
 
 #[derive(Debug)]
 struct ConnectionState {
+    // TODO x25519_dalek::SharedSecret``
     shared_secret: RwLock<Option<Vec<u8>>>,
 }
 
@@ -183,10 +184,7 @@ async fn handle_rewrap(
     // TODO Access check
     // Generate Symmetric Key
     // TODO use KAS private key in key agreement to find the DEK symmetric key
-    // // Read the DER-encoded private key
-    // let der = KAS_PUBLIC_KEY_DER.read().unwrap().as_ref().unwrap().clone();
-    // let kas_private_key = PKey::private_key_from_der(&der).unwrap();
-    // let session_key = private_key.diffie_hellman(&public_key);
+    // let secret_key = StaticSecret::from(kas_private_key.to_bytes());
     // // salt
     // let mut hasher = Sha256::new();
     // hasher.update(b"L1L");
@@ -269,15 +267,6 @@ async fn handle_kas_public_key(_: &[u8]) -> Option<Message> {
         return Some(Message::Binary(response_data));
     }
     None
-    // let kas_public_key_der = KAS_PUBLIC_KEY_DER.read().unwrap();
-    // if let Some(ref kas_public_key_bytes) = *kas_public_key_der {
-    //     println!("KAS Public Key Size: {} bytes", kas_public_key_bytes.len());
-    //     let mut response_data = Vec::new();
-    //     response_data.push(MessageType::KasPublicKey as u8);
-    //     response_data.append(&mut AsRef::<[u8]>::as_ref(kas_public_key_bytes).to_vec());
-    //     return Some(Message::Binary(response_data));
-    // }
-    // return None;
 }
 
 fn init_kas_keys() -> Result<(), Box<dyn std::error::Error>> {
