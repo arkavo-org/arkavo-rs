@@ -3,11 +3,11 @@ use std::sync::RwLock;
 
 use aes_gcm::{aead::{Aead, KeyInit, OsRng}, Aes256Gcm, Key};
 use aes_gcm::aead::generic_array::GenericArray;
+use aes_gcm::aead::rand_core::RngCore;
 use futures_util::{SinkExt, StreamExt};
 use once_cell::sync::OnceCell;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::SecretKey;
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::accept_async;
