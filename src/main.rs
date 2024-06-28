@@ -1,22 +1,22 @@
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use aes_gcm::{aead::{Aead, KeyInit, OsRng}, Aes256Gcm, Key};
+use aes_gcm::aead::{Key, NewAead};
+use aes_gcm::aead::Aead;
 use aes_gcm::aead::generic_array::GenericArray;
-use aes_gcm::aead::rand_core::RngCore;
+use aes_gcm::Aes256Gcm;
 use futures_util::{SinkExt, StreamExt};
 use once_cell::sync::OnceCell;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::SecretKey;
+use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
-use x25519_dalek::{EphemeralSecret, PublicKey};
+use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
 
-use nanotdf::BinaryParser;
-
-use crate::nanotdf::Header;
+use crate::nanotdf::BinaryParser;
 
 mod nanotdf;
 
@@ -154,6 +154,7 @@ async fn handle_rewrap(
         shared_secret.clone()
     };
     println!("Shared Secret Connection: {}", hex::encode(session_shared_secret.clone().unwrap()));
+
     // Parse NanoTDF header
     let mut parser = BinaryParser::new(payload);
     let header = match BinaryParser::parse_header(&mut parser) {
@@ -163,52 +164,56 @@ async fn handle_rewrap(
             return None;
         }
     };
+
     // Extract the policy
-    let policy = Header::get_policy(&header);
-    println!("policy {:?}", policy);
     let policy = header.get_policy();
+    println!("policy {:?}", policy);
     println!("policy binding hex: {}", hex::encode(policy.get_binding().clone().unwrap()));
-    println!("tdf_ephemeral_key hex: {}", hex::encode(header.get_ephemeral_key()));
+
     let tdf_ephemeral_key_bytes = header.get_ephemeral_key();
+    println!("tdf_ephemeral_key hex: {}", hex::encode(tdf_ephemeral_key_bytes));
+
     // Deserialize the public key sent by the client
-    if tdf_ephemeral_key_bytes.len() != 33 {
+    if tdf_ephemeral_key_bytes.len() != 32 {
+        println!("Invalid TDF ephemeral key length");
         return None;
     }
-    // If length is 33, it is possible that the public key was prefixed with 0x04, which is common in some implementations
-    let payload_arr = <[u8; 32]>::try_from(&tdf_ephemeral_key_bytes[1..]).unwrap();
-    let tdf_ephemeral_public_key = PublicKey::from(payload_arr);
-    println!("tdf_ephemeral_key {:?}", tdf_ephemeral_public_key);
+    let tdf_ephemeral_public_key = if let Ok(tdf_ephemeral_key_array) = <[u8; 32]>::try_from(tdf_ephemeral_key_bytes.as_slice()) {
+        Some(PublicKey::from(tdf_ephemeral_key_array))
+    } else {
+        println!("Error transforming key to array");
+        None
+    };
+
     let kas_private_key = get_kas_private_key().unwrap();
     println!("kas_private_key {:?}", kas_private_key);
-    // TODO Verify the policy binding
-    // TODO Access check
-    // Generate Symmetric Key
-    // TODO use KAS private key in key agreement to find the DEK symmetric key
-    // let secret_key = StaticSecret::from(kas_private_key.to_bytes());
-    // // salt
-    // let mut hasher = Sha256::new();
-    // hasher.update(b"L1L");
-    // let salt = hasher.finalize();
-    // // Key derivative
-    // let (derived_key, _, _) = Hkdf::<Sha256>::new(Some(&salt[..]), &session_key);
-    // let derived_key_bytes = derived_key.to_bytes();
-    let dek_shared_secret: Vec<u8> = vec![0; 32];
-    println!("dek_shared_secret {:?}", dek_shared_secret);
+
+    // Convert the KAS private key to x25519_dalek::StaticSecret
+    let kas_private_bytes: [u8; 32] = kas_private_key.to_be_bytes().try_into().unwrap();
+    let kas_secret = StaticSecret::from(kas_private_bytes);
+
+    // Perform key agreement
+    let dek_shared_secret = kas_secret.diffie_hellman(&tdf_ephemeral_public_key.unwrap());
+    let dek_shared_secret_bytes = dek_shared_secret.as_bytes();
+
+    println!("dek_shared_secret {:?}", hex::encode(dek_shared_secret_bytes));
+
     // Encrypt dek_shared_secret with session_shared_secret using AES GCM
-    // Assuming `dek_shared_secret` and `session_shared_secret` as following,
-    // let session_shared_secret: Vec<u8> = vec![0; 32];
     let session_shared_secret = session_shared_secret.unwrap();
     let key = Key::<Aes256Gcm>::from_slice(&session_shared_secret);
     let cipher = Aes256Gcm::new(&key);
     let mut nonce = [0u8; 12];
     OsRng.fill_bytes(&mut nonce);
     let nonce = GenericArray::from_slice(&nonce);
-    let mut wrapped_dek_shared_secret = cipher.encrypt(nonce, dek_shared_secret.as_ref())
+    let wrapped_dek_shared_secret = cipher.encrypt(nonce, dek_shared_secret_bytes.as_ref())
         .expect("encryption failure!");
+
     let mut response_data = Vec::new();
     response_data.push(MessageType::RewrappedKey as u8);
-    response_data.append(&mut wrapped_dek_shared_secret);
-    return Some(Message::Binary(response_data));
+    response_data.extend_from_slice(&nonce);
+    response_data.extend_from_slice(&wrapped_dek_shared_secret);
+
+    Some(Message::Binary(response_data))
 }
 
 async fn handle_public_key(
@@ -233,8 +238,9 @@ async fn handle_public_key(
     payload_arr = <[u8; 32]>::try_from(&payload[..]).unwrap();
     let client_public_key = PublicKey::from(payload_arr);
     println!("Client Public Key: {:?}", client_public_key);
+
     // Generate an ephemeral private key
-    let server_private_key = EphemeralSecret::random_from_rng(OsRng);
+    let server_private_key = EphemeralSecret::new(OsRng);
     let server_public_key = PublicKey::from(&server_private_key);
     // Perform the key agreement
     let shared_secret = server_private_key.diffie_hellman(&client_public_key);
