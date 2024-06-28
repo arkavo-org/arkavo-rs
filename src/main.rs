@@ -22,20 +22,22 @@ mod nanotdf;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct PublicKeyMessage {
+    salt: Vec<u8>,
     public_key: Vec<u8>,
 }
 
 #[derive(Debug)]
 struct ConnectionState {
-    // TODO x25519_dalek::SharedSecret``
-    shared_secret: RwLock<Option<Vec<u8>>>,
+    salt_lock: RwLock<Option<Vec<u8>>>,
+    shared_secret_lock: RwLock<Option<Vec<u8>>>,
 }
 
 impl ConnectionState {
     fn new() -> Self {
         println!("New ConnectionState");
         ConnectionState {
-            shared_secret: RwLock::new(None),
+            salt_lock: RwLock::new(None),
+            shared_secret_lock: RwLock::new(None),
         }
     }
 }
@@ -150,11 +152,10 @@ async fn handle_rewrap(
     payload: &[u8],
 ) -> Option<Message> {
     let session_shared_secret = {
-        let shared_secret = connection_state.shared_secret.read().unwrap();
+        let shared_secret = connection_state.shared_secret_lock.read().unwrap();
         shared_secret.clone()
     };
     println!("Shared Secret Connection: {}", hex::encode(session_shared_secret.clone().unwrap()));
-
     // Parse NanoTDF header
     let mut parser = BinaryParser::new(payload);
     let header = match BinaryParser::parse_header(&mut parser) {
@@ -164,40 +165,44 @@ async fn handle_rewrap(
             return None;
         }
     };
-
     // Extract the policy
     let policy = header.get_policy();
     println!("policy {:?}", policy);
     println!("policy binding hex: {}", hex::encode(policy.get_binding().clone().unwrap()));
-
+    // TDF ephemeral key
     let tdf_ephemeral_key_bytes = header.get_ephemeral_key();
     println!("tdf_ephemeral_key hex: {}", hex::encode(tdf_ephemeral_key_bytes));
-
+    println!("tdf_ephemeral_key length: {}", tdf_ephemeral_key_bytes.len());
     // Deserialize the public key sent by the client
-    if tdf_ephemeral_key_bytes.len() != 32 {
-        println!("Invalid TDF ephemeral key length");
+    if tdf_ephemeral_key_bytes.len() != 33 {
+        println!("Invalid TDF compressed ephemeral key length");
         return None;
     }
-    let tdf_ephemeral_public_key = if let Ok(tdf_ephemeral_key_array) = <[u8; 32]>::try_from(tdf_ephemeral_key_bytes.as_slice()) {
-        Some(PublicKey::from(tdf_ephemeral_key_array))
+    let tdf_ephemeral_public_key = if tdf_ephemeral_key_bytes[0] == 0x02 || tdf_ephemeral_key_bytes[0] == 0x03 {
+        if let Ok(tdf_ephemeral_key_array) = <[u8; 32]>::try_from(&tdf_ephemeral_key_bytes[1..]) {
+            Some(PublicKey::from(tdf_ephemeral_key_array))
+        } else {
+            println!("Error transforming key to array");
+            None
+        }
     } else {
-        println!("Error transforming key to array");
+        println!("Invalid compression byte");
         None
     };
-
+    if tdf_ephemeral_public_key.is_none() {
+        return None;
+    }
+    let tdf_ephemeral_public_key = tdf_ephemeral_public_key.unwrap();
+    println!("tdf_ephemeral_key {:?}", tdf_ephemeral_public_key);
     let kas_private_key = get_kas_private_key().unwrap();
     println!("kas_private_key {:?}", kas_private_key);
-
     // Convert the KAS private key to x25519_dalek::StaticSecret
     let kas_private_bytes: [u8; 32] = kas_private_key.to_be_bytes().try_into().unwrap();
     let kas_secret = StaticSecret::from(kas_private_bytes);
-
     // Perform key agreement
-    let dek_shared_secret = kas_secret.diffie_hellman(&tdf_ephemeral_public_key.unwrap());
+    let dek_shared_secret = kas_secret.diffie_hellman(&tdf_ephemeral_public_key);
     let dek_shared_secret_bytes = dek_shared_secret.as_bytes();
-
-    println!("dek_shared_secret {:?}", hex::encode(dek_shared_secret_bytes));
-
+    println!("dek_shared_secret {}", hex::encode(dek_shared_secret_bytes));
     // Encrypt dek_shared_secret with session_shared_secret using AES GCM
     let session_shared_secret = session_shared_secret.unwrap();
     let key = Key::<Aes256Gcm>::from_slice(&session_shared_secret);
@@ -207,12 +212,12 @@ async fn handle_rewrap(
     let nonce = GenericArray::from_slice(&nonce);
     let wrapped_dek_shared_secret = cipher.encrypt(nonce, dek_shared_secret_bytes.as_ref())
         .expect("encryption failure!");
-
+    // binary response
     let mut response_data = Vec::new();
     response_data.push(MessageType::RewrappedKey as u8);
+    response_data.extend_from_slice(tdf_ephemeral_key_bytes);
     response_data.extend_from_slice(&nonce);
     response_data.extend_from_slice(&wrapped_dek_shared_secret);
-
     Some(Message::Binary(response_data))
 }
 
@@ -221,7 +226,7 @@ async fn handle_public_key(
     payload: &[u8],
 ) -> Option<Message> {
     {
-        let shared_secret_lock = connection_state.shared_secret.read();
+        let shared_secret_lock = connection_state.shared_secret_lock.read();
         let shared_secret = shared_secret_lock.unwrap();
         if shared_secret.is_some() {
             println!("Shared Secret Connection: {}", hex::encode(shared_secret.clone().unwrap()));
@@ -249,9 +254,17 @@ async fn handle_public_key(
     println!("Shared Secret: {}", hex::encode(shared_secret_bytes));
     println!("Shared Secret +++++++++++++");
     {
-        let shared_secret = connection_state.shared_secret.write();
+        let shared_secret = connection_state.shared_secret_lock.write();
         *shared_secret.unwrap() = Some(shared_secret_bytes.to_vec());
     }
+    // session salt
+    let mut salt = [0u8; 32];
+    OsRng.fill_bytes(&mut salt);
+    {
+        let mut salt_lock = connection_state.salt_lock.write().unwrap();
+        *salt_lock = Some(salt.to_vec());
+    }
+    println!("Session Salt: {}", hex::encode(salt));
     // Convert server_public_key to bytes
     let server_public_key_bytes = server_public_key.to_bytes();
     // Send server_public_key as publicKey message
@@ -260,6 +273,8 @@ async fn handle_public_key(
     response_data.push(MessageType::PublicKey as u8);
     // Appending server_public_key bytes
     response_data.extend_from_slice(&server_public_key_bytes);
+    // Appending salt bytes
+    response_data.extend_from_slice(&salt);
     Some(Message::Binary(response_data))
 }
 
