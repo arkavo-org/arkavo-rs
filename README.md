@@ -1,4 +1,5 @@
 # backend-rust
+
 Implementation of KAS from [OpenTDF specification](https://github.com/opentdf/spec)
 
 ## Features
@@ -33,11 +34,19 @@ cargo build
 
 1. Ensure you have a valid EC private key in PEM format named `recipient_private_key.pem`.
 
+    ```shell
+    openssl ec -in recipient_private_key.pem -text -noout
+    ```
+
+    ```shell
+   openssl ecparam -name prime256v1 -genkey -noout -out kas_private_key.pem
+    ```
+
 2. Start the server:
 
-```shell
-cargo run
-```
+    ```shell
+    cargo run
+    ```
 
 ### Usage
 
@@ -47,20 +56,17 @@ cargo run
 ## Diagrams
 
 ### Key Agreement
+
 ```mermaid
 sequenceDiagram
     participant Client
     participant Server
-
-    Client->>Client: Generate private key (client_private_key) and public key (client_public_key)
-    Client->>Server: Establish Websocket connection
-    Client->>Server: Send client_public_key
-
-    Server->>Server: Generate private key (server_private_key) and public key (server_public_key)
-    Server->>Client: Send server_public_key
-    Server->>Server: Compute shared_secret = ECDH(server_private_key, client_public_key)
-
-    Client->>Client: Compute shared_secret = ECDH(client_private_key, server_public_key)
-
-    Note over Client,Server: Both have the same shared_secret
+    Client ->> Client: Generate private key (client_private_key) and public key (client_public_key)
+    Client ->> Server: Establish Websocket connection
+    Client ->> Server: Send client_public_key
+    Server ->> Server: Generate private key (server_private_key) and public key (server_public_key)
+    Server ->> Client: Send server_public_key
+    Server ->> Server: Compute shared_secret = ECDH(server_private_key, client_public_key)
+    Client ->> Client: Compute shared_secret = ECDH(client_private_key, server_public_key)
+    Note over Client, Server: Both have the same shared_secret
 ```
