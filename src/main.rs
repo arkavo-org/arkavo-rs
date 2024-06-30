@@ -6,6 +6,7 @@ use aes_gcm::aead::Aead;
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::Aes256Gcm;
 use futures_util::{SinkExt, StreamExt};
+use hkdf::Hkdf;
 use once_cell::sync::OnceCell;
 use p256::{
     elliptic_curve::sec1::ToEncodedPoint,
@@ -110,7 +111,7 @@ async fn handle_connection(stream: TcpStream, connection_state: Arc<ConnectionSt
     while let Some(message) = ws_receiver.next().await {
         match message {
             Ok(msg) => {
-                println!("Received message: {:?}", msg);
+                // println!("Received message: {:?}", msg);
                 if msg.is_close() {
                     println!("Received a close message.");
                     return;
@@ -152,10 +153,20 @@ async fn handle_binary_message(
     }
 }
 
+struct PrintOnDrop;
+
+impl Drop for PrintOnDrop {
+    fn drop(&mut self) {
+        println!("END handle_rewrap");
+    }
+}
+
 async fn handle_rewrap(
     connection_state: &Arc<ConnectionState>,
     payload: &[u8],
 ) -> Option<Message> {
+    let _print_on_drop = PrintOnDrop;
+    println!("BEGIN handle_rewrap");
     let session_shared_secret = {
         let shared_secret = connection_state.shared_secret_lock.read().unwrap();
         shared_secret.clone()
@@ -164,7 +175,7 @@ async fn handle_rewrap(
         println!("Shared Secret not set");
         return None;
     }
-    println!("Shared Secret Connection: {}", hex::encode(session_shared_secret.clone().unwrap()));
+    let session_shared_secret = session_shared_secret.unwrap();
     // Parse NanoTDF header
     let mut parser = BinaryParser::new(payload);
     let header = match BinaryParser::parse_header(&mut parser) {
@@ -176,12 +187,10 @@ async fn handle_rewrap(
     };
     // Extract the policy
     let policy = header.get_policy();
-    println!("policy {:?}", policy);
     println!("policy binding hex: {}", hex::encode(policy.get_binding().clone().unwrap()));
     // TDF ephemeral key
     let tdf_ephemeral_key_bytes = header.get_ephemeral_key();
     println!("tdf_ephemeral_key hex: {}", hex::encode(tdf_ephemeral_key_bytes));
-    println!("tdf_ephemeral_key length: {}", tdf_ephemeral_key_bytes.len());
     // Deserialize the public key sent by the client
     if tdf_ephemeral_key_bytes.len() != 33 {
         println!("Invalid TDF compressed ephemeral key length");
@@ -195,7 +204,6 @@ async fn handle_rewrap(
             return None;
         }
     };
-    println!("tdf_ephemeral_key {:?}", tdf_ephemeral_public_key);
     let kas_private_key_bytes = get_kas_private_key_bytes().unwrap();
     // Perform custom ECDH
     let dek_shared_secret_bytes = match custom_ecdh(&kas_private_key_bytes, &tdf_ephemeral_public_key) {
@@ -205,24 +213,31 @@ async fn handle_rewrap(
             return None;
         }
     };
+    // let hex_str = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    // let dek_shared_secret_bytes = hex::decode(hex_str).expect("Decoding failed");
     println!("dek_shared_secret {}", hex::encode(&dek_shared_secret_bytes));
-    // Encrypt dek_shared_secret with session_shared_secret using AES GCM
-    let session_shared_secret = session_shared_secret.unwrap();
-    let key = Key::<Aes256Gcm>::from_slice(&session_shared_secret);
-    let cipher = Aes256Gcm::new(&key);
+    // Encrypt dek_shared_secret with symmetric key using AES GCM
+    let salt = connection_state.salt_lock.read().unwrap().clone().unwrap();
+    let info = "rewrappedKey".as_bytes();
+    let hkdf = Hkdf::<Sha256>::new(Some(&salt), &session_shared_secret);
+    let mut derived_key = [0u8; 32];
+    hkdf.expand(info, &mut derived_key).expect("HKDF expansion failed");
+    println!("Derived Session Key: {}", hex::encode(&derived_key));
     let mut nonce = [0u8; 12];
     OsRng.fill_bytes(&mut nonce);
     let nonce = GenericArray::from_slice(&nonce);
     println!("nonce {}", hex::encode(nonce));
-    let wrapped_dek_shared_secret = cipher.encrypt(nonce, dek_shared_secret_bytes.as_ref())
+    let key = Key::<Aes256Gcm>::from(derived_key);
+    let cipher = Aes256Gcm::new(&key);
+    let wrapped_dek = cipher.encrypt(nonce, dek_shared_secret_bytes.as_ref())
         .expect("encryption failure!");
-    println!("wrapped_dek_shared_secret {}", hex::encode(&wrapped_dek_shared_secret));
+    println!("Rewrapped Key and Authentication tag {}", hex::encode(&wrapped_dek));
     // binary response
     let mut response_data = Vec::new();
     response_data.push(MessageType::RewrappedKey as u8);
     response_data.extend_from_slice(tdf_ephemeral_key_bytes);
     response_data.extend_from_slice(&nonce);
-    response_data.extend_from_slice(&wrapped_dek_shared_secret);
+    response_data.extend_from_slice(&wrapped_dek);
     Some(Message::Binary(response_data))
 }
 
@@ -252,7 +267,6 @@ async fn handle_public_key(
             return None;
         }
     };
-    println!("Client Public Key: {:?}", client_public_key);
     // Generate an ephemeral private key
     let server_private_key = EphemeralSecret::random(&mut OsRng);
     let server_public_key = PublicKey::from(&server_private_key);
@@ -292,6 +306,7 @@ async fn handle_kas_public_key(_: &[u8]) -> Option<Message> {
     println!("Handling KAS public key");
     if let Some(kas_public_key_bytes) = get_kas_public_key() {
         println!("KAS Public Key Size: {} bytes", kas_public_key_bytes.len());
+        println!("KAS Public Key Hex: {}", hex::encode(&kas_public_key_bytes));
         let mut response_data = Vec::new();
         response_data.push(MessageType::KasPublicKey as u8);
         response_data.extend_from_slice(&kas_public_key_bytes);
@@ -311,24 +326,16 @@ fn custom_ecdh(private_key_bytes: &[u8], public_key: &PublicKey) -> Result<Vec<u
         .map_err(|_| "Invalid private key")?;
     let scalar = secret_key.to_nonzero_scalar();
     println!("scalar {}", scalar);
-    // Convert private key bytes to Scalar
-    // let scalar = Scalar::from_repr(private_key_array.into())
-    //     .unwrap_or_else(|| panic!("Invalid private key bytes"));
-
     // Get the public key point as ProjectivePoint
     let public_key_point: ProjectivePoint = public_key.to_projective();
-
     // Perform the ECDH operation
     let shared_point = (public_key_point * *scalar).to_affine();
-
     // Convert the resulting point to bytes (x-coordinate)
     let shared_secret = shared_point.to_encoded_point(false).x().unwrap().to_vec();
-
     // Hash the shared secret using SHA-256
     let mut hasher = Sha256::new();
     hasher.update(&shared_secret);
     let hashed_secret = hasher.finalize().to_vec();
-
     Ok(hashed_secret)
 }
 

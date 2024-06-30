@@ -176,7 +176,6 @@ impl<'a> BinaryParser<'a> {
         };
         let body_length = self.read(1)?[0] as usize;
         let body = String::from_utf8(self.read(body_length)?).map_err(|_| ParsingError::InvalidKas)?;
-        println!("read_kas_field: {}", body);
         Ok(ResourceLocator {
             protocol_enum,
             body,
