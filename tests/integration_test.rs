@@ -1,4 +1,3 @@
-extern crate crypto;
 extern crate hex;
 #[cfg(test)]
 mod tests {

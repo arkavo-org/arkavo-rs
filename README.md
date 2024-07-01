@@ -1,4 +1,5 @@
 # backend-rust
+
 Implementation of KAS from [OpenTDF specification](https://github.com/opentdf/spec)
 
 ## Features
@@ -18,30 +19,32 @@ Implementation of KAS from [OpenTDF specification](https://github.com/opentdf/sp
 
 1. Clone the repository:
 
-    ```sh
-    git clone https://github.com/yourusername/nanotdf-websocket-server.git
-    cd nanotdf-websocket-server
-    ```
+```shell
+git clone https://github.com/arkavo-org/backend-rust.git
+cd backend-rust
+```
 
-2. Add dependencies in `Cargo.toml`:
+2. Build the project to download and compile the dependencies:
 
-    ```toml
-    [dependencies]
-    ring = "0.16.20"
-    pem = "1.0.2"
-    lazy_static = "1.4"
-    tokio = { version = "1", features = ["full"] }
-    data-encoding = "2.3.2"
-    tokio-tungstenite = "0.15"
-    ```
+```shell
+cargo build
+```
 
 ### Running the Server
 
 1. Ensure you have a valid EC private key in PEM format named `recipient_private_key.pem`.
 
+    ```shell
+    openssl ec -in recipient_private_key.pem -text -noout
+    ```
+
+    ```shell
+   openssl ecparam -name prime256v1 -genkey -noout -out kas_private_key.pem
+    ```
+
 2. Start the server:
 
-    ```sh
+    ```shell
     cargo run
     ```
 
@@ -53,20 +56,17 @@ Implementation of KAS from [OpenTDF specification](https://github.com/opentdf/sp
 ## Diagrams
 
 ### Key Agreement
+
 ```mermaid
 sequenceDiagram
     participant Client
     participant Server
-
-    Client->>Client: Generate private key (client_private_key) and public key (client_public_key)
-    Client->>Server: Establish Websocket connection
-    Client->>Server: Send client_public_key
-
-    Server->>Server: Generate private key (server_private_key) and public key (server_public_key)
-    Server->>Client: Send server_public_key
-    Server->>Server: Compute shared_secret = ECDH(server_private_key, client_public_key)
-
-    Client->>Client: Compute shared_secret = ECDH(client_private_key, server_public_key)
-
-    Note over Client,Server: Both have the same shared_secret
+    Client ->> Client: Generate private key (client_private_key) and public key (client_public_key)
+    Client ->> Server: Establish Websocket connection
+    Client ->> Server: Send client_public_key
+    Server ->> Server: Generate private key (server_private_key) and public key (server_public_key)
+    Server ->> Client: Send server_public_key
+    Server ->> Server: Compute shared_secret = ECDH(server_private_key, client_public_key)
+    Client ->> Client: Compute shared_secret = ECDH(client_private_key, server_public_key)
+    Note over Client, Server: Both have the same shared_secret
 ```
