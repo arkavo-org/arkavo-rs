@@ -233,20 +233,20 @@ impl<'a> BinaryParser<'a> {
             16
         };
 
-        println!("bindingSize: {}", binding_size);
+        // println!("bindingSize: {}", binding_size);
 
         // Assuming `read` reads length bytes from some source and returns an Option<Vec<u8>>
         return self.read(binding_size);
     }
 
     fn read_ecc_and_binding_mode(&mut self) -> Result<ECCAndBindingMode, ParsingError> {
-        println!("readEccAndBindingMode");
+        // println!("readEccAndBindingMode");
 
         let ecc_and_binding_mode_data = self.read(1)?;
         let ecc_and_binding_mode = ecc_and_binding_mode_data[0];
 
-        let ecc_mode_hex = format!("{:02x}", ecc_and_binding_mode);
-        println!("ECC Mode Hex: {}", ecc_mode_hex);
+        // let ecc_mode_hex = format!("{:02x}", ecc_and_binding_mode);
+        // println!("ECC Mode Hex: {}", ecc_mode_hex);
 
         let use_ecdsa_binding = (ecc_and_binding_mode & (1 << 7)) != 0;
         let ephemeral_ecc_params_enum_value = ecc_and_binding_mode & 0x07;
@@ -262,8 +262,8 @@ impl<'a> BinaryParser<'a> {
             }
         };
 
-        println!("useECDSABinding: {}", use_ecdsa_binding);
-        println!("ephemeralECCParamsEnum: {:?}", ephemeral_ecc_params_enum);
+        // println!("useECDSABinding: {}", use_ecdsa_binding);
+        // println!("ephemeralECCParamsEnum: {:?}", ephemeral_ecc_params_enum);
 
         Ok(ECCAndBindingMode {
             use_ecdsa_binding,
@@ -272,13 +272,13 @@ impl<'a> BinaryParser<'a> {
     }
 
     fn read_symmetric_and_payload_config(&mut self) -> Result<SymmetricAndPayloadConfig, ParsingError> {
-        println!("readSymmetricAndPayloadConfig");
+        // println!("readSymmetricAndPayloadConfig");
 
         let symmetric_and_payload_config_data = self.read(1)?;
         let symmetric_and_payload_config = symmetric_and_payload_config_data[0];
 
-        let symmetric_and_payload_config_hex = format!("{:02x}", symmetric_and_payload_config);
-        println!("Symmetric And Payload Config Hex: {}", symmetric_and_payload_config_hex);
+        // let symmetric_and_payload_config_hex = format!("{:02x}", symmetric_and_payload_config);
+        // println!("Symmetric And Payload Config Hex: {}", symmetric_and_payload_config_hex);
 
         let has_signature = (symmetric_and_payload_config & 0x80) >> 7 != 0;
         let signature_ecc_mode_enum_value = (symmetric_and_payload_config & 0x70) >> 4;
@@ -302,9 +302,9 @@ impl<'a> BinaryParser<'a> {
             _ => None,
         };
 
-        println!("hasSignature: {}", has_signature);
-        println!("signatureECCModeEnum: {:?}", signature_ecc_mode_enum);
-        println!("symmetricCipherEnum: {:?}", symmetric_cipher_enum);
+        // println!("hasSignature: {}", has_signature);
+        // println!("signatureECCModeEnum: {:?}", signature_ecc_mode_enum);
+        // println!("symmetricCipherEnum: {:?}", symmetric_cipher_enum);
 
         Ok(SymmetricAndPayloadConfig {
             has_signature,
@@ -399,10 +399,10 @@ mod tests {
                 c7 54 03 03 6f fb 82 87 1f 02 f7 7f ba e5 26 09 da";
 
             let bytes = hex::decode(hex_string.replace(" ", ""))?;
-            println!("{:?}", bytes);
+            // println!("{:?}", bytes);
             let mut parser = BinaryParser::new(&*bytes);
             let header = parser.parse_header()?;
-            println!("{:?}", header);
+            // println!("{:?}", header);
             // Process header as needed
             Ok(())
         }
@@ -417,10 +417,10 @@ mod tests {
                 c7 54 03 03 6f fb 82 87 1f 02 f7 7f ba e5 26 09 da";
 
             let bytes = hex::decode(encrypted_payload.replace(" ", ""))?;
-            println!("{:?}", bytes);
+            // println!("{:?}", bytes);
             let mut parser = BinaryParser::new(&*bytes);
             let header = parser.parse_header()?;
-            println!("{:?}", header);
+            // println!("{:?}", header);
             Ok(())
         }
 
@@ -434,10 +434,10 @@ mod tests {
                 c7 54 03 03 6f fb 82 87 1f 02 f7 7f ba e5 26 09 da";
 
             let bytes = hex::decode(hex_string.replace(" ", ""))?;
-            println!("{:?}", bytes);
+            // println!("{:?}", bytes);
             let mut parser = BinaryParser::new(&*bytes);
-            let header = parser.parse_header()?;
-            println!("{:?}", header);
+            // let header = parser.parse_header()?;
+            // println!("{:?}", header);
             // Process header as needed
             Ok(())
         }
