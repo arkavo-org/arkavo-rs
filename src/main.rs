@@ -5,15 +5,11 @@ use aes_gcm::aead::{Key, NewAead};
 use aes_gcm::aead::Aead;
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::Aes256Gcm;
+use elliptic_curve::point::AffineCoordinates;
 use futures_util::{SinkExt, StreamExt};
 use hkdf::Hkdf;
 use once_cell::sync::OnceCell;
-use p256::{
-    elliptic_curve::sec1::ToEncodedPoint,
-    ProjectivePoint,
-    PublicKey,
-    SecretKey,
-};
+use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use p256::ecdh::EphemeralSecret;
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -205,17 +201,22 @@ async fn handle_rewrap(
         }
     };
     let kas_private_key_bytes = get_kas_private_key_bytes().unwrap();
+    println!("kas_private_key_bytes {}", hex::encode(&kas_private_key_bytes));
+    let kas_private_key_array: [u8; 32] = match kas_private_key_bytes.try_into() {
+        Ok(key) => key,
+        Err(_) => return None,
+    };
+    let kas_private_key = SecretKey::from_bytes(&kas_private_key_array.into())
+        .map_err(|_| "Invalid private key")
+        .ok()?;
     // Perform custom ECDH
-    let dek_shared_secret_bytes = match custom_ecdh(&kas_private_key_bytes, &tdf_ephemeral_public_key) {
+    let dek_shared_secret_bytes = match custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
         Ok(secret) => secret,
         Err(e) => {
             println!("Error performing ECDH: {:?}", e);
             return None;
         }
     };
-    // let hex_str = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-    // let dek_shared_secret_bytes = hex::decode(hex_str).expect("Decoding failed");
-    println!("dek_shared_secret {}", hex::encode(&dek_shared_secret_bytes));
     // Encrypt dek_shared_secret with symmetric key using AES GCM
     let salt = connection_state.salt_lock.read().unwrap().clone().unwrap();
     let info = "rewrappedKey".as_bytes();
@@ -315,30 +316,6 @@ async fn handle_kas_public_key(_: &[u8]) -> Option<Message> {
     None
 }
 
-fn custom_ecdh(private_key_bytes: &[u8], public_key: &PublicKey) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    // Convert private key bytes to fixed-size array
-    let private_key_array: [u8; 32] = private_key_bytes.try_into()
-        .map_err(|_| "Invalid private key length")?;
-    // Debug: Print the first and last byte of the private key (avoid printing the whole key for security reasons)
-    println!("Private key first byte: 0x{:02x}, last byte: 0x{:02x}",
-             private_key_array[0], private_key_array[31]);
-    let secret_key = SecretKey::from_bytes((&private_key_array).into())
-        .map_err(|_| "Invalid private key")?;
-    let scalar = secret_key.to_nonzero_scalar();
-    println!("scalar {}", scalar);
-    // Get the public key point as ProjectivePoint
-    let public_key_point: ProjectivePoint = public_key.to_projective();
-    // Perform the ECDH operation
-    let shared_point = (public_key_point * *scalar).to_affine();
-    // Convert the resulting point to bytes (x-coordinate)
-    let shared_secret = shared_point.to_encoded_point(false).x().unwrap().to_vec();
-    // Hash the shared secret using SHA-256
-    let mut hasher = Sha256::new();
-    hasher.update(&shared_secret);
-    let hashed_secret = hasher.finalize().to_vec();
-    Ok(hashed_secret)
-}
-
 fn init_kas_keys() -> Result<(), Box<dyn std::error::Error>> {
     let pem_content = std::fs::read_to_string("recipient_private_key.pem")?;
     let ec_pem_contents = pem_content.as_bytes();
@@ -368,4 +345,123 @@ fn get_kas_public_key() -> Option<Vec<u8>> {
 
 fn get_kas_private_key_bytes() -> Option<Vec<u8>> {
     KAS_KEYS.get().map(|keys| keys.private_key.clone())
+}
+
+fn custom_ecdh(secret_key: &SecretKey, public_key: &PublicKey) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    // Get the scalar from the secret key
+    let scalar = secret_key.to_nonzero_scalar();
+    println!("scalar {}", hex::encode(scalar.to_bytes()));
+
+    // Get the public key point
+    let public_key_point = public_key.to_projective();
+
+    // Perform the ECDH operation
+    let shared_point = (public_key_point * *scalar).to_affine();
+
+    // Extract the x-coordinate as the shared secret
+    let x_coordinate = shared_point.x();
+    let shared_secret = x_coordinate.to_vec();
+
+    println!("Raw shared secret: {}", hex::encode(&shared_secret));
+
+    // Hash the x-coordinate using SHA-256
+    let mut hasher = Sha256::new();
+    hasher.update(x_coordinate);
+    let hashed_secret = hasher.finalize().to_vec();
+
+    println!("Hashed shared secret: {}", hex::encode(&hashed_secret));
+
+    Ok(shared_secret)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use elliptic_curve::{CurveArithmetic, NonZeroScalar};
+    use elliptic_curve::ScalarPrimitive;
+    use p256::NistP256;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_ephemeral_key_pair_and_custom_ecdh() {
+        // Generate an ephemeral server key pair
+        let server_private_key = EphemeralSecret::random(&mut OsRng);
+
+        // Generate an ephemeral client key pair
+        let client_private_key = EphemeralSecret::random(&mut OsRng);
+        let client_public_key = PublicKey::from(&client_private_key);
+        // Serialize the client public key
+        let client_public_key_compressed = client_public_key.to_encoded_point(true);
+        let client_public_key_bytes = client_public_key_compressed.as_bytes().to_vec();
+
+        // Perform key agreement with the server's private key and the other party's (client's) public key
+        let shared_secret = server_private_key.diffie_hellman(&client_public_key);
+
+        // Convert the shared_secret into bytes
+        let shared_secret_bytes = shared_secret.raw_secret_bytes().to_vec();
+        let key_agreement_secret = hex::encode(shared_secret_bytes);
+        println!("Key agreement secret: {}", key_agreement_secret);
+
+        let debug_server_private_key: DebugEphemeralSecret<NistP256> = unsafe {
+            std::mem::transmute(server_private_key)
+        };
+        let secret_key = SecretKey::new(ScalarPrimitive::from(debug_server_private_key.scalar));
+        // Deserialize the public key of client
+        let public_key = PublicKey::from_sec1_bytes(&client_public_key_bytes)
+            .expect("Error deserializing client public key");
+
+        // Run custom ECDH
+        let result = custom_ecdh(&secret_key, &public_key).expect("Error performing ECDH");
+
+        let computed_secret = hex::encode(result);
+        println!("Computed shared secret: {}", computed_secret);
+
+        assert_eq!(key_agreement_secret, computed_secret, "Key agreement secret does not match with computed shared secret.");
+    }
+
+    #[test]
+    fn test_ecdh_known_values() -> Result<(), Box<dyn Error>> {
+        // These are example values and should be replaced with actual test vectors
+        // kas_private_key_bytes
+        let server_private = "472c179ab235274ecb6678bcc5aa0a8578fc59b7431dd8dd37adbeb60c637618";
+        let server_public = "03689f8463a91340e347847414f5ef67a6013ab7236b2229c70b717974ee74eb6c";
+        // tdf_ephemeral_key
+        let client_public = "02c8eee0d2c24780cbc29169739acc68904bdee3c0553d5ec1183ba476942de686";
+        // kas_private_key_bytes
+        let private_key_bytes = hex::decode(server_private).unwrap();
+        // tdf_ephemeral_public_key
+        let public_key_bytes = hex::decode(client_public).unwrap();
+        // dek_shared_secret - from swift client
+        // let expected_shared_secret = "0c53a5afa08acf1f2000cd9c050d35eca472d625a010146991aed9da05114e3b";
+        let expected_shared_secret = "d5da0342ae4458cece9b3eb2d253c6212e9612ab9f8c9a4249ee4c9c59ccda13";
+
+        let client_public_key = PublicKey::from_sec1_bytes(&public_key_bytes).unwrap();
+        let kas_private_key_option: Option<[u8; 32]> = private_key_bytes.clone().try_into().ok();
+        let kas_private_key_array = match kas_private_key_option {
+            Some(array) => array,
+            None => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Could not convert to array."))),
+        };
+        let server_secret_key = SecretKey::from_bytes(&kas_private_key_array.into())
+            .map_err(|_| "Invalid private key")
+            .ok();
+        let server_secret_key = server_secret_key.unwrap();
+
+        let server_public_key = server_secret_key.public_key();
+        let compressed_public_key = server_public_key.to_encoded_point(true);
+        let compressed_public_key_bytes = compressed_public_key.as_bytes();
+        // println!("KAS Public Key Hex: {}", hex::encode(compressed_public_key_bytes));
+        assert_eq!(hex::encode(compressed_public_key_bytes), server_public);
+
+        let result = custom_ecdh(&server_secret_key, &client_public_key).unwrap();
+        assert_eq!(hex::encode(result), expected_shared_secret);
+        Ok(())
+    }
+    pub struct DebugEphemeralSecret<C>
+    where
+        C: CurveArithmetic,
+    {
+        pub scalar: NonZeroScalar<C>,
+    }
 }
