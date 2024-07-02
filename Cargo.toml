@@ -1,6 +1,6 @@
 [package]
 name = "backend-rust"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 
 [dependencies]
@@ -18,3 +18,5 @@ rand_core = "0.6.4"
 zeroize = "1.8.1"
 sha2 = "0.10.8"
 hkdf = "0.12.4"
+tokio-native-tls = "0.3.1"
+native-tls = "0.2.12"

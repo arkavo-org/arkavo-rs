@@ -1,3 +1,4 @@
+use std::env;
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -15,6 +16,7 @@ use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::net::{TcpListener, TcpStream};
+use tokio_native_tls::TlsAcceptor;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -71,30 +73,59 @@ struct KasKeys {
 
 static KAS_KEYS: OnceCell<Arc<KasKeys>> = OnceCell::new();
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
-async fn main() {
-    // KAS public key
-    init_kas_keys().expect("KAS key not loaded");
-    // Bind the server to localhost on port 8080
-    let try_socket = TcpListener::bind("0.0.0.0:8080").await;
-    let listener = match try_socket {
-        Ok(socket) => socket,
-        Err(e) => {
-            println!("Failed to bind to port: {}", e);
-            return;
-        }
-    };
-    println!("Listening on: 0.0.0.0:8080");
-    // Accept connections
-    while let Ok((stream, _)) = listener.accept().await {
-        let connection_state = Arc::new(ConnectionState::new());
-        tokio::spawn(async move {
-            handle_connection(stream, connection_state).await
-        });
-    }
+#[derive(Debug, Deserialize)]
+struct ServerSettings {
+    port: u16,
+    tls_cert_path: String,
+    tls_key_path: String,
+    kas_key_path: String,
 }
 
-async fn handle_connection(stream: TcpStream, connection_state: Arc<ConnectionState>) {
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Load configuration
+    let settings = load_config()?;
+
+    // Initialize KAS keys
+    init_kas_keys(&settings.kas_key_path)?;
+
+    // Set up TLS
+    let tls_config = load_tls_config(&settings.tls_cert_path, &settings.tls_key_path)?;
+    let tls_acceptor = TlsAcceptor::from(tls_config);
+
+    // Bind the server
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", settings.port)).await?;
+    println!("Listening on: 0.0.0.0:{}", settings.port);
+
+    // Accept connections
+    while let Ok((stream, _)) = listener.accept().await {
+        let tls_acceptor = tls_acceptor.clone();
+        let connection_state = Arc::new(ConnectionState::new());
+
+        tokio::spawn(async move {
+            match tls_acceptor.accept(stream).await {
+                Ok(tls_stream) => {
+                    handle_connection(tls_stream, connection_state).await;
+                }
+                Err(e) => eprintln!("Failed to accept TLS connection: {}", e),
+            }
+        });
+    }
+
+    Ok(())
+}
+
+fn load_tls_config(cert_path: &str, key_path: &str) -> Result<native_tls::TlsAcceptor, Box<dyn std::error::Error>> {
+    let cert = std::fs::read(cert_path)?;
+    let key = std::fs::read(key_path)?;
+
+    let identity = native_tls::Identity::from_pkcs8(&cert, &key)?;
+    let acceptor = native_tls::TlsAcceptor::new(identity)?;
+
+    Ok(acceptor)
+}
+
+async fn handle_connection(stream: tokio_native_tls::TlsStream<TcpStream>, connection_state: Arc<ConnectionState>) {
     let ws_stream = match accept_async(stream).await {
         Ok(ws) => ws,
         Err(e) => {
@@ -316,8 +347,8 @@ async fn handle_kas_public_key(_: &[u8]) -> Option<Message> {
     None
 }
 
-fn init_kas_keys() -> Result<(), Box<dyn std::error::Error>> {
-    let pem_content = std::fs::read_to_string("recipient_private_key.pem")?;
+fn init_kas_keys(key_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let pem_content = std::fs::read_to_string(key_path)?;
     let ec_pem_contents = pem_content.as_bytes();
     let pem = pem::parse(ec_pem_contents)?;
     if pem.tag() != "EC PRIVATE KEY" {
@@ -372,6 +403,20 @@ fn custom_ecdh(secret_key: &SecretKey, public_key: &PublicKey) -> Result<Vec<u8>
     // println!("Hashed shared secret: {}", hex::encode(&hashed_secret));
 
     Ok(shared_secret)
+}
+
+fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
+    let current_dir = env::current_dir()?;
+
+    Ok(ServerSettings {
+        port: env::var("PORT").unwrap_or_else(|_| "8443".to_string()).parse()?,
+        tls_cert_path: env::var("TLS_CERT_PATH")
+            .unwrap_or_else(|_| current_dir.join("fullchain.pem").to_str().unwrap().to_string()),
+        tls_key_path: env::var("TLS_KEY_PATH")
+            .unwrap_or_else(|_| current_dir.join("privkey.pem").to_str().unwrap().to_string()),
+        kas_key_path: env::var("KAS_KEY_PATH")
+            .unwrap_or_else(|_| current_dir.join("recipient_private_key.pem").to_str().unwrap().to_string()),
+    })
 }
 
 #[cfg(test)]

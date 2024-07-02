@@ -22,3 +22,5 @@ Cargo.lock
 /.idea/backend-rust.iml
 /.idea/modules.xml
 /.idea/vcs.xml
+/fullchain.pem
+/privkey.pem
