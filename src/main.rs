@@ -1,6 +1,7 @@
 use std::env;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::time::Instant;
 
 use aes_gcm::aead::{Key, NewAead};
 use aes_gcm::aead::Aead;
@@ -9,6 +10,7 @@ use aes_gcm::Aes256Gcm;
 use elliptic_curve::point::AffineCoordinates;
 use futures_util::{SinkExt, StreamExt};
 use hkdf::Hkdf;
+use log::info;
 use once_cell::sync::OnceCell;
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use p256::ecdh::EphemeralSecret;
@@ -73,16 +75,11 @@ struct KasKeys {
 
 static KAS_KEYS: OnceCell<Arc<KasKeys>> = OnceCell::new();
 
-#[derive(Debug, Deserialize)]
-struct ServerSettings {
-    port: u16,
-    tls_cert_path: String,
-    tls_key_path: String,
-    kas_key_path: String,
-}
-
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize logging
+    env_logger::init();
+
     // Load configuration
     let settings = load_config()?;
 
@@ -101,11 +98,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Ok((stream, _)) = listener.accept().await {
         let tls_acceptor = tls_acceptor.clone();
         let connection_state = Arc::new(ConnectionState::new());
+        let settings_clone = settings.clone();
 
         tokio::spawn(async move {
             match tls_acceptor.accept(stream).await {
                 Ok(tls_stream) => {
-                    handle_connection(tls_stream, connection_state).await;
+                    handle_connection(tls_stream, connection_state, &settings_clone).await;
                 }
                 Err(e) => eprintln!("Failed to accept TLS connection: {}", e),
             }
@@ -125,7 +123,11 @@ fn load_tls_config(cert_path: &str, key_path: &str) -> Result<native_tls::TlsAcc
     Ok(acceptor)
 }
 
-async fn handle_connection(stream: tokio_native_tls::TlsStream<TcpStream>, connection_state: Arc<ConnectionState>) {
+async fn handle_connection(
+    stream: tokio_native_tls::TlsStream<TcpStream>,
+    connection_state: Arc<ConnectionState>,
+    settings: &ServerSettings,
+) {
     let ws_stream = match accept_async(stream).await {
         Ok(ws) => ws,
         Err(e) => {
@@ -143,7 +145,7 @@ async fn handle_connection(stream: tokio_native_tls::TlsStream<TcpStream>, conne
                     println!("Received a close message.");
                     return;
                 }
-                if let Some(response) = handle_binary_message(&connection_state, msg.into_data()).await
+                if let Some(response) = handle_binary_message(&connection_state, msg.into_data(), settings).await
                 {
                     // TODO remove clone
                     ws_sender.send(response.clone()).await.expect("ws send failed");
@@ -160,6 +162,7 @@ async fn handle_connection(stream: tokio_native_tls::TlsStream<TcpStream>, conne
 async fn handle_binary_message(
     connection_state: &Arc<ConnectionState>,
     data: Vec<u8>,
+    settings: &ServerSettings,
 ) -> Option<Message> {
     if data.len() < 1 {
         println!("Invalid message format");
@@ -171,7 +174,7 @@ async fn handle_binary_message(
     match message_type {
         Some(MessageType::PublicKey) => handle_public_key(connection_state, payload).await,
         Some(MessageType::KasPublicKey) => handle_kas_public_key(payload).await,
-        Some(MessageType::Rewrap) => handle_rewrap(connection_state, payload).await,
+        Some(MessageType::Rewrap) => handle_rewrap(connection_state, payload, settings).await,
         Some(MessageType::RewrappedKey) => None,
         None => {
             println!("Unknown message type: {:?}", message_type);
@@ -180,59 +183,61 @@ async fn handle_binary_message(
     }
 }
 
-struct PrintOnDrop;
-
-impl Drop for PrintOnDrop {
-    fn drop(&mut self) {
-        // println!("END handle_rewrap");
-    }
-}
+// struct PrintOnDrop;
+//
+// impl Drop for PrintOnDrop {
+//     fn drop(&mut self) {
+//         // println!("END handle_rewrap");
+//     }
+// }
 
 async fn handle_rewrap(
     connection_state: &Arc<ConnectionState>,
     payload: &[u8],
+    settings: &ServerSettings,
 ) -> Option<Message> {
-    let _print_on_drop = PrintOnDrop;
-    // println!("BEGIN handle_rewrap");
+    let start_time = Instant::now();
+
     let session_shared_secret = {
         let shared_secret = connection_state.shared_secret_lock.read().unwrap();
         shared_secret.clone()
     };
     if session_shared_secret == None {
-        println!("Shared Secret not set");
+        info!("Shared Secret not set");
         return None;
     }
     let session_shared_secret = session_shared_secret.unwrap();
+
     // Parse NanoTDF header
     let mut parser = BinaryParser::new(payload);
     let header = match BinaryParser::parse_header(&mut parser) {
         Ok(header) => header,
         Err(e) => {
-            println!("Error parsing header: {:?}", e);
+            info!("Error parsing header: {:?}", e);
             return None;
         }
     };
-    // Extract the policy
-    // let policy = header.get_policy();
-    // println!("policy binding hex: {}", hex::encode(policy.get_binding().clone().unwrap()));
+
+    let parse_time = start_time.elapsed();
+    log_timing(settings, "Time to parse header", parse_time);
+
     // TDF ephemeral key
     let tdf_ephemeral_key_bytes = header.get_ephemeral_key();
-    // println!("tdf_ephemeral_key hex: {}", hex::encode(tdf_ephemeral_key_bytes));
-    // Deserialize the public key sent by the client
     if tdf_ephemeral_key_bytes.len() != 33 {
-        println!("Invalid TDF compressed ephemeral key length");
+        info!("Invalid TDF compressed ephemeral key length");
         return None;
     }
+
     // Deserialize the public key sent by the client
     let tdf_ephemeral_public_key = match PublicKey::from_sec1_bytes(tdf_ephemeral_key_bytes) {
         Ok(key) => key,
         Err(e) => {
-            println!("Error deserializing TDF ephemeral public key: {:?}", e);
+            info!("Error deserializing TDF ephemeral public key: {:?}", e);
             return None;
         }
     };
+
     let kas_private_key_bytes = get_kas_private_key_bytes().unwrap();
-    // println!("kas_private_key_bytes {}", hex::encode(&kas_private_key_bytes));
     let kas_private_key_array: [u8; 32] = match kas_private_key_bytes.try_into() {
         Ok(key) => key,
         Err(_) => return None,
@@ -240,36 +245,49 @@ async fn handle_rewrap(
     let kas_private_key = SecretKey::from_bytes(&kas_private_key_array.into())
         .map_err(|_| "Invalid private key")
         .ok()?;
+
     // Perform custom ECDH
+    let ecdh_start = Instant::now();
     let dek_shared_secret_bytes = match custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
         Ok(secret) => secret,
         Err(e) => {
-            println!("Error performing ECDH: {:?}", e);
+            info!("Error performing ECDH: {:?}", e);
             return None;
         }
     };
+    let ecdh_time = ecdh_start.elapsed();
+    log_timing(settings, "Time for ECDH operation", ecdh_time);
+
     // Encrypt dek_shared_secret with symmetric key using AES GCM
     let salt = connection_state.salt_lock.read().unwrap().clone().unwrap();
     let info = "rewrappedKey".as_bytes();
     let hkdf = Hkdf::<Sha256>::new(Some(&salt), &session_shared_secret);
     let mut derived_key = [0u8; 32];
     hkdf.expand(info, &mut derived_key).expect("HKDF expansion failed");
-    // println!("Derived Session Key: {}", hex::encode(&derived_key));
+
     let mut nonce = [0u8; 12];
     OsRng.fill_bytes(&mut nonce);
     let nonce = GenericArray::from_slice(&nonce);
-    // println!("nonce {}", hex::encode(nonce));
+
     let key = Key::<Aes256Gcm>::from(derived_key);
     let cipher = Aes256Gcm::new(&key);
+
+    let encryption_start = Instant::now();
     let wrapped_dek = cipher.encrypt(nonce, dek_shared_secret_bytes.as_ref())
         .expect("encryption failure!");
-    // println!("Rewrapped Key and Authentication tag {}", hex::encode(&wrapped_dek));
+    let encryption_time = encryption_start.elapsed();
+    log_timing(settings, "Time for AES-GCM encryption", encryption_time);
+
     // binary response
     let mut response_data = Vec::new();
     response_data.push(MessageType::RewrappedKey as u8);
     response_data.extend_from_slice(tdf_ephemeral_key_bytes);
     response_data.extend_from_slice(&nonce);
     response_data.extend_from_slice(&wrapped_dek);
+
+    let total_time = start_time.elapsed();
+    log_timing(settings, "Total time for handle_rewrap", total_time);
+
     Some(Message::Binary(response_data))
 }
 
@@ -405,6 +423,20 @@ fn custom_ecdh(secret_key: &SecretKey, public_key: &PublicKey) -> Result<Vec<u8>
     Ok(shared_secret)
 }
 
+#[derive(Debug, Deserialize, Clone)]
+struct ServerSettings {
+    port: u16,
+    tls_cert_path: String,
+    tls_key_path: String,
+    kas_key_path: String,
+    enable_timing_logs: bool,
+}
+
+fn log_timing(settings: &ServerSettings, message: &str, duration: std::time::Duration) {
+    if settings.enable_timing_logs {
+        info!("{}: {:?}", message, duration);
+    }
+}
 fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
     let current_dir = env::current_dir()?;
 
@@ -416,6 +448,7 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
             .unwrap_or_else(|_| current_dir.join("privkey.pem").to_str().unwrap().to_string()),
         kas_key_path: env::var("KAS_KEY_PATH")
             .unwrap_or_else(|_| current_dir.join("recipient_private_key.pem").to_str().unwrap().to_string()),
+        enable_timing_logs: env::var("ENABLE_TIMING_LOGS").unwrap_or_else(|_| "false".to_string()).parse().unwrap_or(false),
     })
 }
 
