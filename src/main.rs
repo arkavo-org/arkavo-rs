@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Instant;
 
-use aes_gcm::aead::{Key, NewAead};
-use aes_gcm::aead::Aead;
+use aes_gcm::aead::{Aead, Key};
 use aes_gcm::aead::generic_array::GenericArray;
+use aes_gcm::aead::KeyInit;
 use aes_gcm::Aes256Gcm;
 use elliptic_curve::point::AffineCoordinates;
 use futures_util::{SinkExt, StreamExt};
@@ -17,12 +17,12 @@ use p256::ecdh::EphemeralSecret;
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio_native_tls::TlsAcceptor;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::nanotdf::BinaryParser;
+use crate::nanotdf::{BinaryParser, ProtocolEnum};
 
 mod nanotdf;
 
@@ -75,7 +75,7 @@ struct KasKeys {
 
 static KAS_KEYS: OnceCell<Arc<KasKeys>> = OnceCell::new();
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     env_logger::init();
@@ -86,9 +86,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize KAS keys
     init_kas_keys(&settings.kas_key_path)?;
 
-    // Set up TLS
-    let tls_config = load_tls_config(&settings.tls_cert_path, &settings.tls_key_path)?;
-    let tls_acceptor = TlsAcceptor::from(tls_config);
+    // Set up TLS if not disabled
+    let tls_acceptor = if settings.tls_enabled {
+        Some(TlsAcceptor::from(load_tls_config(&settings.tls_cert_path, &settings.tls_key_path)?))
+    } else {
+        None
+    };
 
     // Bind the server
     let listener = TcpListener::bind(format!("0.0.0.0:{}", settings.port)).await?;
@@ -96,21 +99,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Accept connections
     while let Ok((stream, _)) = listener.accept().await {
-        let tls_acceptor = tls_acceptor.clone();
+        let tls_acceptor_clone = tls_acceptor.clone();
         let connection_state = Arc::new(ConnectionState::new());
         let settings_clone = settings.clone();
 
         tokio::spawn(async move {
-            match tls_acceptor.accept(stream).await {
-                Ok(tls_stream) => {
-                    handle_connection(tls_stream, connection_state, &settings_clone).await;
+            if let Some(tls_acceptor) = tls_acceptor_clone {
+                match tls_acceptor.accept(stream).await {
+                    Ok(tls_stream) => {
+                        handle_tls_connection(tls_stream, connection_state, &settings_clone).await;
+                    }
+                    Err(e) => eprintln!("Failed to accept TLS connection: {}", e),
                 }
-                Err(e) => eprintln!("Failed to accept TLS connection: {}", e),
+            } else {
+                handle_plain_connection(stream, connection_state, &settings_clone).await;
             }
         });
     }
 
     Ok(())
+}
+
+async fn handle_tls_connection(stream: tokio_native_tls::TlsStream<tokio::net::TcpStream>, connection_state: Arc<ConnectionState>, settings: &ServerSettings) {
+    let ws_stream = match accept_async(stream).await {
+        Ok(ws) => ws,
+        Err(e) => {
+            eprintln!("Error during the websocket handshake occurred: {}", e);
+            return;
+        }
+    };
+    handle_websocket(ws_stream, connection_state, &settings).await;
+}
+
+async fn handle_plain_connection(stream: tokio::net::TcpStream, connection_state: Arc<ConnectionState>, settings: &ServerSettings) {
+    let ws_stream = match accept_async(stream).await {
+        Ok(ws) => ws,
+        Err(e) => {
+            eprintln!("Error during the websocket handshake occurred: {}", e);
+            return;
+        }
+    };
+    handle_websocket(ws_stream, connection_state, &settings).await;
 }
 
 fn load_tls_config(cert_path: &str, key_path: &str) -> Result<native_tls::TlsAcceptor, Box<dyn std::error::Error>> {
@@ -123,32 +152,25 @@ fn load_tls_config(cert_path: &str, key_path: &str) -> Result<native_tls::TlsAcc
     Ok(acceptor)
 }
 
-async fn handle_connection(
-    stream: tokio_native_tls::TlsStream<TcpStream>,
+async fn handle_websocket(
+    ws_stream: tokio_tungstenite::WebSocketStream<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>,
     connection_state: Arc<ConnectionState>,
     settings: &ServerSettings,
 ) {
-    let ws_stream = match accept_async(stream).await {
-        Ok(ws) => ws,
-        Err(e) => {
-            eprintln!("Error during the websocket handshake occurred: {}", e);
-            return;
-        }
-    };
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
     // Handle incoming WebSocket messages
     while let Some(message) = ws_receiver.next().await {
         match message {
             Ok(msg) => {
-                // println!("Received message: {:?}", msg);
                 if msg.is_close() {
                     println!("Received a close message.");
                     return;
                 }
-                if let Some(response) = handle_binary_message(&connection_state, msg.into_data(), settings).await
-                {
-                    // TODO remove clone
-                    ws_sender.send(response.clone()).await.expect("ws send failed");
+                if let Some(response) = handle_binary_message(&connection_state, msg.into_data(), &settings).await {
+                    if ws_sender.send(response).await.is_err() {
+                        eprintln!("WebSocket send error");
+                        break;
+                    }
                 }
             }
             Err(e) => {
@@ -183,14 +205,6 @@ async fn handle_binary_message(
     }
 }
 
-// struct PrintOnDrop;
-//
-// impl Drop for PrintOnDrop {
-//     fn drop(&mut self) {
-//         // println!("END handle_rewrap");
-//     }
-// }
-
 async fn handle_rewrap(
     connection_state: &Arc<ConnectionState>,
     payload: &[u8],
@@ -220,6 +234,23 @@ async fn handle_rewrap(
 
     let parse_time = start_time.elapsed();
     log_timing(settings, "Time to parse header", parse_time);
+
+    // TDF contract
+    let policy = header.get_policy();
+    let locator = policy.get_locator();
+    let locator = match locator {
+        Some(locator) => locator,
+        None => {
+            info!("Missing TDF locator");
+            return None;
+        }
+    };
+    if locator.protocol_enum == ProtocolEnum::SharedResource {
+        // Insert code to be executed when the comparison is true
+    } else {
+        // Insert code to be executed when the comparison is false
+    }
+
 
     // TDF ephemeral key
     let tdf_ephemeral_key_bytes = header.get_ephemeral_key();
@@ -426,6 +457,7 @@ fn custom_ecdh(secret_key: &SecretKey, public_key: &PublicKey) -> Result<Vec<u8>
 #[derive(Debug, Deserialize, Clone)]
 struct ServerSettings {
     port: u16,
+    tls_enabled: bool,
     tls_cert_path: String,
     tls_key_path: String,
     kas_key_path: String,
@@ -441,7 +473,8 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
     let current_dir = env::current_dir()?;
 
     Ok(ServerSettings {
-        port: env::var("PORT").unwrap_or_else(|_| "8443".to_string()).parse()?,
+        port: env::var("PORT").unwrap_or_else(|_| "8080".to_string()).parse()?,
+        tls_enabled: env::var("TLS_CERT_PATH").is_ok(),
         tls_cert_path: env::var("TLS_CERT_PATH")
             .unwrap_or_else(|_| current_dir.join("fullchain.pem").to_str().unwrap().to_string()),
         tls_key_path: env::var("TLS_KEY_PATH")

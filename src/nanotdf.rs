@@ -18,17 +18,17 @@ struct NanoTDFHeader {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct ResourceLocator {
-    protocol_enum: ProtocolEnum,
-    body: String,
+pub struct ResourceLocator {
+    pub protocol_enum: ProtocolEnum,
+    pub body: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-enum ProtocolEnum {
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub enum ProtocolEnum {
     Http = 0x00,
     Https = 0x01,
     Unreserved = 0x02,
-    SharedResourceDirectory = 0xFF,
+    SharedResource = 0xFF,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -87,6 +87,9 @@ pub(crate) struct Policy {
 impl Policy {
     pub fn get_binding(&self) -> &Option<Vec<u8>> {
         &self.binding
+    }
+    pub fn get_locator(&self) -> &Option<ResourceLocator> {
+        &self.remote
     }
 }
 
@@ -171,7 +174,7 @@ impl<'a> BinaryParser<'a> {
             0x00 => ProtocolEnum::Http,
             0x01 => ProtocolEnum::Https,
             0x02 => ProtocolEnum::Unreserved,
-            0xFF => ProtocolEnum::SharedResourceDirectory,
+            0xFF => ProtocolEnum::SharedResource,
             _ => return Err(ParsingError::InvalidKas),
         };
         let body_length = self.read(1)?[0] as usize;
