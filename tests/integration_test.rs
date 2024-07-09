@@ -3,53 +3,7 @@ extern crate hex;
 mod tests {
     use std::error::Error;
 
-    use alloy_primitives::{Address, U256};
-    use alloy_provider::ProviderBuilder;
-    use alloy_sol_types::sol;
-
     use super::*;
-
-    struct AlloyTests;
-
-    impl AlloyTests {
-        async fn test() -> Result<(), Box<dyn std::error::Error>> {
-            sol! {
-                #[sol(rpc)] // <-- Important! Generates the necessary `MyContract` struct and function methods.
-                #[sol(bytecode = "0x1234")] // <-- Generates the `BYTECODE` static and the `deploy` method.
-                contract MyContract {
-                    constructor(address) {} // The `deploy` method will also include any constructor arguments.
-
-                    #[derive(Debug)]
-                    function doStuff(uint a, bool b) public payable returns(address c, bytes32 d);
-                }
-            }
-
-            // Build a provider.
-            let provider = ProviderBuilder::new().with_recommended_fillers().on_builtin("http://localhost:8545").await?;
-
-            // If `#[sol(bytecode = "0x...")]` is provided, the contract can be deployed with `MyContract::deploy`,
-            // and a new instance will be created.
-            let constructor_arg = Address::ZERO;
-            let contract = MyContract::deploy(&provider, constructor_arg).await?;
-
-            // Otherwise, or if already deployed, a new contract instance can be created with `MyContract::new`.
-            let address = Address::ZERO;
-            let contract = MyContract::new(address, &provider);
-
-            // Build a call to the `doStuff` function and configure it.
-            let a = U256::from(123);
-            let b = true;
-            let call_builder = contract.doStuff(a, b).value(U256::from(50e18 as u64));
-
-            // Send the call. Note that this is not broadcasted as a transaction.
-            let call_return = call_builder.call().await?;
-            println!("{call_return:?}"); // doStuffReturn { c: 0x..., d: 0x... }
-
-            // Use `send` to broadcast the call as a transaction.
-            let _pending_tx = call_builder.send().await?;
-            Ok(())
-        }
-    }
 
     struct NanoTDFTests;
 
@@ -110,14 +64,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn run_tests() {
-        let res = run_tests_inner().await;
-        assert!(res.is_ok());
-    }
-
-    async fn run_tests_inner() -> Result<(), Box<dyn Error>> {
-        AlloyTests::test().await;
+    #[test]
+    fn run_tests() -> Result<(), Box<dyn Error>> {
         NanoTDFTests::setup()?;
         NanoTDFTests::test_spec_example_binary_parser()?;
         NanoTDFTests::test_spec_example_decrypt_payload()?;
