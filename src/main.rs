@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Instant;
 
-use aes_gcm::aead::{Key, NewAead};
-use aes_gcm::aead::Aead;
+use aes_gcm::aead::{Aead, Key};
 use aes_gcm::aead::generic_array::GenericArray;
+use aes_gcm::aead::KeyInit;
 use aes_gcm::Aes256Gcm;
 use elliptic_curve::point::AffineCoordinates;
 use futures_util::{SinkExt, StreamExt};
@@ -17,14 +17,15 @@ use p256::ecdh::EphemeralSecret;
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio_native_tls::TlsAcceptor;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::nanotdf::BinaryParser;
+use crate::nanotdf::{BinaryParser, ProtocolEnum};
 
 mod nanotdf;
+mod contract_simple_abac;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct PublicKeyMessage {
@@ -75,7 +76,7 @@ struct KasKeys {
 
 static KAS_KEYS: OnceCell<Arc<KasKeys>> = OnceCell::new();
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     env_logger::init();
@@ -86,9 +87,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize KAS keys
     init_kas_keys(&settings.kas_key_path)?;
 
-    // Set up TLS
-    let tls_config = load_tls_config(&settings.tls_cert_path, &settings.tls_key_path)?;
-    let tls_acceptor = TlsAcceptor::from(tls_config);
+    // Set up TLS if not disabled
+    let tls_acceptor = if settings.tls_enabled {
+        Some(TlsAcceptor::from(load_tls_config(
+            &settings.tls_cert_path,
+            &settings.tls_key_path,
+        )?))
+    } else {
+        None
+    };
 
     // Bind the server
     let listener = TcpListener::bind(format!("0.0.0.0:{}", settings.port)).await?;
@@ -96,16 +103,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Accept connections
     while let Ok((stream, _)) = listener.accept().await {
-        let tls_acceptor = tls_acceptor.clone();
+        let tls_acceptor_clone = tls_acceptor.clone();
         let connection_state = Arc::new(ConnectionState::new());
         let settings_clone = settings.clone();
 
         tokio::spawn(async move {
-            match tls_acceptor.accept(stream).await {
-                Ok(tls_stream) => {
-                    handle_connection(tls_stream, connection_state, &settings_clone).await;
+            if let Some(tls_acceptor) = tls_acceptor_clone {
+                match tls_acceptor.accept(stream).await {
+                    Ok(tls_stream) => {
+                        handle_tls_connection(tls_stream, connection_state, &settings_clone).await;
+                    }
+                    Err(e) => eprintln!("Failed to accept TLS connection: {}", e),
                 }
-                Err(e) => eprintln!("Failed to accept TLS connection: {}", e),
+            } else {
+                handle_plain_connection(stream, connection_state, &settings_clone).await;
             }
         });
     }
@@ -113,18 +124,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn load_tls_config(cert_path: &str, key_path: &str) -> Result<native_tls::TlsAcceptor, Box<dyn std::error::Error>> {
-    let cert = std::fs::read(cert_path)?;
-    let key = std::fs::read(key_path)?;
-
-    let identity = native_tls::Identity::from_pkcs8(&cert, &key)?;
-    let acceptor = native_tls::TlsAcceptor::new(identity)?;
-
-    Ok(acceptor)
-}
-
-async fn handle_connection(
-    stream: tokio_native_tls::TlsStream<TcpStream>,
+async fn handle_tls_connection(
+    stream: tokio_native_tls::TlsStream<tokio::net::TcpStream>,
     connection_state: Arc<ConnectionState>,
     settings: &ServerSettings,
 ) {
@@ -135,20 +136,60 @@ async fn handle_connection(
             return;
         }
     };
+    handle_websocket(ws_stream, connection_state, &settings).await;
+}
+
+async fn handle_plain_connection(
+    stream: tokio::net::TcpStream,
+    connection_state: Arc<ConnectionState>,
+    settings: &ServerSettings,
+) {
+    let ws_stream = match accept_async(stream).await {
+        Ok(ws) => ws,
+        Err(e) => {
+            eprintln!("Error during the websocket handshake occurred: {}", e);
+            return;
+        }
+    };
+    handle_websocket(ws_stream, connection_state, &settings).await;
+}
+
+fn load_tls_config(
+    cert_path: &str,
+    key_path: &str,
+) -> Result<native_tls::TlsAcceptor, Box<dyn std::error::Error>> {
+    let cert = std::fs::read(cert_path)?;
+    let key = std::fs::read(key_path)?;
+
+    let identity = native_tls::Identity::from_pkcs8(&cert, &key)?;
+    let acceptor = native_tls::TlsAcceptor::new(identity)?;
+
+    Ok(acceptor)
+}
+
+async fn handle_websocket(
+    ws_stream: tokio_tungstenite::WebSocketStream<
+        impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    >,
+    connection_state: Arc<ConnectionState>,
+    settings: &ServerSettings,
+) {
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
     // Handle incoming WebSocket messages
     while let Some(message) = ws_receiver.next().await {
         match message {
             Ok(msg) => {
-                // println!("Received message: {:?}", msg);
                 if msg.is_close() {
                     println!("Received a close message.");
                     return;
                 }
-                if let Some(response) = handle_binary_message(&connection_state, msg.into_data(), settings).await
+                if let Some(response) =
+                    handle_binary_message(&connection_state, msg.into_data(), &settings).await
                 {
-                    // TODO remove clone
-                    ws_sender.send(response.clone()).await.expect("ws send failed");
+                    if ws_sender.send(response).await.is_err() {
+                        eprintln!("WebSocket send error");
+                        break;
+                    }
                 }
             }
             Err(e) => {
@@ -183,21 +224,14 @@ async fn handle_binary_message(
     }
 }
 
-// struct PrintOnDrop;
-//
-// impl Drop for PrintOnDrop {
-//     fn drop(&mut self) {
-//         // println!("END handle_rewrap");
-//     }
-// }
-
 async fn handle_rewrap(
     connection_state: &Arc<ConnectionState>,
     payload: &[u8],
     settings: &ServerSettings,
 ) -> Option<Message> {
+    // timing
     let start_time = Instant::now();
-
+    // session shared secret
     let session_shared_secret = {
         let shared_secret = connection_state.shared_secret_lock.read().unwrap();
         shared_secret.clone()
@@ -207,7 +241,6 @@ async fn handle_rewrap(
         return None;
     }
     let session_shared_secret = session_shared_secret.unwrap();
-
     // Parse NanoTDF header
     let mut parser = BinaryParser::new(payload);
     let header = match BinaryParser::parse_header(&mut parser) {
@@ -217,17 +250,42 @@ async fn handle_rewrap(
             return None;
         }
     };
-
+    // timing
     let parse_time = start_time.elapsed();
     log_timing(settings, "Time to parse header", parse_time);
-
     // TDF ephemeral key
     let tdf_ephemeral_key_bytes = header.get_ephemeral_key();
     if tdf_ephemeral_key_bytes.len() != 33 {
         info!("Invalid TDF compressed ephemeral key length");
         return None;
     }
-
+    // TDF contract
+    let policy = header.get_policy();
+    let locator = policy.get_locator();
+    let locator = match locator {
+        Some(locator) => locator,
+        None => {
+            info!("Missing TDF locator");
+            return None;
+        }
+    };
+    if locator.protocol_enum == ProtocolEnum::SharedResource {
+        // println!("contract {}", locator.body);
+        if "5Cqk3ERPToSMuY8UoKJtcmo4fs1iVyQpq6ndzWzpzWezAF1W" == locator.body {
+            // execute contract
+            let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
+            if !contract.check_access() {
+                // binary response
+                let mut response_data = Vec::new();
+                response_data.push(MessageType::RewrappedKey as u8);
+                response_data.extend_from_slice(tdf_ephemeral_key_bytes);
+                // timing
+                let total_time = start_time.elapsed();
+                log_timing(settings, "Time to deny", total_time);
+                return Some(Message::Binary(response_data));
+            }
+        }
+    }
     // Deserialize the public key sent by the client
     let tdf_ephemeral_public_key = match PublicKey::from_sec1_bytes(tdf_ephemeral_key_bytes) {
         Ok(key) => key,
@@ -236,7 +294,7 @@ async fn handle_rewrap(
             return None;
         }
     };
-
+    // KAS key
     let kas_private_key_bytes = get_kas_private_key_bytes().unwrap();
     let kas_private_key_array: [u8; 32] = match kas_private_key_bytes.try_into() {
         Ok(key) => key,
@@ -263,7 +321,8 @@ async fn handle_rewrap(
     let info = "rewrappedKey".as_bytes();
     let hkdf = Hkdf::<Sha256>::new(Some(&salt), &session_shared_secret);
     let mut derived_key = [0u8; 32];
-    hkdf.expand(info, &mut derived_key).expect("HKDF expansion failed");
+    hkdf.expand(info, &mut derived_key)
+        .expect("HKDF expansion failed");
 
     let mut nonce = [0u8; 12];
     OsRng.fill_bytes(&mut nonce);
@@ -273,7 +332,8 @@ async fn handle_rewrap(
     let cipher = Aes256Gcm::new(&key);
 
     let encryption_start = Instant::now();
-    let wrapped_dek = cipher.encrypt(nonce, dek_shared_secret_bytes.as_ref())
+    let wrapped_dek = cipher
+        .encrypt(nonce, dek_shared_secret_bytes.as_ref())
         .expect("encryption failure!");
     let encryption_time = encryption_start.elapsed();
     log_timing(settings, "Time for AES-GCM encryption", encryption_time);
@@ -379,12 +439,17 @@ fn init_kas_keys(key_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let kas_public_key_compressed = kas_public_key.to_encoded_point(true);
     let kas_public_key_bytes = kas_public_key_compressed.as_bytes().to_vec();
     // Ensure the public key is 33 bytes
-    assert_eq!(kas_public_key_bytes.len(), 33, "KAS public key should be 33 bytes");
+    assert_eq!(
+        kas_public_key_bytes.len(),
+        33,
+        "KAS public key should be 33 bytes"
+    );
     let kas_keys = KasKeys {
         public_key: kas_public_key_bytes,
         private_key: kas_private_key.to_bytes().to_vec(),
     };
-    KAS_KEYS.set(Arc::new(kas_keys))
+    KAS_KEYS
+        .set(Arc::new(kas_keys))
         .map_err(|_| "KAS keys already initialized".into())
 }
 
@@ -396,7 +461,10 @@ fn get_kas_private_key_bytes() -> Option<Vec<u8>> {
     KAS_KEYS.get().map(|keys| keys.private_key.clone())
 }
 
-fn custom_ecdh(secret_key: &SecretKey, public_key: &PublicKey) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn custom_ecdh(
+    secret_key: &SecretKey,
+    public_key: &PublicKey,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     // Get the scalar from the secret key
     let scalar = secret_key.to_nonzero_scalar();
     // println!("scalar {}", hex::encode(scalar.to_bytes()));
@@ -426,6 +494,7 @@ fn custom_ecdh(secret_key: &SecretKey, public_key: &PublicKey) -> Result<Vec<u8>
 #[derive(Debug, Deserialize, Clone)]
 struct ServerSettings {
     port: u16,
+    tls_enabled: bool,
     tls_cert_path: String,
     tls_key_path: String,
     kas_key_path: String,
@@ -441,14 +510,35 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
     let current_dir = env::current_dir()?;
 
     Ok(ServerSettings {
-        port: env::var("PORT").unwrap_or_else(|_| "8443".to_string()).parse()?,
-        tls_cert_path: env::var("TLS_CERT_PATH")
-            .unwrap_or_else(|_| current_dir.join("fullchain.pem").to_str().unwrap().to_string()),
-        tls_key_path: env::var("TLS_KEY_PATH")
-            .unwrap_or_else(|_| current_dir.join("privkey.pem").to_str().unwrap().to_string()),
-        kas_key_path: env::var("KAS_KEY_PATH")
-            .unwrap_or_else(|_| current_dir.join("recipient_private_key.pem").to_str().unwrap().to_string()),
-        enable_timing_logs: env::var("ENABLE_TIMING_LOGS").unwrap_or_else(|_| "false".to_string()).parse().unwrap_or(false),
+        port: env::var("PORT")
+            .unwrap_or_else(|_| "8080".to_string())
+            .parse()?,
+        tls_enabled: env::var("TLS_CERT_PATH").is_ok(),
+        tls_cert_path: env::var("TLS_CERT_PATH").unwrap_or_else(|_| {
+            current_dir
+                .join("fullchain.pem")
+                .to_str()
+                .unwrap()
+                .to_string()
+        }),
+        tls_key_path: env::var("TLS_KEY_PATH").unwrap_or_else(|_| {
+            current_dir
+                .join("privkey.pem")
+                .to_str()
+                .unwrap()
+                .to_string()
+        }),
+        kas_key_path: env::var("KAS_KEY_PATH").unwrap_or_else(|_| {
+            current_dir
+                .join("recipient_private_key.pem")
+                .to_str()
+                .unwrap()
+                .to_string()
+        }),
+        enable_timing_logs: env::var("ENABLE_TIMING_LOGS")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse()
+            .unwrap_or(false),
     })
 }
 
@@ -482,9 +572,8 @@ mod tests {
         let key_agreement_secret = hex::encode(shared_secret_bytes);
         // println!("Key agreement secret: {}", key_agreement_secret);
 
-        let debug_server_private_key: DebugEphemeralSecret<NistP256> = unsafe {
-            std::mem::transmute(server_private_key)
-        };
+        let debug_server_private_key: DebugEphemeralSecret<NistP256> =
+            unsafe { std::mem::transmute(server_private_key) };
         let secret_key = SecretKey::new(ScalarPrimitive::from(debug_server_private_key.scalar));
         // Deserialize the public key of client
         let public_key = PublicKey::from_sec1_bytes(&client_public_key_bytes)
@@ -496,7 +585,10 @@ mod tests {
         let computed_secret = hex::encode(result);
         // println!("Computed shared secret: {}", computed_secret);
 
-        assert_eq!(key_agreement_secret, computed_secret, "Key agreement secret does not match with computed shared secret.");
+        assert_eq!(
+            key_agreement_secret, computed_secret,
+            "Key agreement secret does not match with computed shared secret."
+        );
     }
 
     #[test]
@@ -513,13 +605,19 @@ mod tests {
         let public_key_bytes = hex::decode(client_public).unwrap();
         // dek_shared_secret - from swift client
         // let expected_shared_secret = "0c53a5afa08acf1f2000cd9c050d35eca472d625a010146991aed9da05114e3b";
-        let expected_shared_secret = "d5da0342ae4458cece9b3eb2d253c6212e9612ab9f8c9a4249ee4c9c59ccda13";
+        let expected_shared_secret =
+            "d5da0342ae4458cece9b3eb2d253c6212e9612ab9f8c9a4249ee4c9c59ccda13";
 
         let client_public_key = PublicKey::from_sec1_bytes(&public_key_bytes).unwrap();
         let kas_private_key_option: Option<[u8; 32]> = private_key_bytes.clone().try_into().ok();
         let kas_private_key_array = match kas_private_key_option {
             Some(array) => array,
-            None => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Could not convert to array."))),
+            None => {
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Could not convert to array.",
+                )))
+            }
         };
         let server_secret_key = SecretKey::from_bytes(&kas_private_key_array.into())
             .map_err(|_| "Invalid private key")
