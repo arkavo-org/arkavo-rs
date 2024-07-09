@@ -24,3 +24,7 @@ Cargo.lock
 /.idea/vcs.xml
 /fullchain.pem
 /privkey.pem
+/cache/
+/etc/contracts/substrate-contracts-node
+/etc/contracts/ev/
+/etc/contracts/simple_abac/.idea/

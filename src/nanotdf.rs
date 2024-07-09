@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 extern crate hex;
 extern crate serde;
 
@@ -178,14 +179,18 @@ impl<'a> BinaryParser<'a> {
             _ => return Err(ParsingError::InvalidKas),
         };
         let body_length = self.read(1)?[0] as usize;
-        let body = String::from_utf8(self.read(body_length)?).map_err(|_| ParsingError::InvalidKas)?;
+        let body =
+            String::from_utf8(self.read(body_length)?).map_err(|_| ParsingError::InvalidKas)?;
         Ok(ResourceLocator {
             protocol_enum,
             body,
         })
     }
 
-    fn read_policy_field(&mut self, binding_mode: &ECCAndBindingMode) -> Result<Policy, ParsingError> {
+    fn read_policy_field(
+        &mut self,
+        binding_mode: &ECCAndBindingMode,
+    ) -> Result<Policy, ParsingError> {
         let policy_type = match self.read(1)?[0] {
             0x00 => PolicyType::Remote,
             0x01 => PolicyType::Embedded,
@@ -218,18 +223,15 @@ impl<'a> BinaryParser<'a> {
         }
     }
 
-    fn read_policy_binding(&mut self, binding_mode: &ECCAndBindingMode) -> Result<Vec<u8>, ParsingError> {
+    fn read_policy_binding(
+        &mut self,
+        binding_mode: &ECCAndBindingMode,
+    ) -> Result<Vec<u8>, ParsingError> {
         let binding_size = if binding_mode.use_ecdsa_binding {
             match binding_mode.ephemeral_ecc_params_enum {
-                ECDSAParams::Secp256r1 | ECDSAParams::Secp256k1 => {
-                    64
-                }
-                ECDSAParams::Secp384r1 => {
-                    96
-                }
-                ECDSAParams::Secp521r1 => {
-                    132
-                }
+                ECDSAParams::Secp256r1 | ECDSAParams::Secp256k1 => 64,
+                ECDSAParams::Secp384r1 => 96,
+                ECDSAParams::Secp521r1 => 132,
             }
         } else {
             // GMAC Tag Binding
@@ -274,7 +276,9 @@ impl<'a> BinaryParser<'a> {
         })
     }
 
-    fn read_symmetric_and_payload_config(&mut self) -> Result<SymmetricAndPayloadConfig, ParsingError> {
+    fn read_symmetric_and_payload_config(
+        &mut self,
+    ) -> Result<SymmetricAndPayloadConfig, ParsingError> {
         // println!("readSymmetricAndPayloadConfig");
 
         let symmetric_and_payload_config_data = self.read(1)?;
@@ -404,7 +408,7 @@ mod tests {
             let bytes = hex::decode(hex_string.replace(" ", ""))?;
             // println!("{:?}", bytes);
             let mut parser = BinaryParser::new(&*bytes);
-            let header = parser.parse_header()?;
+            let _header = parser.parse_header()?;
             // println!("{:?}", header);
             // Process header as needed
             Ok(())
@@ -422,7 +426,7 @@ mod tests {
             let bytes = hex::decode(encrypted_payload.replace(" ", ""))?;
             // println!("{:?}", bytes);
             let mut parser = BinaryParser::new(&*bytes);
-            let header = parser.parse_header()?;
+            let _header = parser.parse_header()?;
             // println!("{:?}", header);
             Ok(())
         }
@@ -438,7 +442,7 @@ mod tests {
 
             let bytes = hex::decode(hex_string.replace(" ", ""))?;
             // println!("{:?}", bytes);
-            let mut parser = BinaryParser::new(&*bytes);
+            let _parser = BinaryParser::new(&*bytes);
             // let header = parser.parse_header()?;
             // println!("{:?}", header);
             // Process header as needed
