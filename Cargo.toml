@@ -1,10 +1,14 @@
 [package]
 name = "backend-rust"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 
+[profile.release]
+target-cpu = "native"
+opt-level = 3
+lto = true
+codegen-units = 1
 # cargo flamegraph
-#[profile.release]
 #debug = true
 
 [dependencies]
