@@ -16,7 +16,7 @@ use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use p256::ecdh::EphemeralSecret;
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use tokio::net::TcpListener;
 use tokio_native_tls::TlsAcceptor;
 use tokio_tungstenite::accept_async;
@@ -478,15 +478,7 @@ fn custom_ecdh(
     // Extract the x-coordinate as the shared secret
     let x_coordinate = shared_point.x();
     let shared_secret = x_coordinate.to_vec();
-
     // println!("Raw shared secret: {}", hex::encode(&shared_secret));
-
-    // Hash the x-coordinate using SHA-256
-    let mut hasher = Sha256::new();
-    hasher.update(x_coordinate);
-    // let hashed_secret = hasher.finalize().to_vec();
-
-    // println!("Hashed shared secret: {}", hex::encode(&hashed_secret));
 
     Ok(shared_secret)
 }

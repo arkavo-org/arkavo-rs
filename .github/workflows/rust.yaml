@@ -45,6 +45,7 @@ jobs:
           source $HOME/.cargo/env
           rustup target add ${{ matrix.target }}
           cargo build --release --target ${{ matrix.target }}
+          strip target/${{ matrix.target }}/release/backend-rust
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
