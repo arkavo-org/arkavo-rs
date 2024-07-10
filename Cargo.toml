@@ -3,8 +3,9 @@ name = "backend-rust"
 version = "0.6.0"
 edition = "2021"
 
+# export RUSTFLAGS="-C target-cpu=native"
+# cargo build --release
 [profile.release]
-target-cpu = "native"
 opt-level = 3
 lto = true
 codegen-units = 1
