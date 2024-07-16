@@ -28,7 +28,8 @@ pub struct ResourceLocator {
 pub enum ProtocolEnum {
     Http = 0x00,
     Https = 0x01,
-    Unreserved = 0x02,
+    Ws = 0x02,
+    Wss = 0x03,
     SharedResource = 0xFF,
 }
 
@@ -174,7 +175,8 @@ impl<'a> BinaryParser<'a> {
         let protocol_enum = match self.read(1)?[0] {
             0x00 => ProtocolEnum::Http,
             0x01 => ProtocolEnum::Https,
-            0x02 => ProtocolEnum::Unreserved,
+            0x02 => ProtocolEnum::Ws,
+            0x03 => ProtocolEnum::Wss,
             0xFF => ProtocolEnum::SharedResource,
             _ => return Err(ParsingError::InvalidKas),
         };
