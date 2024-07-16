@@ -320,15 +320,18 @@ async fn handle_rewrap(
             };
             // execute contract
             let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
-            if claims_result.is_ok() && !contract.check_access(locator.body.clone(), claims_result.unwrap()) {
-                // binary response
-                let mut response_data = Vec::new();
-                response_data.push(MessageType::RewrappedKey as u8);
-                response_data.extend_from_slice(tdf_ephemeral_key_bytes);
-                // timing
-                let total_time = start_time.elapsed();
-                log_timing(settings, "Time to deny", total_time);
-                return Some(Message::Binary(response_data));
+            if claims_result.is_ok() {
+                if !contract.check_access(locator.body.clone(), claims_result.unwrap()) {
+                    // binary response
+                    let mut response_data = Vec::new();
+                    response_data.push(MessageType::RewrappedKey as u8);
+                    response_data.extend_from_slice(tdf_ephemeral_key_bytes);
+                    // timing
+                    let total_time = start_time.elapsed();
+                    log_timing(settings, "Time to deny", total_time);
+                    // DENY
+                    return Some(Message::Binary(response_data));
+                }
             }
         }
     }
