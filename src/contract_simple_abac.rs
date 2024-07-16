@@ -7,6 +7,8 @@ pub mod simple_abac {
             Self {}
         }
         pub fn check_access(&self, claim: String, attribute: String) -> bool {
+            println!("claim: {}", claim);
+            println!("attribute: {}", attribute);
             if claim == "Main" {
                 return true;
             }
