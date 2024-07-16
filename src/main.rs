@@ -321,7 +321,7 @@ async fn handle_rewrap(
             // execute contract
             let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
             if claims_result.is_ok() {
-                if !contract.check_access(locator.body.clone(), claims_result.unwrap()) {
+                if !contract.check_access(claims_result.unwrap(), locator.body.clone()) {
                     // binary response
                     let mut response_data = Vec::new();
                     response_data.push(MessageType::RewrappedKey as u8);
