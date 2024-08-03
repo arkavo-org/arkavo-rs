@@ -14,6 +14,11 @@ Implementation of KAS from [OpenTDF specification](https://github.com/opentdf/sp
 
 - Rust (latest stable version)
 - `cargo` package manager
+- NATS
+
+```bash
+brew install nats-server
+```
 
 ### Installation
 
@@ -84,13 +89,19 @@ export RUST_LOG=info
 Remember to keep your private keys secure and never commit them to version control systems. It's recommended to use
 environment variables or secure vaults for managing sensitive information in production environments.
 
-2. Start the server:
+#### Start internal services
 
-    ```shell
-    cargo run
-    ```
+```shell
+nats-server
+```
 
-The server will start and listen on the configured port (default: 8443) using HTTPS.
+#### Start backend
+
+ ```shell
+ cargo run
+ ```
+
+The server will start and listen on the configured port.
 
 ### Usage
 
