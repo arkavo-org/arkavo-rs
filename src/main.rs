@@ -8,11 +8,12 @@ use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::KeyInit;
 use aes_gcm::Aes256Gcm;
 use async_nats::{Client as NatsClient, PublishError};
+use async_nats::Message as NatsMessage;
 use elliptic_curve::point::AffineCoordinates;
 use futures_util::{SinkExt, StreamExt};
 use hkdf::Hkdf;
 use jsonwebtoken::{decode, DecodingKey, Validation};
-use log::{error, info, warn};
+use log::{error, info};
 use once_cell::sync::OnceCell;
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use p256::ecdh::EphemeralSecret;
@@ -20,7 +21,7 @@ use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tokio_native_tls::TlsAcceptor;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -40,30 +41,29 @@ const MAX_NANOTDF_SIZE: usize = 16 * 1024 * 1024; // 16 MB
 const NATS_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 struct NatsConnection {
-    client: Option<NatsClient>,
+    client: Mutex<Option<async_nats::Client>>,
     url: String,
 }
 
 impl NatsConnection {
     fn new(url: String) -> Self {
         Self {
-            client: None,
+            client: Mutex::new(None),
             url,
         }
     }
-
-    async fn connect(&mut self) -> Result<(), async_nats::Error> {
+    async fn connect(&self) -> Result<(), async_nats::Error> {
+        let mut client = self.client.lock().await;
         match async_nats::connect(&self.url).await {
-            Ok(client) => {
-                self.client = Some(client);
+            Ok(new_client) => {
+                *client = Some(new_client);
                 Ok(())
             }
             Err(e) => Err(e.into()),
         }
     }
-
-    async fn get_client(&self) -> Option<NatsClient> {
-        self.client.clone()
+    async fn get_client(&self) -> Option<async_nats::Client> {
+        self.client.lock().await.clone()
     }
 }
 
@@ -89,15 +89,16 @@ struct ConnectionState {
     salt_lock: RwLock<Option<Vec<u8>>>,
     shared_secret_lock: RwLock<Option<Vec<u8>>>,
     claims_lock: RwLock<Option<Claims>>,
+    outgoing_tx: mpsc::UnboundedSender<Message>,
 }
 
 impl ConnectionState {
-    fn new() -> Self {
-        // println!("New ConnectionState");
+    fn new(outgoing_tx: mpsc::UnboundedSender<Message>) -> Self {
         ConnectionState {
             salt_lock: RwLock::new(None),
             shared_secret_lock: RwLock::new(None),
             claims_lock: RwLock::new(None),
+            outgoing_tx,
         }
     }
 }
@@ -152,24 +153,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     // Initialize NATS connection
-    let nats_connection = Arc::new(Mutex::new(NatsConnection::new(settings.nats_url.clone())));
+    let nats_connection = Arc::new(NatsConnection::new(settings.nats_url.clone()));
     // Spawn a task to handle NATS connection and reconnection
     let nats_connection_clone = nats_connection.clone();
     tokio::spawn(async move {
         loop {
-            let mut conn = nats_connection_clone.lock().await;
-            if conn.client.is_none() {
-                match conn.connect().await {
-                    Ok(_) => info!("Connected to NATS server"),
+            let client = nats_connection_clone.get_client().await;
+            if client.is_none() {
+                info!("NATS client not connected. Attempting to connect...");
+                match nats_connection_clone.connect().await {
+                    Ok(_) => info!("Successfully connected to NATS server"),
                     Err(e) => {
-                        warn!("Failed to connect to NATS server: {}. Retrying in {:?}...", e, NATS_RETRY_INTERVAL);
-                        drop(conn); // Release the lock before sleeping
+                        error!("Failed to connect to NATS server: {}. Retrying in {:?}...", e, NATS_RETRY_INTERVAL);
                         tokio::time::sleep(NATS_RETRY_INTERVAL).await;
                         continue;
                     }
                 }
             }
-            drop(conn); // Release the lock
             tokio::time::sleep(NATS_RETRY_INTERVAL).await;
         }
     });
@@ -180,57 +180,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Accept connections
     while let Ok((stream, _)) = listener.accept().await {
         let tls_acceptor_clone = tls_acceptor.clone();
-        let connection_state = Arc::new(ConnectionState::new());
         let settings_clone = settings.clone();
-        // Spawn a task to handle NATS connection and reconnection
-        let nats_connection_clone_for_spawn = nats_connection.clone();
+        let nats_connection_clone = nats_connection.clone();
+
         tokio::spawn(async move {
             if let Some(tls_acceptor) = tls_acceptor_clone {
                 match tls_acceptor.accept(stream).await {
                     Ok(tls_stream) => {
-                        handle_tls_connection(tls_stream, connection_state, &settings_clone, &nats_connection_clone_for_spawn).await;
+                        match accept_async(tls_stream).await {
+                            Ok(ws_stream) => {
+                                handle_websocket(ws_stream, &settings_clone, nats_connection_clone).await;
+                            }
+                            Err(e) => eprintln!("Failed to accept websocket: {}", e),
+                        }
                     }
                     Err(e) => eprintln!("Failed to accept TLS connection: {}", e),
                 }
             } else {
-                handle_plain_connection(stream, connection_state, &settings_clone, &nats_connection_clone_for_spawn).await;
+                match accept_async(stream).await {
+                    Ok(ws_stream) => {
+                        handle_websocket(ws_stream, &settings_clone, nats_connection_clone).await;
+                    }
+                    Err(e) => eprintln!("Failed to accept websocket: {}", e),
+                }
             }
         });
     }
 
     Ok(())
-}
-
-async fn handle_tls_connection(
-    stream: tokio_native_tls::TlsStream<tokio::net::TcpStream>,
-    connection_state: Arc<ConnectionState>,
-    settings: &ServerSettings,
-    nats_connection: &Arc<Mutex<NatsConnection>>,
-) {
-    let ws_stream = match accept_async(stream).await {
-        Ok(ws) => ws,
-        Err(e) => {
-            eprintln!("Error during the websocket handshake occurred: {}", e);
-            return;
-        }
-    };
-    handle_websocket(ws_stream, connection_state, &settings, nats_connection).await;
-}
-
-async fn handle_plain_connection(
-    stream: tokio::net::TcpStream,
-    connection_state: Arc<ConnectionState>,
-    settings: &ServerSettings,
-    nats_connection: &Arc<Mutex<NatsConnection>>,
-) {
-    let ws_stream = match accept_async(stream).await {
-        Ok(ws) => ws,
-        Err(e) => {
-            eprintln!("Error during the websocket handshake occurred: {}", e);
-            return;
-        }
-    };
-    handle_websocket(ws_stream, connection_state, &settings, nats_connection).await;
 }
 
 fn load_tls_config(
@@ -247,54 +224,77 @@ fn load_tls_config(
 }
 
 async fn handle_websocket(
-    ws_stream: tokio_tungstenite::WebSocketStream<
+    mut ws_stream: tokio_tungstenite::WebSocketStream<
         impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     >,
-    connection_state: Arc<ConnectionState>,
     settings: &ServerSettings,
-    nats_connection: &Arc<Mutex<NatsConnection>>,
+    nats_connection: Arc<NatsConnection>,
 ) {
-    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
+    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
+    // Create ConnectionState with the outgoing channel
+    let connection_state = Arc::new(ConnectionState::new(outgoing_tx));
+    // Set up NATS subscription for this connection
+    let nats_task = tokio::spawn(handle_nats_subscription(
+        nats_connection.clone(),
+        settings.nats_subject.clone(),
+        connection_state.clone(),
+    ));
     // Handle incoming WebSocket messages
-    while let Some(message) = ws_receiver.next().await {
-        match message {
-            Ok(msg) => {
-                if msg.is_close() {
-                    println!("Received a close message.");
-                    return;
-                }
-                if msg.is_text() {
-                    // Handle JWT token
-                    let token = msg.into_text().unwrap();
-                    // println!("token: {}", token);
-                    match verify_token(&token) {
-                        Ok(claims) => {
-                            println!("Valid JWT received. Claims: {:?}", claims);
-                            // store the claims
-                            {
-                                let mut claims_lock = connection_state.claims_lock.write().unwrap();
-                                *claims_lock = Some(claims);
+    loop {
+        tokio::select! {
+            incoming = ws_stream.next() => {
+                match incoming {
+                    Some(Ok(msg)) => {
+                        if msg.is_close() {
+                            println!("Received a close message.");
+                            break;
+                        }
+                        if msg.is_text() {
+                            // Handle JWT token
+                            let token = msg.into_text().unwrap();
+                            // println!("token: {}", token);
+                            match verify_token(&token) {
+                                Ok(claims) => {
+                                    println!("Valid JWT received. Claims: {:?}", claims);
+                                    // store the claims
+                                    {
+                                        let mut claims_lock = connection_state.claims_lock.write().unwrap();
+                                        *claims_lock = Some(claims);
+                                    }
+                                }
+                                Err(e) => {
+                                    println!("Invalid JWT: {}", e);
+                                }
+                            }
+                        } else if let Some(response) = handle_binary_message(&connection_state, msg.into_data(), settings, nats_connection.clone()).await {
+                            if ws_stream.send(response).await.is_err() {
+                                eprintln!("Failed to send response through WebSocket");
+                                break;
                             }
                         }
-                        Err(e) => {
-                            println!("Invalid JWT: {}", e);
-                        }
                     }
-                } else if let Some(response) =
-                    handle_binary_message(&connection_state, msg.into_data(), &settings, nats_connection).await
-                {
-                    if ws_sender.send(response).await.is_err() {
-                        eprintln!("WebSocket send error");
+                    Some(Err(e)) => {
+                        eprintln!("Error reading message: {}", e);
                         break;
                     }
+                    None => break,
                 }
             }
-            Err(e) => {
-                eprintln!("Error reading message: {}", e);
-                break;
+            outgoing = outgoing_rx.recv() => {
+                match outgoing {
+                    Some(message) => {
+                        if ws_stream.send(message).await.is_err() {
+                            eprintln!("Failed to send outgoing message through WebSocket");
+                            break;
+                        }
+                    }
+                    None => break,
+                }
             }
         }
     }
+    // Cancel the NATS subscription when the WebSocket connection closes
+    nats_task.abort();
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -320,7 +320,7 @@ async fn handle_binary_message(
     connection_state: &Arc<ConnectionState>,
     data: Vec<u8>,
     settings: &ServerSettings,
-    nats_connection: &Arc<Mutex<NatsConnection>>,
+    nats_connection: Arc<NatsConnection>,
 ) -> Option<Message> {
     if data.len() < 1 {
         println!("Invalid message format");
@@ -330,11 +330,11 @@ async fn handle_binary_message(
     let payload = &data[1..data.len()];
 
     match message_type {
-        Some(MessageType::PublicKey) => handle_public_key(connection_state, payload).await, //incoming
+        Some(MessageType::PublicKey) => handle_public_key(connection_state, payload).await, // incoming
         Some(MessageType::KasPublicKey) => handle_kas_public_key(payload).await, // outgoing
         Some(MessageType::Rewrap) => handle_rewrap(connection_state, payload, settings).await, // incoming
         Some(MessageType::RewrappedKey) => None, // outgoing
-        Some(MessageType::NATS) => handle_nats(connection_state, payload, settings, nats_connection).await, // internal
+        Some(MessageType::NATS) => handle_nats_publish(connection_state, payload, settings, nats_connection).await, // internal
         None => {
             println!("Unknown message type: {:?}", message_type);
             None
@@ -342,27 +342,26 @@ async fn handle_binary_message(
     }
 }
 
-async fn handle_nats(
+async fn handle_nats_publish(
     _: &Arc<ConnectionState>,
     payload: &[u8],
     settings: &ServerSettings,
-    nats_connection: &Arc<Mutex<NatsConnection>>,
+    nats_connection: Arc<NatsConnection>,
 ) -> Option<Message> {
     match NATSMessage::new(payload) {
         Ok(nanotdf_msg) => {
-            let nats_client = nats_connection.lock().await.get_client().await;
+            let nats_client = nats_connection.get_client().await;
             if let Err(e) = nanotdf_msg.send_to_nats(&nats_client.unwrap(), settings.nats_subject.clone()).await {
                 error!("Failed to send NanoTDF message to NATS: {}", e);
             } else {
                 info!("NanoTDF message sent to NATS successfully");
             }
-            return None;
         }
         Err(e) => {
             error!("Failed to create NanoTDFMessage: {}", e);
-            return None;
         }
     }
+    None
 }
 
 async fn handle_rewrap(
@@ -574,6 +573,36 @@ async fn handle_kas_public_key(_: &[u8]) -> Option<Message> {
         return Some(Message::Binary(response_data));
     }
     None
+}
+
+async fn handle_nats_subscription(
+    nats_connection: Arc<NatsConnection>,
+    subject: String,
+    connection_state: Arc<ConnectionState>,
+) {
+    loop {
+        if let Some(client) = nats_connection.get_client().await {
+            match client.subscribe(subject.clone()).await {
+                Ok(mut subscription) => {
+                    info!("Subscribed to NATS subject: {}", subject);
+                    while let Some(msg) = subscription.next().await {
+                        if let Err(e) = handle_nats_message(msg, connection_state.clone()).await {
+                            error!("Error handling NATS message: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to subscribe to NATS subject: {}. Retrying in {:?}...", e, NATS_RETRY_INTERVAL);
+                }
+            }
+        }
+        tokio::time::sleep(NATS_RETRY_INTERVAL).await;
+    }
+}
+async fn handle_nats_message(msg: NatsMessage, connection_state: Arc<ConnectionState>) -> Result<(), Box<dyn std::error::Error>> {
+    let ws_message = Message::Binary(vec![MessageType::NATS as u8].into_iter().chain(msg.payload).collect());
+    connection_state.outgoing_tx.send(ws_message)?;
+    Ok(())
 }
 
 fn init_kas_keys(key_path: &str) -> Result<(), Box<dyn std::error::Error>> {
