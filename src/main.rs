@@ -1,17 +1,18 @@
 use std::env;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use aes_gcm::aead::{Aead, Key};
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::KeyInit;
 use aes_gcm::Aes256Gcm;
+use async_nats::{Client as NatsClient, PublishError};
 use elliptic_curve::point::AffineCoordinates;
 use futures_util::{SinkExt, StreamExt};
 use hkdf::Hkdf;
 use jsonwebtoken::{decode, DecodingKey, Validation};
-use log::info;
+use log::{error, info, warn};
 use once_cell::sync::OnceCell;
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use p256::ecdh::EphemeralSecret;
@@ -19,6 +20,7 @@ use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 use tokio_native_tls::TlsAcceptor;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -32,6 +34,54 @@ mod contract_simple_abac;
 struct PublicKeyMessage {
     salt: Vec<u8>,
     public_key: Vec<u8>,
+}
+
+const MAX_NANOTDF_SIZE: usize = 16 * 1024 * 1024; // 16 MB
+const NATS_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+
+struct NatsConnection {
+    client: Option<NatsClient>,
+    url: String,
+}
+
+impl NatsConnection {
+    fn new(url: String) -> Self {
+        Self {
+            client: None,
+            url,
+        }
+    }
+
+    async fn connect(&mut self) -> Result<(), async_nats::Error> {
+        match async_nats::connect(&self.url).await {
+            Ok(client) => {
+                self.client = Some(client);
+                Ok(())
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn get_client(&self) -> Option<NatsClient> {
+        self.client.clone()
+    }
+}
+
+struct NATSMessage {
+    data: Vec<u8>,
+}
+
+impl NATSMessage {
+    fn new(data: &[u8]) -> Result<Self, &'static str> {
+        if data.len() > MAX_NANOTDF_SIZE {
+            return Err("NanoTDF message exceeds maximum size");
+        }
+        Ok(Self { data: data.to_vec() })
+    }
+
+    async fn send_to_nats(&self, nats_client: &NatsClient, subject: String) -> Result<(), PublishError> {
+        nats_client.publish(subject, self.data.clone().into()).await
+    }
 }
 
 #[derive(Debug)]
@@ -58,6 +108,7 @@ enum MessageType {
     KasPublicKey = 0x02,
     Rewrap = 0x03,
     RewrappedKey = 0x04,
+    NATS = 0x05,
 }
 
 impl MessageType {
@@ -67,6 +118,7 @@ impl MessageType {
             0x02 => Some(MessageType::KasPublicKey),
             0x03 => Some(MessageType::Rewrap),
             0x04 => Some(MessageType::RewrappedKey),
+            0x05 => Some(MessageType::NATS),
             _ => None,
         }
     }
@@ -99,7 +151,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
-
+    // Initialize NATS connection
+    let nats_connection = Arc::new(Mutex::new(NatsConnection::new(settings.nats_url.clone())));
+    // Spawn a task to handle NATS connection and reconnection
+    let nats_connection_clone = nats_connection.clone();
+    tokio::spawn(async move {
+        loop {
+            let mut conn = nats_connection_clone.lock().await;
+            if conn.client.is_none() {
+                match conn.connect().await {
+                    Ok(_) => info!("Connected to NATS server"),
+                    Err(e) => {
+                        warn!("Failed to connect to NATS server: {}. Retrying in {:?}...", e, NATS_RETRY_INTERVAL);
+                        drop(conn); // Release the lock before sleeping
+                        tokio::time::sleep(NATS_RETRY_INTERVAL).await;
+                        continue;
+                    }
+                }
+            }
+            drop(conn); // Release the lock
+            tokio::time::sleep(NATS_RETRY_INTERVAL).await;
+        }
+    });
     // Bind the server
     let listener = TcpListener::bind(format!("0.0.0.0:{}", settings.port)).await?;
     println!("Listening on: 0.0.0.0:{}", settings.port);
@@ -109,17 +182,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let tls_acceptor_clone = tls_acceptor.clone();
         let connection_state = Arc::new(ConnectionState::new());
         let settings_clone = settings.clone();
-
+        // Spawn a task to handle NATS connection and reconnection
+        let nats_connection_clone_for_spawn = nats_connection.clone();
         tokio::spawn(async move {
             if let Some(tls_acceptor) = tls_acceptor_clone {
                 match tls_acceptor.accept(stream).await {
                     Ok(tls_stream) => {
-                        handle_tls_connection(tls_stream, connection_state, &settings_clone).await;
+                        handle_tls_connection(tls_stream, connection_state, &settings_clone, &nats_connection_clone_for_spawn).await;
                     }
                     Err(e) => eprintln!("Failed to accept TLS connection: {}", e),
                 }
             } else {
-                handle_plain_connection(stream, connection_state, &settings_clone).await;
+                handle_plain_connection(stream, connection_state, &settings_clone, &nats_connection_clone_for_spawn).await;
             }
         });
     }
@@ -131,6 +205,7 @@ async fn handle_tls_connection(
     stream: tokio_native_tls::TlsStream<tokio::net::TcpStream>,
     connection_state: Arc<ConnectionState>,
     settings: &ServerSettings,
+    nats_connection: &Arc<Mutex<NatsConnection>>,
 ) {
     let ws_stream = match accept_async(stream).await {
         Ok(ws) => ws,
@@ -139,13 +214,14 @@ async fn handle_tls_connection(
             return;
         }
     };
-    handle_websocket(ws_stream, connection_state, &settings).await;
+    handle_websocket(ws_stream, connection_state, &settings, nats_connection).await;
 }
 
 async fn handle_plain_connection(
     stream: tokio::net::TcpStream,
     connection_state: Arc<ConnectionState>,
     settings: &ServerSettings,
+    nats_connection: &Arc<Mutex<NatsConnection>>,
 ) {
     let ws_stream = match accept_async(stream).await {
         Ok(ws) => ws,
@@ -154,7 +230,7 @@ async fn handle_plain_connection(
             return;
         }
     };
-    handle_websocket(ws_stream, connection_state, &settings).await;
+    handle_websocket(ws_stream, connection_state, &settings, nats_connection).await;
 }
 
 fn load_tls_config(
@@ -176,6 +252,7 @@ async fn handle_websocket(
     >,
     connection_state: Arc<ConnectionState>,
     settings: &ServerSettings,
+    nats_connection: &Arc<Mutex<NatsConnection>>,
 ) {
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
     // Handle incoming WebSocket messages
@@ -204,7 +281,7 @@ async fn handle_websocket(
                         }
                     }
                 } else if let Some(response) =
-                    handle_binary_message(&connection_state, msg.into_data(), &settings).await
+                    handle_binary_message(&connection_state, msg.into_data(), &settings, nats_connection).await
                 {
                     if ws_sender.send(response).await.is_err() {
                         eprintln!("WebSocket send error");
@@ -243,6 +320,7 @@ async fn handle_binary_message(
     connection_state: &Arc<ConnectionState>,
     data: Vec<u8>,
     settings: &ServerSettings,
+    nats_connection: &Arc<Mutex<NatsConnection>>,
 ) -> Option<Message> {
     if data.len() < 1 {
         println!("Invalid message format");
@@ -252,13 +330,37 @@ async fn handle_binary_message(
     let payload = &data[1..data.len()];
 
     match message_type {
-        Some(MessageType::PublicKey) => handle_public_key(connection_state, payload).await,
-        Some(MessageType::KasPublicKey) => handle_kas_public_key(payload).await,
-        Some(MessageType::Rewrap) => handle_rewrap(connection_state, payload, settings).await,
-        Some(MessageType::RewrappedKey) => None,
+        Some(MessageType::PublicKey) => handle_public_key(connection_state, payload).await, //incoming
+        Some(MessageType::KasPublicKey) => handle_kas_public_key(payload).await, // outgoing
+        Some(MessageType::Rewrap) => handle_rewrap(connection_state, payload, settings).await, // incoming
+        Some(MessageType::RewrappedKey) => None, // outgoing
+        Some(MessageType::NATS) => handle_nats(connection_state, payload, settings, nats_connection).await, // internal
         None => {
             println!("Unknown message type: {:?}", message_type);
             None
+        }
+    }
+}
+
+async fn handle_nats(
+    _: &Arc<ConnectionState>,
+    payload: &[u8],
+    settings: &ServerSettings,
+    nats_connection: &Arc<Mutex<NatsConnection>>,
+) -> Option<Message> {
+    match NATSMessage::new(payload) {
+        Ok(nanotdf_msg) => {
+            let nats_client = nats_connection.lock().await.get_client().await;
+            if let Err(e) = nanotdf_msg.send_to_nats(&nats_client.unwrap(), settings.nats_subject.clone()).await {
+                error!("Failed to send NanoTDF message to NATS: {}", e);
+            } else {
+                info!("NanoTDF message sent to NATS successfully");
+            }
+            return None;
+        }
+        Err(e) => {
+            error!("Failed to create NanoTDFMessage: {}", e);
+            return None;
         }
     }
 }
@@ -540,6 +642,8 @@ struct ServerSettings {
     tls_key_path: String,
     kas_key_path: String,
     enable_timing_logs: bool,
+    nats_url: String,
+    nats_subject: String,
 }
 
 fn log_timing(settings: &ServerSettings, message: &str, duration: std::time::Duration) {
@@ -580,6 +684,9 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
             .unwrap_or_else(|_| "false".to_string())
             .parse()
             .unwrap_or(false),
+        nats_url: env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string()),
+        nats_subject: env::var("NATS_SUBJECT").unwrap_or_else(|_| "nanotdf.messages".to_string()),
+
     })
 }
 
