@@ -10,6 +10,7 @@ use aes_gcm::Aes256Gcm;
 use elliptic_curve::point::AffineCoordinates;
 use futures_util::{SinkExt, StreamExt};
 use hkdf::Hkdf;
+use jsonwebtoken::{decode, DecodingKey, Validation};
 use log::info;
 use once_cell::sync::OnceCell;
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
@@ -37,6 +38,7 @@ struct PublicKeyMessage {
 struct ConnectionState {
     salt_lock: RwLock<Option<Vec<u8>>>,
     shared_secret_lock: RwLock<Option<Vec<u8>>>,
+    claims_lock: RwLock<Option<Claims>>,
 }
 
 impl ConnectionState {
@@ -45,6 +47,7 @@ impl ConnectionState {
         ConnectionState {
             salt_lock: RwLock::new(None),
             shared_secret_lock: RwLock::new(None),
+            claims_lock: RwLock::new(None),
         }
     }
 }
@@ -183,7 +186,24 @@ async fn handle_websocket(
                     println!("Received a close message.");
                     return;
                 }
-                if let Some(response) =
+                if msg.is_text() {
+                    // Handle JWT token
+                    let token = msg.into_text().unwrap();
+                    // println!("token: {}", token);
+                    match verify_token(&token) {
+                        Ok(claims) => {
+                            println!("Valid JWT received. Claims: {:?}", claims);
+                            // store the claims
+                            {
+                                let mut claims_lock = connection_state.claims_lock.write().unwrap();
+                                *claims_lock = Some(claims);
+                            }
+                        }
+                        Err(e) => {
+                            println!("Invalid JWT: {}", e);
+                        }
+                    }
+                } else if let Some(response) =
                     handle_binary_message(&connection_state, msg.into_data(), &settings).await
                 {
                     if ws_sender.send(response).await.is_err() {
@@ -198,6 +218,25 @@ async fn handle_websocket(
             }
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct Claims {
+    sub: String,
+}
+fn verify_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
+    let mut validation = Validation::default();
+    validation.insecure_disable_signature_validation();
+    validation.validate_exp = false;
+    validation.validate_aud = false;
+    let secret = b"any_secret_key"; // The actual value doesn't matter when signature validation is disabled
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret),
+        &validation,
+    )?;
+    // println!("Decoded token: {:?}", token_data.claims);
+    Ok(token_data.claims)
 }
 
 async fn handle_binary_message(
@@ -270,19 +309,29 @@ async fn handle_rewrap(
         }
     };
     if locator.protocol_enum == ProtocolEnum::SharedResource {
-        // println!("contract {}", locator.body);
-        if "5Cqk3ERPToSMuY8UoKJtcmo4fs1iVyQpq6ndzWzpzWezAF1W" == locator.body {
+        // println!("contract {}", locator.body.clone());
+        if !locator.body.is_empty() {
+            let claims_result = match connection_state.claims_lock.read() {
+                Ok(read_lock) => match read_lock.clone() {
+                    Some(value) => Ok(value.sub),
+                    None => Err("Error: Clone cannot be performed"),
+                },
+                Err(_) => Err("Error: Read lock cannot be obtained"),
+            };
             // execute contract
             let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
-            if !contract.check_access() {
-                // binary response
-                let mut response_data = Vec::new();
-                response_data.push(MessageType::RewrappedKey as u8);
-                response_data.extend_from_slice(tdf_ephemeral_key_bytes);
-                // timing
-                let total_time = start_time.elapsed();
-                log_timing(settings, "Time to deny", total_time);
-                return Some(Message::Binary(response_data));
+            if claims_result.is_ok() {
+                if !contract.check_access(claims_result.unwrap(), locator.body.clone()) {
+                    // binary response
+                    let mut response_data = Vec::new();
+                    response_data.push(MessageType::RewrappedKey as u8);
+                    response_data.extend_from_slice(tdf_ephemeral_key_bytes);
+                    // timing
+                    let total_time = start_time.elapsed();
+                    log_timing(settings, "Time to deny", total_time);
+                    // DENY
+                    return Some(Message::Binary(response_data));
+                }
             }
         }
     }
