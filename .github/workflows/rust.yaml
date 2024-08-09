@@ -48,6 +48,7 @@ jobs:
       - uses: moonrepo/setup-rust@v1
         with:
           targets: x86_64-unknown-linux-gnu
+          channel: nightly
       - name: Run benchmark
         run: cargo +nightly bench | tee output.txt
       - name: Store benchmark result
