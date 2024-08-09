@@ -39,7 +39,7 @@ struct NanoTDFPayload {
 }
 
 #[derive(Debug)]
-pub(crate) struct Header {
+pub struct Header {
     magic_number: Vec<u8>,
     version: Vec<u8>,
     kas: ResourceLocator,
@@ -59,9 +59,9 @@ impl Header {
 }
 
 #[derive(Debug)]
-struct ECCAndBindingMode {
-    use_ecdsa_binding: bool,
-    ephemeral_ecc_params_enum: ECDSAParams,
+pub struct ECCAndBindingMode {
+    pub use_ecdsa_binding: bool,
+    pub ephemeral_ecc_params_enum: ECDSAParams,
 }
 
 #[derive(Debug)]
@@ -78,7 +78,7 @@ enum PolicyType {
 }
 
 #[derive(Debug)]
-pub(crate) struct Policy {
+pub struct Policy {
     policy_type: PolicyType,
     body: Option<Vec<u8>>,
     remote: Option<ResourceLocator>,
@@ -108,7 +108,7 @@ struct EmbeddedPolicyBody {
 }
 
 #[derive(Debug)]
-enum ECDSAParams {
+pub enum ECDSAParams {
     Secp256r1 = 0x00,
     Secp384r1 = 0x01,
     Secp521r1 = 0x02,
@@ -132,17 +132,17 @@ struct Payload {
     payload_mac: Vec<u8>,
 }
 
-pub(crate) struct BinaryParser<'a> {
+pub struct BinaryParser<'a> {
     data: &'a [u8],
     position: usize,
 }
 
 impl<'a> BinaryParser<'a> {
-    pub(crate) fn new(data: &'a [u8]) -> Self {
+    pub fn new(data: &'a [u8]) -> Self {
         BinaryParser { data, position: 0 }
     }
 
-    pub(crate) fn parse_header(&mut self) -> Result<Header, ParsingError> {
+    pub fn parse_header(&mut self) -> Result<Header, ParsingError> {
         let magic_number = self.read(MAGIC_NUMBER_SIZE)?;
         let version = self.read(VERSION_SIZE)?;
         let kas = self.read_kas_field()?;
@@ -171,7 +171,7 @@ impl<'a> BinaryParser<'a> {
         Ok(result)
     }
 
-    fn read_kas_field(&mut self) -> Result<ResourceLocator, ParsingError> {
+    pub fn read_kas_field(&mut self) -> Result<ResourceLocator, ParsingError> {
         let protocol_enum = match self.read(1)?[0] {
             0x00 => ProtocolEnum::Http,
             0x01 => ProtocolEnum::Https,
@@ -189,7 +189,7 @@ impl<'a> BinaryParser<'a> {
         })
     }
 
-    fn read_policy_field(
+    pub fn read_policy_field(
         &mut self,
         binding_mode: &ECCAndBindingMode,
     ) -> Result<Policy, ParsingError> {
@@ -351,7 +351,7 @@ const VERSION_SIZE: usize = 1;
 const MIN_EPHEMERAL_KEY_SIZE: usize = 33;
 
 #[derive(Debug)]
-pub(crate) enum ParsingError {
+pub enum ParsingError {
     InvalidFormat,
     InvalidMagicNumber,
     InvalidVersion,

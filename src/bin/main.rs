@@ -1,22 +1,26 @@
+mod contracts;
+
 use std::env;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
-use aes_gcm::aead::{Aead, Key};
+use crate::contracts::contract_simple_abac;
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::KeyInit;
+use aes_gcm::aead::{Aead, Key};
 use aes_gcm::Aes256Gcm;
-use async_nats::{Client as NatsClient, PublishError};
 use async_nats::Message as NatsMessage;
+use async_nats::{Client as NatsClient, PublishError};
 use elliptic_curve::point::AffineCoordinates;
 use futures_util::{SinkExt, StreamExt};
 use hkdf::Hkdf;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use log::{error, info};
+use nanotdf::{BinaryParser, ProtocolEnum};
 use once_cell::sync::OnceCell;
-use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use p256::ecdh::EphemeralSecret;
+use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -25,11 +29,6 @@ use tokio::sync::{mpsc, Mutex};
 use tokio_native_tls::TlsAcceptor;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
-
-use crate::nanotdf::{BinaryParser, ProtocolEnum};
-
-mod nanotdf;
-mod contract_simple_abac;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct PublicKeyMessage {
@@ -690,21 +689,21 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
         tls_enabled: env::var("TLS_CERT_PATH").is_ok(),
         tls_cert_path: env::var("TLS_CERT_PATH").unwrap_or_else(|_| {
             current_dir
-                .join("fullchain.pem")
+                .join("../../fullchain.pem")
                 .to_str()
                 .unwrap()
                 .to_string()
         }),
         tls_key_path: env::var("TLS_KEY_PATH").unwrap_or_else(|_| {
             current_dir
-                .join("privkey.pem")
+                .join("../../privkey.pem")
                 .to_str()
                 .unwrap()
                 .to_string()
         }),
         kas_key_path: env::var("KAS_KEY_PATH").unwrap_or_else(|_| {
             current_dir
-                .join("recipient_private_key.pem")
+                .join("../../recipient_private_key.pem")
                 .to_str()
                 .unwrap()
                 .to_string()
@@ -723,8 +722,8 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
 mod tests {
     use std::error::Error;
 
-    use elliptic_curve::{CurveArithmetic, NonZeroScalar};
     use elliptic_curve::ScalarPrimitive;
+    use elliptic_curve::{CurveArithmetic, NonZeroScalar};
     use p256::NistP256;
 
     use super::*;
