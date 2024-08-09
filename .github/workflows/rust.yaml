@@ -52,8 +52,11 @@ jobs:
         run: |
           cargo bench | tee criterion_output.txt
           grep "time:" criterion_output.txt | sed -E 's/time:.*\[([0-9.]+) ([a-z]+) ([0-9.]+) ([a-z]+) ([0-9.]+) ([a-z]+)\]/\1,\3,\5/' > output.txt
+          pwd
+          ls -l
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
         with:
           tool: 'cargo'
           output-file-path: output.txt
+          fail-on-alert: false
