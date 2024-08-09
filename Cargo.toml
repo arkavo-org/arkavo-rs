@@ -45,3 +45,6 @@ criterion = "0.5.1"
 [[bench]]
 name = "binary_parser_benchmarks"
 harness = false
+
+[profile.bench]
+lto = true
