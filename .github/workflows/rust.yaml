@@ -10,54 +10,46 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build
-        run: cargo build --verbose
-      - name: Run tests
+      - uses: moonrepo/setup-rust@v1
+        with:
+          components: clippy, rustfmt
+      - name: test
         run: cargo test --verbose
+      - name: lint
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: format
+        run: cargo fmt --all --check
 
   build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ ubuntu-latest ]
-        target:
-          [
-            x86_64-unknown-linux-gnu,
-          ]
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install dependencies on Linux
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install gcc-aarch64-linux-gnu
-      - name: Install Rust and Build
+      - uses: moonrepo/setup-rust@v1
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Build
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source $HOME/.cargo/env
-          rustup target add ${{ matrix.target }}
-          cargo build --release --target ${{ matrix.target }}
-          strip target/${{ matrix.target }}/release/arkavo
+          cargo build --release --target x86_64-unknown-linux-gnu
+          strip target/x86_64-unknown-linux-gnu/release/arkavo
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}-build
-          path: target/${{ matrix.target }}/release/arkavo
+          name: x86_64-unknown-linux-gnu-build
+          path: target/x86_64-unknown-linux-gnu/release/arkavo
 
-  benchmark:
-    name: bench
+  bench:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
+      - uses: moonrepo/setup-rust@v1
       - name: Run benchmark
         run: cargo bench | tee output.txt
       - name: Store benchmark result
@@ -72,31 +64,3 @@ jobs:
           alert-threshold: '200%'
           comment-on-alert: true
           fail-on-alert: true
-
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: clippy
-      - uses: actions-rs/clippy-check@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          args: --all-features
-
-  format:
-    name: Format
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt
-      - uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
