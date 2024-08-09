@@ -28,10 +28,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install gcc-aarch64-linux-gnu
       - uses: moonrepo/setup-rust@v1
         with:
           targets: x86_64-unknown-linux-gnu
@@ -50,6 +46,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: moonrepo/setup-rust@v1
+        with:
+          targets: x86_64-unknown-linux-gnu
       - name: Run benchmark
         run: cargo +nightly bench | tee output.txt
       - name: Store benchmark result
