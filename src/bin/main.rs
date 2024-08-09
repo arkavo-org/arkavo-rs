@@ -114,7 +114,7 @@ enum MessageType {
     KasPublicKey = 0x02,
     Rewrap = 0x03,
     RewrappedKey = 0x04,
-    NATS = 0x05,
+    Nats = 0x05,
 }
 
 impl MessageType {
@@ -124,7 +124,7 @@ impl MessageType {
             0x02 => Some(MessageType::KasPublicKey),
             0x03 => Some(MessageType::Rewrap),
             0x04 => Some(MessageType::RewrappedKey),
-            0x05 => Some(MessageType::NATS),
+            0x05 => Some(MessageType::Nats),
             _ => None,
         }
     }
@@ -325,7 +325,7 @@ async fn handle_binary_message(
     settings: &ServerSettings,
     nats_connection: Arc<NatsConnection>,
 ) -> Option<Message> {
-    if data.len() < 1 {
+    if data.is_empty() {
         println!("Invalid message format");
         return None;
     }
@@ -337,7 +337,7 @@ async fn handle_binary_message(
         Some(MessageType::KasPublicKey) => handle_kas_public_key(payload).await, // outgoing
         Some(MessageType::Rewrap) => handle_rewrap(connection_state, payload, settings).await, // incoming
         Some(MessageType::RewrappedKey) => None, // outgoing
-        Some(MessageType::NATS) => {
+        Some(MessageType::Nats) => {
             handle_nats_publish(connection_state, payload, settings, nats_connection).await
         } // internal
         None => {
@@ -384,7 +384,7 @@ async fn handle_rewrap(
         let shared_secret = connection_state.shared_secret_lock.read().unwrap();
         shared_secret.clone()
     };
-    if session_shared_secret == None {
+    if session_shared_secret.is_none() {
         info!("Shared Secret not set");
         return None;
     }
@@ -429,18 +429,16 @@ async fn handle_rewrap(
             };
             // execute contract
             let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
-            if claims_result.is_ok() {
-                if !contract.check_access(claims_result.unwrap(), locator.body.clone()) {
-                    // binary response
-                    let mut response_data = Vec::new();
-                    response_data.push(MessageType::RewrappedKey as u8);
-                    response_data.extend_from_slice(tdf_ephemeral_key_bytes);
-                    // timing
-                    let total_time = start_time.elapsed();
-                    log_timing(settings, "Time to deny", total_time);
-                    // DENY
-                    return Some(Message::Binary(response_data));
-                }
+            if claims_result.is_ok() && !contract.check_access(claims_result.unwrap(), locator.body.clone()) {
+                // binary response
+                let mut response_data = Vec::new();
+                response_data.push(MessageType::RewrappedKey as u8);
+                response_data.extend_from_slice(tdf_ephemeral_key_bytes);
+                // timing
+                let total_time = start_time.elapsed();
+                log_timing(settings, "Time to deny", total_time);
+                // DENY
+                return Some(Message::Binary(response_data));
             }
         }
     }
@@ -500,7 +498,7 @@ async fn handle_rewrap(
     let mut response_data = Vec::new();
     response_data.push(MessageType::RewrappedKey as u8);
     response_data.extend_from_slice(tdf_ephemeral_key_bytes);
-    response_data.extend_from_slice(&nonce);
+    response_data.extend_from_slice(nonce);
     response_data.extend_from_slice(&wrapped_dek);
 
     let total_time = start_time.elapsed();
@@ -564,7 +562,7 @@ async fn handle_public_key(
     // Appending MessageType::PublicKey
     response_data.push(MessageType::PublicKey as u8);
     // Appending server_public_key bytes
-    response_data.extend_from_slice(&compressed_public_key_bytes);
+    response_data.extend_from_slice(compressed_public_key_bytes);
     // Appending salt bytes
     response_data.extend_from_slice(&salt);
     Some(Message::Binary(response_data))
@@ -615,7 +613,7 @@ async fn handle_nats_message(
     connection_state: Arc<ConnectionState>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ws_message = Message::Binary(
-        vec![MessageType::NATS as u8]
+        vec![MessageType::Nats as u8]
             .into_iter()
             .chain(msg.payload)
             .collect(),

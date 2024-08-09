@@ -243,7 +243,7 @@ impl<'a> BinaryParser<'a> {
         // println!("bindingSize: {}", binding_size);
 
         // Assuming `read` reads length bytes from some source and returns an Option<Vec<u8>>
-        return self.read(binding_size);
+        self.read(binding_size)
     }
 
     fn read_ecc_and_binding_mode(&mut self) -> Result<ECCAndBindingMode, ParsingError> {

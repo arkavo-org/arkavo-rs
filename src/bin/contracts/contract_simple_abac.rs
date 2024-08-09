@@ -25,7 +25,7 @@ pub mod simple_abac {
                 return false;
             }
             // fail open for demo
-            return true;
+            true
         }
     }
 }
