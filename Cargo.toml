@@ -1,16 +1,23 @@
 [package]
-name = "backend-rust"
-version = "0.6.0"
+name = "arkavo-rs"
+version = "0.7.0"
 edition = "2021"
 
-# export RUSTFLAGS="-C target-cpu=native"
-# cargo build --release
+[lib]
+name = "nanotdf"
+path = "src/lib.rs"
+
+[[bin]]
+name = "arkavo"
+path = "src/bin/main.rs"
+
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
-# cargo flamegraph
-#debug = true
+
+[profile.bench]
+lto = true
 
 [dependencies]
 elliptic-curve = "0.13.8"
@@ -34,3 +41,10 @@ log = "0.4.22"
 ink = "5.0.0"
 jsonwebtoken = "9.3.0"
 async-nats = "0.35.1"
+
+[dev-dependencies]
+criterion = "0.5.1"
+
+[[bench]]
+name = "benchmarks"
+harness = false

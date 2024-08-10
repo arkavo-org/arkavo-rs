@@ -1,22 +1,26 @@
+mod contracts;
+
 use std::env;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
-use aes_gcm::aead::{Aead, Key};
+use crate::contracts::contract_simple_abac;
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::KeyInit;
+use aes_gcm::aead::{Aead, Key};
 use aes_gcm::Aes256Gcm;
-use async_nats::{Client as NatsClient, PublishError};
 use async_nats::Message as NatsMessage;
+use async_nats::{Client as NatsClient, PublishError};
 use elliptic_curve::point::AffineCoordinates;
 use futures_util::{SinkExt, StreamExt};
 use hkdf::Hkdf;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use log::{error, info};
+use nanotdf::{BinaryParser, ProtocolEnum};
 use once_cell::sync::OnceCell;
-use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use p256::ecdh::EphemeralSecret;
+use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -25,11 +29,6 @@ use tokio::sync::{mpsc, Mutex};
 use tokio_native_tls::TlsAcceptor;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
-
-use crate::nanotdf::{BinaryParser, ProtocolEnum};
-
-mod nanotdf;
-mod contract_simple_abac;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct PublicKeyMessage {
@@ -76,10 +75,16 @@ impl NATSMessage {
         if data.len() > MAX_NANOTDF_SIZE {
             return Err("NanoTDF message exceeds maximum size");
         }
-        Ok(Self { data: data.to_vec() })
+        Ok(Self {
+            data: data.to_vec(),
+        })
     }
 
-    async fn send_to_nats(&self, nats_client: &NatsClient, subject: String) -> Result<(), PublishError> {
+    async fn send_to_nats(
+        &self,
+        nats_client: &NatsClient,
+        subject: String,
+    ) -> Result<(), PublishError> {
         nats_client.publish(subject, self.data.clone().into()).await
     }
 }
@@ -109,7 +114,7 @@ enum MessageType {
     KasPublicKey = 0x02,
     Rewrap = 0x03,
     RewrappedKey = 0x04,
-    NATS = 0x05,
+    Nats = 0x05,
 }
 
 impl MessageType {
@@ -119,7 +124,7 @@ impl MessageType {
             0x02 => Some(MessageType::KasPublicKey),
             0x03 => Some(MessageType::Rewrap),
             0x04 => Some(MessageType::RewrappedKey),
-            0x05 => Some(MessageType::NATS),
+            0x05 => Some(MessageType::Nats),
             _ => None,
         }
     }
@@ -164,7 +169,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match nats_connection_clone.connect().await {
                     Ok(_) => info!("Successfully connected to NATS server"),
                     Err(e) => {
-                        error!("Failed to connect to NATS server: {}. Retrying in {:?}...", e, NATS_RETRY_INTERVAL);
+                        error!(
+                            "Failed to connect to NATS server: {}. Retrying in {:?}...",
+                            e, NATS_RETRY_INTERVAL
+                        );
                         tokio::time::sleep(NATS_RETRY_INTERVAL).await;
                         continue;
                     }
@@ -186,14 +194,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             if let Some(tls_acceptor) = tls_acceptor_clone {
                 match tls_acceptor.accept(stream).await {
-                    Ok(tls_stream) => {
-                        match accept_async(tls_stream).await {
-                            Ok(ws_stream) => {
-                                handle_websocket(ws_stream, &settings_clone, nats_connection_clone).await;
-                            }
-                            Err(e) => eprintln!("Failed to accept websocket: {}", e),
+                    Ok(tls_stream) => match accept_async(tls_stream).await {
+                        Ok(ws_stream) => {
+                            handle_websocket(ws_stream, &settings_clone, nats_connection_clone)
+                                .await;
                         }
-                    }
+                        Err(e) => eprintln!("Failed to accept websocket: {}", e),
+                    },
                     Err(e) => eprintln!("Failed to accept TLS connection: {}", e),
                 }
             } else {
@@ -307,11 +314,7 @@ fn verify_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     validation.validate_exp = false;
     validation.validate_aud = false;
     let secret = b"any_secret_key"; // The actual value doesn't matter when signature validation is disabled
-    let token_data = decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret),
-        &validation,
-    )?;
+    let token_data = decode::<Claims>(token, &DecodingKey::from_secret(secret), &validation)?;
     // println!("Decoded token: {:?}", token_data.claims);
     Ok(token_data.claims)
 }
@@ -322,7 +325,7 @@ async fn handle_binary_message(
     settings: &ServerSettings,
     nats_connection: Arc<NatsConnection>,
 ) -> Option<Message> {
-    if data.len() < 1 {
+    if data.is_empty() {
         println!("Invalid message format");
         return None;
     }
@@ -334,7 +337,9 @@ async fn handle_binary_message(
         Some(MessageType::KasPublicKey) => handle_kas_public_key(payload).await, // outgoing
         Some(MessageType::Rewrap) => handle_rewrap(connection_state, payload, settings).await, // incoming
         Some(MessageType::RewrappedKey) => None, // outgoing
-        Some(MessageType::NATS) => handle_nats_publish(connection_state, payload, settings, nats_connection).await, // internal
+        Some(MessageType::Nats) => {
+            handle_nats_publish(connection_state, payload, settings, nats_connection).await
+        } // internal
         None => {
             println!("Unknown message type: {:?}", message_type);
             None
@@ -351,7 +356,10 @@ async fn handle_nats_publish(
     match NATSMessage::new(payload) {
         Ok(nanotdf_msg) => {
             let nats_client = nats_connection.get_client().await;
-            if let Err(e) = nanotdf_msg.send_to_nats(&nats_client.unwrap(), settings.nats_subject.clone()).await {
+            if let Err(e) = nanotdf_msg
+                .send_to_nats(&nats_client.unwrap(), settings.nats_subject.clone())
+                .await
+            {
                 error!("Failed to send NanoTDF message to NATS: {}", e);
             } else {
                 info!("NanoTDF message sent to NATS successfully");
@@ -376,7 +384,7 @@ async fn handle_rewrap(
         let shared_secret = connection_state.shared_secret_lock.read().unwrap();
         shared_secret.clone()
     };
-    if session_shared_secret == None {
+    if session_shared_secret.is_none() {
         info!("Shared Secret not set");
         return None;
     }
@@ -421,18 +429,18 @@ async fn handle_rewrap(
             };
             // execute contract
             let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
-            if claims_result.is_ok() {
-                if !contract.check_access(claims_result.unwrap(), locator.body.clone()) {
-                    // binary response
-                    let mut response_data = Vec::new();
-                    response_data.push(MessageType::RewrappedKey as u8);
-                    response_data.extend_from_slice(tdf_ephemeral_key_bytes);
-                    // timing
-                    let total_time = start_time.elapsed();
-                    log_timing(settings, "Time to deny", total_time);
-                    // DENY
-                    return Some(Message::Binary(response_data));
-                }
+            if claims_result.is_ok()
+                && !contract.check_access(claims_result.unwrap(), locator.body.clone())
+            {
+                // binary response
+                let mut response_data = Vec::new();
+                response_data.push(MessageType::RewrappedKey as u8);
+                response_data.extend_from_slice(tdf_ephemeral_key_bytes);
+                // timing
+                let total_time = start_time.elapsed();
+                log_timing(settings, "Time to deny", total_time);
+                // DENY
+                return Some(Message::Binary(response_data));
             }
         }
     }
@@ -492,7 +500,7 @@ async fn handle_rewrap(
     let mut response_data = Vec::new();
     response_data.push(MessageType::RewrappedKey as u8);
     response_data.extend_from_slice(tdf_ephemeral_key_bytes);
-    response_data.extend_from_slice(&nonce);
+    response_data.extend_from_slice(nonce);
     response_data.extend_from_slice(&wrapped_dek);
 
     let total_time = start_time.elapsed();
@@ -556,7 +564,7 @@ async fn handle_public_key(
     // Appending MessageType::PublicKey
     response_data.push(MessageType::PublicKey as u8);
     // Appending server_public_key bytes
-    response_data.extend_from_slice(&compressed_public_key_bytes);
+    response_data.extend_from_slice(compressed_public_key_bytes);
     // Appending salt bytes
     response_data.extend_from_slice(&salt);
     Some(Message::Binary(response_data))
@@ -592,15 +600,26 @@ async fn handle_nats_subscription(
                     }
                 }
                 Err(e) => {
-                    error!("Failed to subscribe to NATS subject: {}. Retrying in {:?}...", e, NATS_RETRY_INTERVAL);
+                    error!(
+                        "Failed to subscribe to NATS subject: {}. Retrying in {:?}...",
+                        e, NATS_RETRY_INTERVAL
+                    );
                 }
             }
         }
         tokio::time::sleep(NATS_RETRY_INTERVAL).await;
     }
 }
-async fn handle_nats_message(msg: NatsMessage, connection_state: Arc<ConnectionState>) -> Result<(), Box<dyn std::error::Error>> {
-    let ws_message = Message::Binary(vec![MessageType::NATS as u8].into_iter().chain(msg.payload).collect());
+async fn handle_nats_message(
+    msg: NatsMessage,
+    connection_state: Arc<ConnectionState>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ws_message = Message::Binary(
+        vec![MessageType::Nats as u8]
+            .into_iter()
+            .chain(msg.payload)
+            .collect(),
+    );
     connection_state.outgoing_tx.send(ws_message)?;
     Ok(())
 }
@@ -690,21 +709,21 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
         tls_enabled: env::var("TLS_CERT_PATH").is_ok(),
         tls_cert_path: env::var("TLS_CERT_PATH").unwrap_or_else(|_| {
             current_dir
-                .join("fullchain.pem")
+                .join("../../fullchain.pem")
                 .to_str()
                 .unwrap()
                 .to_string()
         }),
         tls_key_path: env::var("TLS_KEY_PATH").unwrap_or_else(|_| {
             current_dir
-                .join("privkey.pem")
+                .join("../../privkey.pem")
                 .to_str()
                 .unwrap()
                 .to_string()
         }),
         kas_key_path: env::var("KAS_KEY_PATH").unwrap_or_else(|_| {
             current_dir
-                .join("recipient_private_key.pem")
+                .join("../../recipient_private_key.pem")
                 .to_str()
                 .unwrap()
                 .to_string()
@@ -715,7 +734,6 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
             .unwrap_or(false),
         nats_url: env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string()),
         nats_subject: env::var("NATS_SUBJECT").unwrap_or_else(|_| "nanotdf.messages".to_string()),
-
     })
 }
 
@@ -723,8 +741,8 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
 mod tests {
     use std::error::Error;
 
-    use elliptic_curve::{CurveArithmetic, NonZeroScalar};
     use elliptic_curve::ScalarPrimitive;
+    use elliptic_curve::{CurveArithmetic, NonZeroScalar};
     use p256::NistP256;
 
     use super::*;
