@@ -1,7 +1,11 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use nanotdf::BinaryParser;
+#![feature(test)]
 
-fn bench_read_kas_field(c: &mut Criterion) {
+extern crate test;
+use nanotdf::BinaryParser;
+use test::{black_box, Bencher};
+
+#[bench]
+fn bench_read_kas_field(b: &mut Bencher) {
     let kas_field = vec![
         0x01, 0x0e, 0x6b, 0x61, 0x73, 0x2e, 0x76, 0x69, 0x72, 0x74, 0x72, 0x75, 0x2e, 0x63, 0x6f,
         0x6d,
@@ -11,11 +15,9 @@ fn bench_read_kas_field(c: &mut Criterion) {
     let mut parser = BinaryParser::new(&kas_field);
     match parser.read_kas_field() {
         Ok(_) => {
-            c.bench_function("read_kas_field", |b| {
-                b.iter(|| {
-                    let mut parser = BinaryParser::new(black_box(&kas_field));
-                    let _ = parser.read_kas_field().unwrap();
-                })
+            b.iter(|| {
+                let mut parser = BinaryParser::new(black_box(&kas_field));
+                let _ = parser.read_kas_field().unwrap();
             });
         }
         Err(e) => {
@@ -23,6 +25,3 @@ fn bench_read_kas_field(c: &mut Criterion) {
         }
     }
 }
-
-criterion_group!(benches, bench_read_kas_field);
-criterion_main!(benches);
