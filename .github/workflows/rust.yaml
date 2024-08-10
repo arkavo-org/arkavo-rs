@@ -49,14 +49,5 @@ jobs:
         with:
           targets: x86_64-unknown-linux-gnu
       - name: Run benchmark
-        run: cargo bench --bench benchmarks -- --output-format bencher | tee output.txt
-      - name: Store benchmark result
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          tool: 'cargo'
-          output-file-path: output.txt
-          auto-push: false
-          skip-fetch-gh-pages: true
-          comment-on-alert: true
-          summary-always: true
+        run: cargo bench --bench benchmarks | tee output.txt
+
