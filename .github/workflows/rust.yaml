@@ -55,6 +55,6 @@ jobs:
         with:
           tool: 'cargo'
           output-file-path: output.txt
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: false
           comment-on-alert: true
           summary-always: true
