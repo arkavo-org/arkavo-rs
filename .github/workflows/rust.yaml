@@ -53,6 +53,7 @@ jobs:
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           tool: 'cargo'
           output-file-path: output.txt
           auto-push: false
