@@ -16,6 +16,9 @@ opt-level = 3
 lto = true
 codegen-units = 1
 
+[profile.bench]
+lto = true
+
 [dependencies]
 elliptic-curve = "0.13.8"
 tokio = { version = "1.39.2", features = ["full"] }
@@ -43,8 +46,5 @@ async-nats = "0.35.1"
 criterion = "0.5.1"
 
 [[bench]]
-name = "binary_parser_benchmarks"
+name = "benchmarks"
 harness = false
-
-[profile.bench]
-lto = true
