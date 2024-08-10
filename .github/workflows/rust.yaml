@@ -57,5 +57,6 @@ jobs:
           tool: 'cargo'
           output-file-path: output.txt
           auto-push: false
+          skip-fetch-gh-pages: true
           comment-on-alert: true
           summary-always: true
