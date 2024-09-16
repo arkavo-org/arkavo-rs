@@ -24,24 +24,29 @@ brew install nats-server
 
 1. Clone the repository:
 
-```shell
-git clone https://github.com/arkavo-org/backend-rust.git
-cd backend-rust
-```
+   ```shell
+   git clone https://github.com/arkavo-org/backend-rust.git
+   cd backend-rust
+   ```
 
 2. Build the project to download and compile the dependencies:
 
-```shell
-cargo build
-```
+   ```shell
+   cargo build
+   ```
 
 ### Running the Server
 
 1. Ensure you have a valid EC private key in PEM format named `recipient_private_key.pem`.
 
-    ```shell
-    openssl ec -in recipient_private_key.pem -text -noout
-    ```
+   ```shell
+   openssl ecparam -genkey -name prime256v1 -noout -out recipient_private_key.pem
+   ```
+   
+   Validate
+   ```shell
+   openssl ec -in recipient_private_key.pem -text -noout
+   ```
 
 2. Generating Self-Signed Certificate
 

@@ -18,13 +18,11 @@ Cargo.lock
 
 /target
 /recipient_private_key.pem
-/.idea/.gitignore
-/.idea/backend-rust.iml
-/.idea/modules.xml
-/.idea/vcs.xml
+/.idea
 /fullchain.pem
 /privkey.pem
 /cache/
 /etc/contracts/substrate-contracts-node
 /etc/contracts/ev/
 /etc/contracts/simple_abac/.idea/
+/apple-app-site-association.json
