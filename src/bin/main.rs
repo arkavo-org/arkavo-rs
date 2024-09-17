@@ -200,18 +200,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         tokio::spawn(async move {
             // Use a trait object to hold either TcpStream or TlsStream<TcpStream>
-            let stream: Box<dyn AsyncStream> =
-                if let Some(tls_acceptor) = tls_acceptor_clone {
-                    match tls_acceptor.accept(stream).await {
-                        Ok(tls_stream) => Box::new(tls_stream),
-                        Err(e) => {
-                            eprintln!("Failed to accept TLS connection: {}", e);
-                            return;
-                        }
+            let stream: Box<dyn AsyncStream> = if let Some(tls_acceptor) = tls_acceptor_clone {
+                match tls_acceptor.accept(stream).await {
+                    Ok(tls_stream) => Box::new(tls_stream),
+                    Err(e) => {
+                        eprintln!("Failed to accept TLS connection: {}", e);
+                        return;
                     }
-                } else {
-                    Box::new(stream)
-                };
+                }
+            } else {
+                Box::new(stream)
+            };
 
             handle_connection(
                 stream,
@@ -219,7 +218,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 nats_connection_clone,
                 apple_app_site_association_clone,
             )
-                .await;
+            .await;
         });
     }
 
@@ -871,11 +870,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for RewindableStream<S> {
         Pin::new(&mut self.stream).poll_write(cx, buf)
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
         Pin::new(&mut self.stream).poll_flush(cx)
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
         Pin::new(&mut self.stream).poll_shutdown(cx)
     }
 }
