@@ -1,8 +1,10 @@
 mod contracts;
 
 use std::env;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use crate::contracts::contract_simple_abac;
@@ -24,10 +26,11 @@ use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use tokio::fs;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex};
 use tokio_native_tls::TlsAcceptor;
-use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -136,6 +139,8 @@ struct KasKeys {
 }
 
 static KAS_KEYS: OnceCell<Arc<KasKeys>> = OnceCell::new();
+trait AsyncStream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T> AsyncStream for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -144,7 +149,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load configuration
     let settings = load_config()?;
-
+    // Load and cache the apple-app-site-association.json file
+    let apple_app_site_association = load_apple_app_site_association().await;
     // Initialize KAS keys
     init_kas_keys(&settings.kas_key_path)?;
 
@@ -190,27 +196,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let tls_acceptor_clone = tls_acceptor.clone();
         let settings_clone = settings.clone();
         let nats_connection_clone = nats_connection.clone();
+        let apple_app_site_association_clone = apple_app_site_association.clone();
 
         tokio::spawn(async move {
-            if let Some(tls_acceptor) = tls_acceptor_clone {
+            // Use a trait object to hold either TcpStream or TlsStream<TcpStream>
+            let stream: Box<dyn AsyncStream> = if let Some(tls_acceptor) = tls_acceptor_clone {
                 match tls_acceptor.accept(stream).await {
-                    Ok(tls_stream) => match accept_async(tls_stream).await {
-                        Ok(ws_stream) => {
-                            handle_websocket(ws_stream, &settings_clone, nats_connection_clone)
-                                .await;
-                        }
-                        Err(e) => eprintln!("Failed to accept websocket: {}", e),
-                    },
-                    Err(e) => eprintln!("Failed to accept TLS connection: {}", e),
+                    Ok(tls_stream) => Box::new(tls_stream),
+                    Err(e) => {
+                        eprintln!("Failed to accept TLS connection: {}", e);
+                        return;
+                    }
                 }
             } else {
-                match accept_async(stream).await {
-                    Ok(ws_stream) => {
-                        handle_websocket(ws_stream, &settings_clone, nats_connection_clone).await;
-                    }
-                    Err(e) => eprintln!("Failed to accept websocket: {}", e),
-                }
-            }
+                Box::new(stream)
+            };
+
+            handle_connection(
+                stream,
+                &settings_clone,
+                nats_connection_clone,
+                apple_app_site_association_clone,
+            )
+            .await;
         });
     }
 
@@ -302,6 +310,56 @@ async fn handle_websocket(
     }
     // Cancel the NATS subscription when the WebSocket connection closes
     nats_task.abort();
+}
+
+async fn handle_connection(
+    stream: impl AsyncRead + AsyncWrite + Unpin,
+    settings: &ServerSettings,
+    nats_connection: Arc<NatsConnection>,
+    apple_app_site_association: Arc<RwLock<String>>,
+) {
+    let mut rewindable_stream = RewindableStream::new(stream);
+
+    // Read the first line of the request
+    let request_line = match rewindable_stream.read_until(b'\n').await {
+        Ok(line) => line,
+        Err(e) => {
+            eprintln!("Failed to read from stream: {}", e);
+            return;
+        }
+    };
+
+    let request_line_str = String::from_utf8_lossy(&request_line);
+    let mut parts = request_line_str.split_whitespace();
+    let method = parts.next();
+    let path = parts.next();
+
+    if method == Some("GET") && path == Some("/.well-known/apple-app-site-association") {
+        // Handle the apple-app-site-association request
+        let apple_app_site_association_content = {
+            let read_guard = apple_app_site_association.read().unwrap();
+            read_guard.clone()
+        };
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            apple_app_site_association_content.len(),
+            apple_app_site_association_content
+        );
+        if let Err(e) = rewindable_stream.write_all(response.as_bytes()).await {
+            eprintln!("Failed to write response: {}", e);
+        }
+    } else {
+        // Assume it's a WebSocket request and proceed with the upgrade
+        rewindable_stream.rewind();
+        match tokio_tungstenite::accept_async(rewindable_stream).await {
+            Ok(ws_stream) => {
+                handle_websocket(ws_stream, settings, nats_connection).await;
+            }
+            Err(e) => {
+                eprintln!("Failed to accept websocket: {}", e);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -735,6 +793,96 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
         nats_url: env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string()),
         nats_subject: env::var("NATS_SUBJECT").unwrap_or_else(|_| "nanotdf.messages".to_string()),
     })
+}
+
+async fn load_apple_app_site_association() -> Arc<RwLock<String>> {
+    let content = fs::read_to_string("apple-app-site-association.json")
+        .await
+        .expect("Failed to read apple-app-site-association.json");
+    Arc::new(RwLock::new(content))
+}
+struct RewindableStream<S> {
+    stream: S,
+    buffer: Vec<u8>,
+    position: usize,
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> RewindableStream<S> {
+    fn new(stream: S) -> Self {
+        Self {
+            stream,
+            buffer: Vec::new(),
+            position: 0,
+        }
+    }
+
+    fn rewind(&mut self) {
+        self.position = 0;
+    }
+
+    async fn read_until(&mut self, delimiter: u8) -> std::io::Result<Vec<u8>> {
+        let mut result = Vec::new();
+        loop {
+            if self.position < self.buffer.len() {
+                let byte = self.buffer[self.position];
+                self.position += 1;
+                result.push(byte);
+                if byte == delimiter {
+                    break;
+                }
+            } else {
+                let mut buf = [0u8; 1024];
+                let n = self.stream.read(&mut buf).await?;
+                if n == 0 {
+                    break;
+                }
+                self.buffer.extend_from_slice(&buf[..n]);
+            }
+        }
+        Ok(result)
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for RewindableStream<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        if self.position < self.buffer.len() {
+            let remaining = self.buffer.len() - self.position;
+            let to_read = buf.remaining().min(remaining);
+            buf.put_slice(&self.buffer[self.position..self.position + to_read]);
+            self.position += to_read;
+            Poll::Ready(Ok(()))
+        } else {
+            Pin::new(&mut self.stream).poll_read(cx, buf)
+        }
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for RewindableStream<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
 }
 
 #[cfg(test)]

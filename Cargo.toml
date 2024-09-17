@@ -22,7 +22,7 @@ lto = true
 [dependencies]
 elliptic-curve = "0.13.8"
 tokio = { version = "1.39.2", features = ["full"] }
-tokio-tungstenite = "0.23.1"
+tokio-tungstenite = "0.24.0"
 futures-util = "0.3.30"
 hex = "0.4.3"
 serde = { version = "1.0.204", features = ["derive"] }
@@ -40,7 +40,8 @@ env_logger = "0.11.5"
 log = "0.4.22"
 ink = "5.0.0"
 jsonwebtoken = "9.3.0"
-async-nats = "0.35.1"
+async-nats = "0.36.0"
+serde_json = "1.0.128"
 
 [dev-dependencies]
 criterion = "0.5.1"
