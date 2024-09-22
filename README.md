@@ -15,9 +15,10 @@ Implementation of KAS from [OpenTDF specification](https://github.com/opentdf/sp
 - Rust (latest stable version)
 - `cargo` package manager
 - NATS
+- Redis
 
 ```bash
-brew install nats-server
+brew install nats-server redis
 ```
 
 ### Installation
@@ -35,6 +36,13 @@ brew install nats-server
    cargo build
    ```
 
+   Release build
+
+   ```shell
+   export RUSTFLAGS="-C target-cpu=native"
+   cargo build --release
+   ```
+
 ### Running the Server
 
 1. Ensure you have a valid EC private key in PEM format named `recipient_private_key.pem`.
@@ -42,7 +50,7 @@ brew install nats-server
    ```shell
    openssl ecparam -genkey -name prime256v1 -noout -out recipient_private_key.pem
    ```
-   
+
    Validate
    ```shell
    openssl ec -in recipient_private_key.pem -text -noout
@@ -75,6 +83,7 @@ The server can be configured using environment variables. If not set, default va
 | TLS_CERT_PATH        | Path to the TLS certificate file         | ./fullchain.pem             |
 | TLS_KEY_PATH         | Path to the TLS private key file         | ./privkey.pem               |
 | KAS_KEY_PATH         | Path to the KAS private key file         | ./recipient_private_key.pem |
+| REDIS_URL            | URL for Redis connection                 | redis://localhost:6379      |
 
 All file paths are relative to the current working directory where the server is run.
 
@@ -84,6 +93,7 @@ export TLS_CERT_PATH=/path/to/fullchain.pem
 export TLS_KEY_PATH=/path/to/privkey.pem
 export KAS_KEY_PATH=/path/to/recipient_private_key.pem
 export NATS_URL=nats://localhost:4222
+export REDIS_URL=redis://localhost:6379
 export ENABLE_TIMING_LOGS=true
 export RUST_LOG=info
 ```
@@ -99,6 +109,10 @@ environment variables or secure vaults for managing sensitive information in pro
 
 ```shell
 nats-server
+```
+
+```shell
+redis-server
 ```
 
 #### Start backend

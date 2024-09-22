@@ -24,6 +24,8 @@ use once_cell::sync::OnceCell;
 use p256::ecdh::EphemeralSecret;
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use rand_core::{OsRng, RngCore};
+use redis::AsyncCommands;
+use redis::Client as RedisClient;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tokio::fs;
@@ -92,7 +94,6 @@ impl NATSMessage {
     }
 }
 
-#[derive(Debug)]
 struct ConnectionState {
     salt_lock: RwLock<Option<Vec<u8>>>,
     shared_secret_lock: RwLock<Option<Vec<u8>>>,
@@ -118,6 +119,7 @@ enum MessageType {
     Rewrap = 0x03,
     RewrappedKey = 0x04,
     Nats = 0x05,
+    Event = 0x06,
 }
 
 impl MessageType {
@@ -128,6 +130,7 @@ impl MessageType {
             0x03 => Some(MessageType::Rewrap),
             0x04 => Some(MessageType::RewrappedKey),
             0x05 => Some(MessageType::Nats),
+            0x06 => Some(MessageType::Event),
             _ => None,
         }
     }
@@ -149,6 +152,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load configuration
     let settings = load_config()?;
+    let server_state = Arc::new(ServerState::new(settings.clone())?);
     // Load and cache the apple-app-site-association.json file
     let apple_app_site_association = load_apple_app_site_association().await;
     // Initialize KAS keys
@@ -194,7 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Accept connections
     while let Ok((stream, _)) = listener.accept().await {
         let tls_acceptor_clone = tls_acceptor.clone();
-        let settings_clone = settings.clone();
+        let server_state_clone = server_state.clone();
         let nats_connection_clone = nats_connection.clone();
         let apple_app_site_association_clone = apple_app_site_association.clone();
 
@@ -214,7 +218,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             handle_connection(
                 stream,
-                &settings_clone,
+                server_state_clone,
                 nats_connection_clone,
                 apple_app_site_association_clone,
             )
@@ -239,10 +243,8 @@ fn load_tls_config(
 }
 
 async fn handle_websocket(
-    mut ws_stream: tokio_tungstenite::WebSocketStream<
-        impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-    >,
-    settings: &ServerSettings,
+    mut ws_stream: tokio_tungstenite::WebSocketStream<impl AsyncRead + AsyncWrite + Unpin>,
+    server_state: Arc<ServerState>,
     nats_connection: Arc<NatsConnection>,
 ) {
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
@@ -251,7 +253,7 @@ async fn handle_websocket(
     // Set up NATS subscription for this connection
     let nats_task = tokio::spawn(handle_nats_subscription(
         nats_connection.clone(),
-        settings.nats_subject.clone(),
+        server_state.settings.nats_subject.clone(),
         connection_state.clone(),
     ));
     // Handle incoming WebSocket messages
@@ -281,7 +283,7 @@ async fn handle_websocket(
                                     println!("Invalid JWT: {}", e);
                                 }
                             }
-                        } else if let Some(response) = handle_binary_message(&connection_state, msg.into_data(), settings, nats_connection.clone()).await {
+                        } else if let Some(response) = handle_binary_message(&connection_state, &server_state, msg.into_data(), nats_connection.clone()).await {
                             if ws_stream.send(response).await.is_err() {
                                 eprintln!("Failed to send response through WebSocket");
                                 break;
@@ -314,7 +316,7 @@ async fn handle_websocket(
 
 async fn handle_connection(
     stream: impl AsyncRead + AsyncWrite + Unpin,
-    settings: &ServerSettings,
+    server_state: Arc<ServerState>,
     nats_connection: Arc<NatsConnection>,
     apple_app_site_association: Arc<RwLock<String>>,
 ) {
@@ -353,7 +355,7 @@ async fn handle_connection(
         rewindable_stream.rewind();
         match tokio_tungstenite::accept_async(rewindable_stream).await {
             Ok(ws_stream) => {
-                handle_websocket(ws_stream, settings, nats_connection).await;
+                handle_websocket(ws_stream, server_state, nats_connection).await;
             }
             Err(e) => {
                 eprintln!("Failed to accept websocket: {}", e);
@@ -379,8 +381,8 @@ fn verify_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
 
 async fn handle_binary_message(
     connection_state: &Arc<ConnectionState>,
+    server_state: &Arc<ServerState>,
     data: Vec<u8>,
-    settings: &ServerSettings,
     nats_connection: Arc<NatsConnection>,
 ) -> Option<Message> {
     if data.is_empty() {
@@ -393,11 +395,12 @@ async fn handle_binary_message(
     match message_type {
         Some(MessageType::PublicKey) => handle_public_key(connection_state, payload).await, // incoming
         Some(MessageType::KasPublicKey) => handle_kas_public_key(payload).await, // outgoing
-        Some(MessageType::Rewrap) => handle_rewrap(connection_state, payload, settings).await, // incoming
+        Some(MessageType::Rewrap) => handle_rewrap(connection_state, payload, &server_state.settings).await, // incoming
         Some(MessageType::RewrappedKey) => None, // outgoing
         Some(MessageType::Nats) => {
-            handle_nats_publish(connection_state, payload, settings, nats_connection).await
+            handle_nats_publish(connection_state, payload, &server_state.settings, nats_connection).await
         } // internal
+        Some(MessageType::Event) => handle_event(server_state, payload).await, // embedded
         None => {
             println!("Unknown message type: {:?}", message_type);
             None
@@ -581,15 +584,15 @@ async fn handle_public_key(
     }
     // println!("Client Public Key payload: {}", hex::encode(payload.as_ref()));
     if payload.len() != 33 {
-        println!("Client Public Key wrong size");
-        println!("Client Public Key length: {}", payload.len());
+        error!("Client Public Key wrong size");
+        error!("Client Public Key length: {}", payload.len());
         return None;
     }
     // Deserialize the public key sent by the client
     let client_public_key = match PublicKey::from_sec1_bytes(payload) {
         Ok(key) => key,
         Err(e) => {
-            println!("Error deserializing client public key: {:?}", e);
+            error!("Error deserializing client public key: {:?}", e);
             return None;
         }
     };
@@ -682,6 +685,60 @@ async fn handle_nats_message(
     Ok(())
 }
 
+async fn handle_event(
+    server_state: &Arc<ServerState>,
+    payload: &[u8],
+) -> Option<Message> {
+    let start_time = Instant::now();
+
+    // Parse the event ID from the payload
+    let event_id = match std::str::from_utf8(payload) {
+        Ok(id) => id,
+        Err(e) => {
+            error!("Failed to parse event ID: {}", e);
+            return None;
+        }
+    };
+
+    // Retrieve the event object from Redis
+    let mut redis_conn = match server_state.redis_client.get_multiplexed_async_connection().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            error!("Failed to connect to Redis: {}", e);
+            return None;
+        }
+    };
+
+    let event_data: Option<String> = match redis_conn.get(event_id).await {
+        Ok(data) => data,
+        Err(e) => {
+            error!("Failed to retrieve event from Redis: {}", e);
+            return None;
+        }
+    };
+
+    let response_data = match event_data {
+        Some(data) => {
+            let mut response = Vec::new();
+            response.push(MessageType::Event as u8);
+            response.extend_from_slice(data.as_bytes());
+            response
+        }
+        None => {
+            error!("Event not found in Redis");
+            let mut response = Vec::new();
+            response.push(MessageType::Event as u8);
+            response.extend_from_slice(b"Event not found");
+            response
+        }
+    };
+
+    let total_time = start_time.elapsed();
+    log_timing(&server_state.settings, "Total time for handle_event", total_time);
+
+    Some(Message::Binary(response_data))
+}
+
 fn init_kas_keys(key_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let pem_content = std::fs::read_to_string(key_path)?;
     let ec_pem_contents = pem_content.as_bytes();
@@ -740,6 +797,30 @@ fn custom_ecdh(
     Ok(shared_secret)
 }
 
+struct ServerState {
+    settings: ServerSettings,
+    redis_client: RedisClient,
+}
+
+impl ServerState {
+    fn new(settings: ServerSettings) -> Result<Self, redis::RedisError> {
+        info!("Attempting to connect to Redis at {}", settings.redis_url);
+        match RedisClient::open(settings.redis_url.clone()) {
+            Ok(client) => {
+                info!("Successfully connected to Redis server");
+                Ok(ServerState {
+                    settings,
+                    redis_client: client,
+                })
+            }
+            Err(e) => {
+                error!("Failed to connect to Redis server: {}", e);
+                Err(e)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 struct ServerSettings {
     port: u16,
@@ -750,6 +831,7 @@ struct ServerSettings {
     enable_timing_logs: bool,
     nats_url: String,
     nats_subject: String,
+    redis_url: String,
 }
 
 fn log_timing(settings: &ServerSettings, message: &str, duration: std::time::Duration) {
@@ -792,6 +874,7 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
             .unwrap_or(false),
         nats_url: env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string()),
         nats_subject: env::var("NATS_SUBJECT").unwrap_or_else(|_| "nanotdf.messages".to_string()),
+        redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string()),
     })
 }
 
