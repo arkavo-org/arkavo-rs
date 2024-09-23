@@ -18,7 +18,13 @@ Implementation of KAS from [OpenTDF specification](https://github.com/opentdf/sp
 - Redis
 
 ```bash
-brew install nats-server redis
+brew install nats-server redis flatbuffers
+```
+
+### Compile Flatbuffers (optional)
+
+```shell
+flatc --binary --rust idl/event.fbs
 ```
 
 ### Installation

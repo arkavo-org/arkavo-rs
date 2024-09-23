@@ -1,4 +1,5 @@
 mod contracts;
+mod schemas;
 
 use std::env;
 use std::pin::Pin;
@@ -8,6 +9,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use crate::contracts::contract_simple_abac;
+use crate::schemas::event_generated::arkavo::UserEvent;
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::KeyInit;
 use aes_gcm::aead::{Aead, Key};
@@ -15,6 +17,7 @@ use aes_gcm::Aes256Gcm;
 use async_nats::Message as NatsMessage;
 use async_nats::{Client as NatsClient, PublishError};
 use elliptic_curve::point::AffineCoordinates;
+use flatbuffers::root;
 use futures_util::{SinkExt, StreamExt};
 use hkdf::Hkdf;
 use jsonwebtoken::{decode, DecodingKey, Validation};
@@ -690,6 +693,26 @@ async fn handle_event(
     payload: &[u8],
 ) -> Option<Message> {
     let start_time = Instant::now();
+
+    // Deserialize the payload into a UserAction object
+    if let Ok(user_action) = root::<UserEvent>(payload) {
+        // Access fields from the deserialized UserAction object
+        let source_type = user_action.source_type();
+        let target_type = user_action.target_type();
+        let source_public_id = user_action.source_id();
+        let target_public_id = user_action.target_id();
+        let timestamp = user_action.timestamp();
+        let status = user_action.status();
+
+        println!("Source Type: {:?}", source_type);
+        println!("Target Type: {:?}", target_type);
+        println!("Source Public ID: {:?}", source_public_id);
+        println!("Target Public ID: {:?}", target_public_id);
+        println!("Timestamp: {:?}", timestamp);
+        println!("Status: {:?}", status);
+        // Return the created message
+        return Some(Message::Text(status.0.to_string()))
+    }
 
     // Parse the event ID from the payload
     let event_id = match std::str::from_utf8(payload) {
