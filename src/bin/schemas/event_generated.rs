@@ -6,7 +6,7 @@ extern crate flatbuffers;
 
 #[allow(unused_imports, dead_code)]
 pub mod arkavo {
-  extern crate flatbuffers;
+    extern crate flatbuffers;
 
     #[deprecated(
         since = "2.0.0",
@@ -106,8 +106,8 @@ pub mod arkavo {
     impl flatbuffers::Verifiable for ActionType {
         #[inline]
         fn run_verifier(
-          v: &mut flatbuffers::Verifier,
-          pos: usize,
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             i8::run_verifier(v, pos)
@@ -209,8 +209,8 @@ pub mod arkavo {
     impl flatbuffers::Verifiable for ActionStatus {
         #[inline]
         fn run_verifier(
-          v: &mut flatbuffers::Verifier,
-          pos: usize,
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             i8::run_verifier(v, pos)
@@ -299,8 +299,8 @@ pub mod arkavo {
     impl flatbuffers::Verifiable for EntityType {
         #[inline]
         fn run_verifier(
-          v: &mut flatbuffers::Verifier,
-          pos: usize,
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             i8::run_verifier(v, pos)
@@ -339,8 +339,8 @@ pub mod arkavo {
             'mut_bldr,
             A: flatbuffers::Allocator + 'bldr,
         >(
-          _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-          args: &'args EventArgs,
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args EventArgs,
         ) -> flatbuffers::WIPOffset<Event<'bldr>> {
             let mut builder = EventBuilder::new(_fbb);
             builder.add_action_type(args.action_type);
@@ -363,10 +363,10 @@ pub mod arkavo {
     impl flatbuffers::Verifiable for Event<'_> {
         #[inline]
         fn run_verifier(
-          v: &mut flatbuffers::Verifier,
-          pos: usize,
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-          v.visit_table(pos)?
+            v.visit_table(pos)?
                 .visit_field::<ActionType>("action_type", Self::VT_ACTION_TYPE, false)?
                 .finish();
             Ok(())
@@ -452,8 +452,8 @@ pub mod arkavo {
             'mut_bldr,
             A: flatbuffers::Allocator + 'bldr,
         >(
-          _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-          args: &'args UserEventArgs<'args>,
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args UserEventArgs<'args>,
         ) -> flatbuffers::WIPOffset<UserEvent<'bldr>> {
             let mut builder = UserEventBuilder::new(_fbb);
             builder.add_timestamp(args.timestamp);
@@ -544,10 +544,10 @@ pub mod arkavo {
     impl flatbuffers::Verifiable for UserEvent<'_> {
         #[inline]
         fn run_verifier(
-          v: &mut flatbuffers::Verifier,
-          pos: usize,
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-          v.visit_table(pos)?
+            v.visit_table(pos)?
                 .visit_field::<EntityType>("source_type", Self::VT_SOURCE_TYPE, false)?
                 .visit_field::<EntityType>("target_type", Self::VT_TARGET_TYPE, false)?
                 .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(

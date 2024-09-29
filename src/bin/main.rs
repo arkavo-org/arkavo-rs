@@ -398,12 +398,20 @@ async fn handle_binary_message(
     match message_type {
         Some(MessageType::PublicKey) => handle_public_key(connection_state, payload).await, // incoming
         Some(MessageType::KasPublicKey) => handle_kas_public_key(payload).await, // outgoing
-        Some(MessageType::Rewrap) => handle_rewrap(connection_state, payload, &server_state.settings).await, // incoming
-        Some(MessageType::RewrappedKey) => None, // outgoing
+        Some(MessageType::Rewrap) => {
+            handle_rewrap(connection_state, payload, &server_state.settings).await
+        } // incoming
+        Some(MessageType::RewrappedKey) => None,                                 // outgoing
         Some(MessageType::Nats) => {
-            handle_nats_publish(connection_state, payload, &server_state.settings, nats_connection).await
+            handle_nats_publish(
+                connection_state,
+                payload,
+                &server_state.settings,
+                nats_connection,
+            )
+            .await
         } // internal
-        Some(MessageType::Event) => handle_event(server_state, payload).await, // embedded
+        Some(MessageType::Event) => handle_event(server_state, payload).await,   // embedded
         None => {
             println!("Unknown message type: {:?}", message_type);
             None
@@ -688,10 +696,7 @@ async fn handle_nats_message(
     Ok(())
 }
 
-async fn handle_event(
-    server_state: &Arc<ServerState>,
-    payload: &[u8],
-) -> Option<Message> {
+async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option<Message> {
     let start_time = Instant::now();
 
     // Deserialize the payload into a UserAction object
@@ -711,7 +716,7 @@ async fn handle_event(
         println!("Timestamp: {:?}", timestamp);
         println!("Status: {:?}", status);
         // Return the created message
-        return Some(Message::Text(status.0.to_string()))
+        return Some(Message::Text(status.0.to_string()));
     }
 
     // Parse the event ID from the payload
@@ -724,7 +729,11 @@ async fn handle_event(
     };
 
     // Retrieve the event object from Redis
-    let mut redis_conn = match server_state.redis_client.get_multiplexed_async_connection().await {
+    let mut redis_conn = match server_state
+        .redis_client
+        .get_multiplexed_async_connection()
+        .await
+    {
         Ok(conn) => conn,
         Err(e) => {
             error!("Failed to connect to Redis: {}", e);
@@ -757,7 +766,11 @@ async fn handle_event(
     };
 
     let total_time = start_time.elapsed();
-    log_timing(&server_state.settings, "Total time for handle_event", total_time);
+    log_timing(
+        &server_state.settings,
+        "Total time for handle_event",
+        total_time,
+    );
 
     Some(Message::Binary(response_data))
 }
