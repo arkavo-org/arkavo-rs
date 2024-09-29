@@ -9,7 +9,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use crate::contracts::contract_simple_abac;
-use crate::schemas::event_generated::arkavo::UserEvent;
+use crate::schemas::event_generated::arkavo::{Event, EventData};
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::KeyInit;
 use aes_gcm::aead::{Aead, Key};
@@ -698,57 +698,98 @@ async fn handle_nats_message(
 
 async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option<Message> {
     let start_time = Instant::now();
-
-    // Deserialize the payload into a UserAction object
-    if let Ok(user_action) = root::<UserEvent>(payload) {
-        // Access fields from the deserialized UserAction object
-        let source_type = user_action.source_type();
-        let target_type = user_action.target_type();
-        let source_public_id = user_action.source_id();
-        let target_public_id = user_action.target_id();
-        let timestamp = user_action.timestamp();
-        let status = user_action.status();
-
-        println!("Source Type: {:?}", source_type);
-        println!("Target Type: {:?}", target_type);
-        println!("Source Public ID: {:?}", source_public_id);
-        println!("Target Public ID: {:?}", target_public_id);
-        println!("Timestamp: {:?}", timestamp);
-        println!("Status: {:?}", status);
-        // Return the created message
-        return Some(Message::Text(status.0.to_string()));
+    let mut event_data: Option<String> = None;
+    if let Ok(event) = root::<Event>(payload) {
+        println!("Event Action: {:?}", event.action());
+        println!("Event Timestamp: {:?}", event.timestamp());
+        println!("Event Status: {:?}", event.status());
+        println!("Event Data Type: {:?}", event.data_type());
+        // redis connection
+        let mut redis_conn = match server_state
+            .redis_client
+            .get_multiplexed_async_connection()
+            .await
+        {
+            Ok(conn) => conn,
+            Err(e) => {
+                error!("Failed to connect to Redis: {}", e);
+                return None;
+            }
+        };
+        // Deserialize the event data based on its type
+        match event.data_type() {
+            EventData::UserEvent => {
+                if let Some(user_event) = event.data_as_user_event() {
+                    println!("User Event:");
+                    println!("  Source Type: {:?}", user_event.source_type());
+                    println!("  Target Type: {:?}", user_event.target_type());
+                    println!("  Source ID: {:?}", user_event.source_id());
+                    println!("  Target ID: {:?}", user_event.target_id());
+                    let target_id = user_event.target_id().unwrap();
+                    // Retrieve the event object from Redis
+                    event_data = match redis_conn.get(target_id.bytes()).await {
+                        Ok(data) => data,
+                        Err(e) => {
+                            error!("Failed to retrieve event from Redis: {}", e);
+                            return None;
+                        }
+                    };
+                }
+            },
+            EventData::CacheEvent => {
+                if let Some(cache_event) = event.data_as_cache_event() {
+                    println!("Cache Event:");
+                    println!("  Target ID: {:?}", cache_event.target_id());
+                    println!("  Target Payload: {:?}", cache_event.target_payload());
+                    println!("  TTL: {:?}", cache_event.ttl());
+                    println!("  One Time Access: {:?}", cache_event.one_time_access());
+                    // Cache the object in Redis with specified TTL
+                    let ttl = cache_event.ttl();
+                    if ttl > 0 {
+                        if let (Some(target_id), Some(target_payload)) = (cache_event.target_id(), cache_event.target_payload()) {
+                            redis_conn
+                                .set_ex(
+                                    target_id.bytes(),
+                                    target_payload.bytes(),
+                                    ttl as u64,
+                                )
+                                .await
+                                .map_err(|e| {
+                                    error!("Failed to cache data in Redis: {}", e);
+                                })
+                                .ok()?;
+                        } else {
+                            error!("target_id or target_payload was None while caching with TTL");
+                        }
+                    } else {
+                        if let (Some(target_id), Some(target_payload)) = (cache_event.target_id(), cache_event.target_payload()) {
+                            redis_conn
+                                .set(
+                                    target_id.bytes(),
+                                    target_payload.bytes(),
+                                )
+                                .await
+                                .map_err(|e| {
+                                    error!("Failed to cache data in Redis: {}", e);
+                                })
+                                .ok()?;
+                        } else {
+                            error!("target_id or target_payload was None while caching without TTL");
+                        }
+                    }
+                }
+            },
+            EventData::NONE => {
+                println!("No event data");
+            },
+            _ => {
+                println!("Unknown event data type: {:?}", event.data_type());
+            },
+        }
+    } else {
+        error!("Failed to parse Event from payload");
+        return None;
     }
-
-    // Parse the event ID from the payload
-    let event_id = match std::str::from_utf8(payload) {
-        Ok(id) => id,
-        Err(e) => {
-            error!("Failed to parse event ID: {}", e);
-            return None;
-        }
-    };
-
-    // Retrieve the event object from Redis
-    let mut redis_conn = match server_state
-        .redis_client
-        .get_multiplexed_async_connection()
-        .await
-    {
-        Ok(conn) => conn,
-        Err(e) => {
-            error!("Failed to connect to Redis: {}", e);
-            return None;
-        }
-    };
-
-    let event_data: Option<String> = match redis_conn.get(event_id).await {
-        Ok(data) => data,
-        Err(e) => {
-            error!("Failed to retrieve event from Redis: {}", e);
-            return None;
-        }
-    };
-
     let response_data = match event_data {
         Some(data) => {
             let mut response = Vec::new();

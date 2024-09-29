@@ -7,49 +7,59 @@ extern crate flatbuffers;
 #[allow(unused_imports, dead_code)]
 pub mod arkavo {
     extern crate flatbuffers;
+    use self::flatbuffers::Follow;
 
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MIN_ACTION_TYPE: i8 = 0;
+    pub const ENUM_MIN_ACTION: i8 = 0;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_ACTION_TYPE: i8 = 4;
+    pub const ENUM_MAX_ACTION: i8 = 7;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_ACTION_TYPE: [ActionType; 5] = [
-        ActionType::join,
-        ActionType::apply,
-        ActionType::approve,
-        ActionType::leave,
-        ActionType::sendMessage,
+    pub const ENUM_VALUES_ACTION: [Action; 8] = [
+        Action::join,
+        Action::apply,
+        Action::approve,
+        Action::leave,
+        Action::cache,
+        Action::store,
+        Action::share,
+        Action::invite,
     ];
 
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
     #[repr(transparent)]
-    pub struct ActionType(pub i8);
+    pub struct Action(pub i8);
     #[allow(non_upper_case_globals)]
-    impl ActionType {
+    impl Action {
         pub const join: Self = Self(0);
         pub const apply: Self = Self(1);
         pub const approve: Self = Self(2);
         pub const leave: Self = Self(3);
-        pub const sendMessage: Self = Self(4);
+        pub const cache: Self = Self(4);
+        pub const store: Self = Self(5);
+        pub const share: Self = Self(6);
+        pub const invite: Self = Self(7);
 
         pub const ENUM_MIN: i8 = 0;
-        pub const ENUM_MAX: i8 = 4;
+        pub const ENUM_MAX: i8 = 7;
         pub const ENUM_VALUES: &'static [Self] = &[
             Self::join,
             Self::apply,
             Self::approve,
             Self::leave,
-            Self::sendMessage,
+            Self::cache,
+            Self::store,
+            Self::share,
+            Self::invite,
         ];
         /// Returns the variant's name or "" if unknown.
         pub fn variant_name(self) -> Option<&'static str> {
@@ -58,12 +68,15 @@ pub mod arkavo {
                 Self::apply => Some("apply"),
                 Self::approve => Some("approve"),
                 Self::leave => Some("leave"),
-                Self::sendMessage => Some("sendMessage"),
+                Self::cache => Some("cache"),
+                Self::store => Some("store"),
+                Self::share => Some("share"),
+                Self::invite => Some("invite"),
                 _ => None,
             }
         }
     }
-    impl core::fmt::Debug for ActionType {
+    impl core::fmt::Debug for Action {
         fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
             if let Some(name) = self.variant_name() {
                 f.write_str(name)
@@ -72,7 +85,7 @@ pub mod arkavo {
             }
         }
     }
-    impl<'a> flatbuffers::Follow<'a> for ActionType {
+    impl<'a> flatbuffers::Follow<'a> for Action {
         type Inner = Self;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
@@ -81,15 +94,15 @@ pub mod arkavo {
         }
     }
 
-    impl flatbuffers::Push for ActionType {
-        type Output = ActionType;
+    impl flatbuffers::Push for Action {
+        type Output = Action;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
             flatbuffers::emplace_scalar::<i8>(dst, self.0);
         }
     }
 
-    impl flatbuffers::EndianScalar for ActionType {
+    impl flatbuffers::EndianScalar for Action {
         type Scalar = i8;
         #[inline]
         fn to_little_endian(self) -> i8 {
@@ -103,7 +116,7 @@ pub mod arkavo {
         }
     }
 
-    impl flatbuffers::Verifiable for ActionType {
+    impl<'a> flatbuffers::Verifiable for Action {
         #[inline]
         fn run_verifier(
             v: &mut flatbuffers::Verifier,
@@ -114,7 +127,7 @@ pub mod arkavo {
         }
     }
 
-    impl flatbuffers::SimpleToVerifyInSlice for ActionType {}
+    impl flatbuffers::SimpleToVerifyInSlice for Action {}
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
@@ -206,7 +219,7 @@ pub mod arkavo {
         }
     }
 
-    impl flatbuffers::Verifiable for ActionStatus {
+    impl<'a> flatbuffers::Verifiable for ActionStatus {
         #[inline]
         fn run_verifier(
             v: &mut flatbuffers::Verifier,
@@ -296,7 +309,7 @@ pub mod arkavo {
         }
     }
 
-    impl flatbuffers::Verifiable for EntityType {
+    impl<'a> flatbuffers::Verifiable for EntityType {
         #[inline]
         fn run_verifier(
             v: &mut flatbuffers::Verifier,
@@ -308,114 +321,100 @@ pub mod arkavo {
     }
 
     impl flatbuffers::SimpleToVerifyInSlice for EntityType {}
-    pub enum EventOffset {}
-    #[derive(Copy, Clone, PartialEq)]
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MIN_EVENT_DATA: u8 = 0;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MAX_EVENT_DATA: u8 = 2;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    #[allow(non_camel_case_types)]
+    pub const ENUM_VALUES_EVENT_DATA: [EventData; 3] =
+        [EventData::NONE, EventData::UserEvent, EventData::CacheEvent];
 
-    pub struct Event<'a> {
-        pub _tab: flatbuffers::Table<'a>,
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    #[repr(transparent)]
+    pub struct EventData(pub u8);
+    #[allow(non_upper_case_globals)]
+    impl EventData {
+        pub const NONE: Self = Self(0);
+        pub const UserEvent: Self = Self(1);
+        pub const CacheEvent: Self = Self(2);
+
+        pub const ENUM_MIN: u8 = 0;
+        pub const ENUM_MAX: u8 = 2;
+        pub const ENUM_VALUES: &'static [Self] = &[Self::NONE, Self::UserEvent, Self::CacheEvent];
+        /// Returns the variant's name or "" if unknown.
+        pub fn variant_name(self) -> Option<&'static str> {
+            match self {
+                Self::NONE => Some("NONE"),
+                Self::UserEvent => Some("UserEvent"),
+                Self::CacheEvent => Some("CacheEvent"),
+                _ => None,
+            }
+        }
     }
-
-    impl<'a> flatbuffers::Follow<'a> for Event<'a> {
-        type Inner = Event<'a>;
+    impl core::fmt::Debug for EventData {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            if let Some(name) = self.variant_name() {
+                f.write_str(name)
+            } else {
+                f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+            }
+        }
+    }
+    impl<'a> flatbuffers::Follow<'a> for EventData {
+        type Inner = Self;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self {
-                _tab: flatbuffers::Table::new(buf, loc),
-            }
+            let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
+            Self(b)
         }
     }
 
-    impl<'a> Event<'a> {
-        pub const VT_ACTION_TYPE: flatbuffers::VOffsetT = 4;
-
+    impl flatbuffers::Push for EventData {
+        type Output = EventData;
         #[inline]
-        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
-            Event { _tab: table }
-        }
-        #[allow(unused_mut)]
-        pub fn create<
-            'bldr: 'args,
-            'args: 'mut_bldr,
-            'mut_bldr,
-            A: flatbuffers::Allocator + 'bldr,
-        >(
-            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-            args: &'args EventArgs,
-        ) -> flatbuffers::WIPOffset<Event<'bldr>> {
-            let mut builder = EventBuilder::new(_fbb);
-            builder.add_action_type(args.action_type);
-            builder.finish()
-        }
-
-        #[inline]
-        pub fn action_type(&self) -> ActionType {
-            // Safety:
-            // Created from valid Table for this object
-            // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<ActionType>(Event::VT_ACTION_TYPE, Some(ActionType::join))
-                    .unwrap()
-            }
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            flatbuffers::emplace_scalar::<u8>(dst, self.0);
         }
     }
 
-    impl flatbuffers::Verifiable for Event<'_> {
+    impl flatbuffers::EndianScalar for EventData {
+        type Scalar = u8;
+        #[inline]
+        fn to_little_endian(self) -> u8 {
+            self.0.to_le()
+        }
+        #[inline]
+        #[allow(clippy::wrong_self_convention)]
+        fn from_little_endian(v: u8) -> Self {
+            let b = u8::from_le(v);
+            Self(b)
+        }
+    }
+
+    impl<'a> flatbuffers::Verifiable for EventData {
         #[inline]
         fn run_verifier(
             v: &mut flatbuffers::Verifier,
             pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-            v.visit_table(pos)?
-                .visit_field::<ActionType>("action_type", Self::VT_ACTION_TYPE, false)?
-                .finish();
-            Ok(())
-        }
-    }
-    pub struct EventArgs {
-        pub action_type: ActionType,
-    }
-    impl Default for EventArgs {
-        #[inline]
-        fn default() -> Self {
-            EventArgs {
-                action_type: ActionType::join,
-            }
+            use self::flatbuffers::Verifiable;
+            u8::run_verifier(v, pos)
         }
     }
 
-    pub struct EventBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
-        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
-    }
-    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> EventBuilder<'a, 'b, A> {
-        #[inline]
-        pub fn add_action_type(&mut self, action_type: ActionType) {
-            self.fbb_
-                .push_slot::<ActionType>(Event::VT_ACTION_TYPE, action_type, ActionType::join);
-        }
-        #[inline]
-        pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> EventBuilder<'a, 'b, A> {
-            let start = _fbb.start_table();
-            EventBuilder {
-                fbb_: _fbb,
-                start_: start,
-            }
-        }
-        #[inline]
-        pub fn finish(self) -> flatbuffers::WIPOffset<Event<'a>> {
-            let o = self.fbb_.end_table(self.start_);
-            flatbuffers::WIPOffset::new(o.value())
-        }
-    }
+    impl flatbuffers::SimpleToVerifyInSlice for EventData {}
+    pub struct EventDataUnionTableOffset {}
 
-    impl core::fmt::Debug for Event<'_> {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            let mut ds = f.debug_struct("Event");
-            ds.field("action_type", &self.action_type());
-            ds.finish()
-        }
-    }
     pub enum UserEventOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -438,8 +437,6 @@ pub mod arkavo {
         pub const VT_TARGET_TYPE: flatbuffers::VOffsetT = 6;
         pub const VT_SOURCE_ID: flatbuffers::VOffsetT = 8;
         pub const VT_TARGET_ID: flatbuffers::VOffsetT = 10;
-        pub const VT_TIMESTAMP: flatbuffers::VOffsetT = 12;
-        pub const VT_STATUS: flatbuffers::VOffsetT = 14;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -456,14 +453,12 @@ pub mod arkavo {
             args: &'args UserEventArgs<'args>,
         ) -> flatbuffers::WIPOffset<UserEvent<'bldr>> {
             let mut builder = UserEventBuilder::new(_fbb);
-            builder.add_timestamp(args.timestamp);
             if let Some(x) = args.target_id {
                 builder.add_target_id(x);
             }
             if let Some(x) = args.source_id {
                 builder.add_source_id(x);
             }
-            builder.add_status(args.status);
             builder.add_target_type(args.target_type);
             builder.add_source_type(args.source_type);
             builder.finish()
@@ -517,28 +512,6 @@ pub mod arkavo {
                     )
             }
         }
-        #[inline]
-        pub fn timestamp(&self) -> u64 {
-            // Safety:
-            // Created from valid Table for this object
-            // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<u64>(UserEvent::VT_TIMESTAMP, Some(0))
-                    .unwrap()
-            }
-        }
-        #[inline]
-        pub fn status(&self) -> ActionStatus {
-            // Safety:
-            // Created from valid Table for this object
-            // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<ActionStatus>(UserEvent::VT_STATUS, Some(ActionStatus::preparing))
-                    .unwrap()
-            }
-        }
     }
 
     impl flatbuffers::Verifiable for UserEvent<'_> {
@@ -560,8 +533,6 @@ pub mod arkavo {
                     Self::VT_TARGET_ID,
                     false,
                 )?
-                .visit_field::<u64>("timestamp", Self::VT_TIMESTAMP, false)?
-                .visit_field::<ActionStatus>("status", Self::VT_STATUS, false)?
                 .finish();
             Ok(())
         }
@@ -571,8 +542,6 @@ pub mod arkavo {
         pub target_type: EntityType,
         pub source_id: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
         pub target_id: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
-        pub timestamp: u64,
-        pub status: ActionStatus,
     }
     impl<'a> Default for UserEventArgs<'a> {
         #[inline]
@@ -582,8 +551,6 @@ pub mod arkavo {
                 target_type: EntityType::stream_profile,
                 source_id: None,
                 target_id: None,
-                timestamp: 0,
-                status: ActionStatus::preparing,
             }
         }
     }
@@ -626,19 +593,6 @@ pub mod arkavo {
                 .push_slot_always::<flatbuffers::WIPOffset<_>>(UserEvent::VT_TARGET_ID, target_id);
         }
         #[inline]
-        pub fn add_timestamp(&mut self, timestamp: u64) {
-            self.fbb_
-                .push_slot::<u64>(UserEvent::VT_TIMESTAMP, timestamp, 0);
-        }
-        #[inline]
-        pub fn add_status(&mut self, status: ActionStatus) {
-            self.fbb_.push_slot::<ActionStatus>(
-                UserEvent::VT_STATUS,
-                status,
-                ActionStatus::preparing,
-            );
-        }
-        #[inline]
         pub fn new(
             _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> UserEventBuilder<'a, 'b, A> {
@@ -662,8 +616,469 @@ pub mod arkavo {
             ds.field("target_type", &self.target_type());
             ds.field("source_id", &self.source_id());
             ds.field("target_id", &self.target_id());
+            ds.finish()
+        }
+    }
+    pub enum CacheEventOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct CacheEvent<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for CacheEvent<'a> {
+        type Inner = CacheEvent<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
+        }
+    }
+
+    impl<'a> CacheEvent<'a> {
+        pub const VT_TARGET_ID: flatbuffers::VOffsetT = 4;
+        pub const VT_TARGET_PAYLOAD: flatbuffers::VOffsetT = 6;
+        pub const VT_TTL: flatbuffers::VOffsetT = 8;
+        pub const VT_ONE_TIME_ACCESS: flatbuffers::VOffsetT = 10;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            CacheEvent { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args CacheEventArgs<'args>,
+        ) -> flatbuffers::WIPOffset<CacheEvent<'bldr>> {
+            let mut builder = CacheEventBuilder::new(_fbb);
+            builder.add_ttl(args.ttl);
+            if let Some(x) = args.target_payload {
+                builder.add_target_payload(x);
+            }
+            if let Some(x) = args.target_id {
+                builder.add_target_id(x);
+            }
+            builder.add_one_time_access(args.one_time_access);
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn target_id(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        CacheEvent::VT_TARGET_ID,
+                        None,
+                    )
+            }
+        }
+        #[inline]
+        pub fn target_payload(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        CacheEvent::VT_TARGET_PAYLOAD,
+                        None,
+                    )
+            }
+        }
+        #[inline]
+        pub fn ttl(&self) -> u32 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<u32>(CacheEvent::VT_TTL, Some(0)).unwrap() }
+        }
+        #[inline]
+        pub fn one_time_access(&self) -> bool {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<bool>(CacheEvent::VT_ONE_TIME_ACCESS, Some(false))
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for CacheEvent<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "target_id",
+                    Self::VT_TARGET_ID,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "target_payload",
+                    Self::VT_TARGET_PAYLOAD,
+                    false,
+                )?
+                .visit_field::<u32>("ttl", Self::VT_TTL, false)?
+                .visit_field::<bool>("one_time_access", Self::VT_ONE_TIME_ACCESS, false)?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct CacheEventArgs<'a> {
+        pub target_id: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+        pub target_payload: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+        pub ttl: u32,
+        pub one_time_access: bool,
+    }
+    impl<'a> Default for CacheEventArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            CacheEventArgs {
+                target_id: None,
+                target_payload: None,
+                ttl: 0,
+                one_time_access: false,
+            }
+        }
+    }
+
+    pub struct CacheEventBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> CacheEventBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_target_id(
+            &mut self,
+            target_id: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(CacheEvent::VT_TARGET_ID, target_id);
+        }
+        #[inline]
+        pub fn add_target_payload(
+            &mut self,
+            target_payload: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                CacheEvent::VT_TARGET_PAYLOAD,
+                target_payload,
+            );
+        }
+        #[inline]
+        pub fn add_ttl(&mut self, ttl: u32) {
+            self.fbb_.push_slot::<u32>(CacheEvent::VT_TTL, ttl, 0);
+        }
+        #[inline]
+        pub fn add_one_time_access(&mut self, one_time_access: bool) {
+            self.fbb_
+                .push_slot::<bool>(CacheEvent::VT_ONE_TIME_ACCESS, one_time_access, false);
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> CacheEventBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            CacheEventBuilder {
+                fbb_: _fbb,
+                start_: start,
+            }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<CacheEvent<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for CacheEvent<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("CacheEvent");
+            ds.field("target_id", &self.target_id());
+            ds.field("target_payload", &self.target_payload());
+            ds.field("ttl", &self.ttl());
+            ds.field("one_time_access", &self.one_time_access());
+            ds.finish()
+        }
+    }
+    pub enum EventOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct Event<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for Event<'a> {
+        type Inner = Event<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
+        }
+    }
+
+    impl<'a> Event<'a> {
+        pub const VT_ACTION: flatbuffers::VOffsetT = 4;
+        pub const VT_TIMESTAMP: flatbuffers::VOffsetT = 6;
+        pub const VT_STATUS: flatbuffers::VOffsetT = 8;
+        pub const VT_DATA_TYPE: flatbuffers::VOffsetT = 10;
+        pub const VT_DATA: flatbuffers::VOffsetT = 12;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            Event { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args EventArgs,
+        ) -> flatbuffers::WIPOffset<Event<'bldr>> {
+            let mut builder = EventBuilder::new(_fbb);
+            builder.add_timestamp(args.timestamp);
+            if let Some(x) = args.data {
+                builder.add_data(x);
+            }
+            builder.add_data_type(args.data_type);
+            builder.add_status(args.status);
+            builder.add_action(args.action);
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn action(&self) -> Action {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<Action>(Event::VT_ACTION, Some(Action::join))
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn timestamp(&self) -> u64 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<u64>(Event::VT_TIMESTAMP, Some(0)).unwrap() }
+        }
+        #[inline]
+        pub fn status(&self) -> ActionStatus {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<ActionStatus>(Event::VT_STATUS, Some(ActionStatus::preparing))
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn data_type(&self) -> EventData {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<EventData>(Event::VT_DATA_TYPE, Some(EventData::NONE))
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn data(&self) -> Option<flatbuffers::Table<'a>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Table<'a>>>(
+                        Event::VT_DATA,
+                        None,
+                    )
+            }
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn data_as_user_event(&self) -> Option<UserEvent<'a>> {
+            if self.data_type() == EventData::UserEvent {
+                self.data().map(|t| {
+                    // Safety:
+                    // Created from a valid Table for this object
+                    // Which contains a valid union in this slot
+                    unsafe { UserEvent::init_from_table(t) }
+                })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn data_as_cache_event(&self) -> Option<CacheEvent<'a>> {
+            if self.data_type() == EventData::CacheEvent {
+                self.data().map(|t| {
+                    // Safety:
+                    // Created from a valid Table for this object
+                    // Which contains a valid union in this slot
+                    unsafe { CacheEvent::init_from_table(t) }
+                })
+            } else {
+                None
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for Event<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            v.visit_table(pos)?
+                .visit_field::<Action>("action", Self::VT_ACTION, false)?
+                .visit_field::<u64>("timestamp", Self::VT_TIMESTAMP, false)?
+                .visit_field::<ActionStatus>("status", Self::VT_STATUS, false)?
+                .visit_union::<EventData, _>(
+                    "data_type",
+                    Self::VT_DATA_TYPE,
+                    "data",
+                    Self::VT_DATA,
+                    false,
+                    |key, v, pos| match key {
+                        EventData::UserEvent => v
+                            .verify_union_variant::<flatbuffers::ForwardsUOffset<UserEvent>>(
+                                "EventData::UserEvent",
+                                pos,
+                            ),
+                        EventData::CacheEvent => v
+                            .verify_union_variant::<flatbuffers::ForwardsUOffset<CacheEvent>>(
+                                "EventData::CacheEvent",
+                                pos,
+                            ),
+                        _ => Ok(()),
+                    },
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct EventArgs {
+        pub action: Action,
+        pub timestamp: u64,
+        pub status: ActionStatus,
+        pub data_type: EventData,
+        pub data: Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
+    }
+    impl<'a> Default for EventArgs {
+        #[inline]
+        fn default() -> Self {
+            EventArgs {
+                action: Action::join,
+                timestamp: 0,
+                status: ActionStatus::preparing,
+                data_type: EventData::NONE,
+                data: None,
+            }
+        }
+    }
+
+    pub struct EventBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> EventBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_action(&mut self, action: Action) {
+            self.fbb_
+                .push_slot::<Action>(Event::VT_ACTION, action, Action::join);
+        }
+        #[inline]
+        pub fn add_timestamp(&mut self, timestamp: u64) {
+            self.fbb_
+                .push_slot::<u64>(Event::VT_TIMESTAMP, timestamp, 0);
+        }
+        #[inline]
+        pub fn add_status(&mut self, status: ActionStatus) {
+            self.fbb_
+                .push_slot::<ActionStatus>(Event::VT_STATUS, status, ActionStatus::preparing);
+        }
+        #[inline]
+        pub fn add_data_type(&mut self, data_type: EventData) {
+            self.fbb_
+                .push_slot::<EventData>(Event::VT_DATA_TYPE, data_type, EventData::NONE);
+        }
+        #[inline]
+        pub fn add_data(&mut self, data: flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(Event::VT_DATA, data);
+        }
+        #[inline]
+        pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> EventBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            EventBuilder {
+                fbb_: _fbb,
+                start_: start,
+            }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<Event<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for Event<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("Event");
+            ds.field("action", &self.action());
             ds.field("timestamp", &self.timestamp());
             ds.field("status", &self.status());
+            ds.field("data_type", &self.data_type());
+            match self.data_type() {
+                EventData::UserEvent => {
+                    if let Some(x) = self.data_as_user_event() {
+                        ds.field("data", &x)
+                    } else {
+                        ds.field(
+                            "data",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
+                    }
+                }
+                EventData::CacheEvent => {
+                    if let Some(x) = self.data_as_cache_event() {
+                        ds.field("data", &x)
+                    } else {
+                        ds.field(
+                            "data",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
+                    }
+                }
+                _ => {
+                    let x: Option<()> = None;
+                    ds.field("data", &x)
+                }
+            };
             ds.finish()
         }
     }
