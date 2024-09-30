@@ -413,7 +413,7 @@ async fn handle_binary_message(
         } // internal
         Some(MessageType::Event) => handle_event(server_state, payload).await,   // embedded
         None => {
-            println!("Unknown message type: {:?}", message_type);
+            // println!("Unknown message type: {:?}", message_type);
             None
         }
     }
@@ -698,7 +698,7 @@ async fn handle_nats_message(
 
 async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option<Message> {
     let start_time = Instant::now();
-    let mut event_data: Option<String> = None;
+    let mut event_data: Option<Vec<u8>> = None;
     if let Ok(event) = root::<Event>(payload) {
         println!("Event Action: {:?}", event.action());
         println!("Event Timestamp: {:?}", event.timestamp());
@@ -727,32 +727,40 @@ async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option
                     println!("  Target ID: {:?}", user_event.target_id());
                     let target_id = user_event.target_id().unwrap();
                     // Retrieve the event object from Redis
-                    event_data = match redis_conn.get(target_id.bytes()).await {
-                        Ok(data) => data,
+                    event_data = match redis_conn.get::<_, Vec<u8>>(target_id.bytes()).await {
+                        Ok(data) => {
+                            println!("  target_id: {:?}", target_id);
+                            println!("  data size: {} bytes", data.len());
+                            Some(data)
+                        }
                         Err(e) => {
                             error!("Failed to retrieve event from Redis: {}", e);
                             return None;
                         }
                     };
                 }
-            },
+            }
             EventData::CacheEvent => {
                 if let Some(cache_event) = event.data_as_cache_event() {
                     println!("Cache Event:");
                     println!("  Target ID: {:?}", cache_event.target_id());
                     println!("  Target Payload: {:?}", cache_event.target_payload());
+                    println!(
+                        "  Target Payload Size: {:?}",
+                        cache_event.target_payload()?.bytes().len()
+                    );
                     println!("  TTL: {:?}", cache_event.ttl());
                     println!("  One Time Access: {:?}", cache_event.one_time_access());
                     // Cache the object in Redis with specified TTL
                     let ttl = cache_event.ttl();
                     if ttl > 0 {
-                        if let (Some(target_id), Some(target_payload)) = (cache_event.target_id(), cache_event.target_payload()) {
+                        if let (Some(target_id), Some(target_payload)) =
+                            (cache_event.target_id(), cache_event.target_payload())
+                        {
+                            let target_id_bytes = target_id.bytes();
+                            let target_payload_bytes = target_payload.bytes();
                             redis_conn
-                                .set_ex(
-                                    target_id.bytes(),
-                                    target_payload.bytes(),
-                                    ttl as u64,
-                                )
+                                .set_ex(target_id_bytes, target_payload_bytes, ttl as u64)
                                 .await
                                 .map_err(|e| {
                                     error!("Failed to cache data in Redis: {}", e);
@@ -760,31 +768,36 @@ async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option
                                 .ok()?;
                         } else {
                             error!("target_id or target_payload was None while caching with TTL");
+                            return None;
                         }
                     } else {
-                        if let (Some(target_id), Some(target_payload)) = (cache_event.target_id(), cache_event.target_payload()) {
+                        if let (Some(target_id), Some(target_payload)) =
+                            (cache_event.target_id(), cache_event.target_payload())
+                        {
+                            let target_id_bytes = target_id.bytes();
+                            let target_payload_bytes = target_payload.bytes();
                             redis_conn
-                                .set(
-                                    target_id.bytes(),
-                                    target_payload.bytes(),
-                                )
+                                .set(target_id_bytes, target_payload_bytes)
                                 .await
                                 .map_err(|e| {
                                     error!("Failed to cache data in Redis: {}", e);
                                 })
                                 .ok()?;
                         } else {
-                            error!("target_id or target_payload was None while caching without TTL");
+                            error!(
+                                "target_id or target_payload was None while caching without TTL"
+                            );
                         }
                     }
+                    event_data = Some(cache_event.target_payload().unwrap().bytes().to_vec());
                 }
-            },
+            }
             EventData::NONE => {
                 println!("No event data");
-            },
+            }
             _ => {
                 println!("Unknown event data type: {:?}", event.data_type());
-            },
+            }
         }
     } else {
         error!("Failed to parse Event from payload");
@@ -794,7 +807,7 @@ async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option
         Some(data) => {
             let mut response = Vec::new();
             response.push(MessageType::Event as u8);
-            response.extend_from_slice(data.as_bytes());
+            response.extend_from_slice(&data);
             response
         }
         None => {
