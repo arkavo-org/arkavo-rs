@@ -1,13 +1,8 @@
 mod contracts;
-
-use std::env;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::RwLock;
-use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+mod schemas;
 
 use crate::contracts::contract_simple_abac;
+use crate::schemas::event_generated::arkavo::{Event, EventData};
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::KeyInit;
 use aes_gcm::aead::{Aead, Key};
@@ -15,17 +10,27 @@ use aes_gcm::Aes256Gcm;
 use async_nats::Message as NatsMessage;
 use async_nats::{Client as NatsClient, PublishError};
 use elliptic_curve::point::AffineCoordinates;
+use flatbuffers::root;
 use futures_util::{SinkExt, StreamExt};
 use hkdf::Hkdf;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use log::{error, info};
 use nanotdf::{BinaryParser, ProtocolEnum};
+use native_tls::{Identity, Protocol, TlsAcceptor as NativeTlsAcceptor};
 use once_cell::sync::OnceCell;
 use p256::ecdh::EphemeralSecret;
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use rand_core::{OsRng, RngCore};
+use redis::AsyncCommands;
+use redis::Client as RedisClient;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use std::env;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::RwLock;
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpListener;
@@ -92,7 +97,6 @@ impl NATSMessage {
     }
 }
 
-#[derive(Debug)]
 struct ConnectionState {
     salt_lock: RwLock<Option<Vec<u8>>>,
     shared_secret_lock: RwLock<Option<Vec<u8>>>,
@@ -118,6 +122,7 @@ enum MessageType {
     Rewrap = 0x03,
     RewrappedKey = 0x04,
     Nats = 0x05,
+    Event = 0x06,
 }
 
 impl MessageType {
@@ -128,6 +133,7 @@ impl MessageType {
             0x03 => Some(MessageType::Rewrap),
             0x04 => Some(MessageType::RewrappedKey),
             0x05 => Some(MessageType::Nats),
+            0x06 => Some(MessageType::Event),
             _ => None,
         }
     }
@@ -149,6 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load configuration
     let settings = load_config()?;
+    let server_state = Arc::new(ServerState::new(settings.clone())?);
     // Load and cache the apple-app-site-association.json file
     let apple_app_site_association = load_apple_app_site_association().await;
     // Initialize KAS keys
@@ -156,10 +163,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Set up TLS if not disabled
     let tls_acceptor = if settings.tls_enabled {
-        Some(TlsAcceptor::from(load_tls_config(
+        Some(load_tls_config(
             &settings.tls_cert_path,
             &settings.tls_key_path,
-        )?))
+        )?)
     } else {
         None
     };
@@ -194,7 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Accept connections
     while let Ok((stream, _)) = listener.accept().await {
         let tls_acceptor_clone = tls_acceptor.clone();
-        let settings_clone = settings.clone();
+        let server_state_clone = server_state.clone();
         let nats_connection_clone = nats_connection.clone();
         let apple_app_site_association_clone = apple_app_site_association.clone();
 
@@ -214,7 +221,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             handle_connection(
                 stream,
-                &settings_clone,
+                server_state_clone,
                 nats_connection_clone,
                 apple_app_site_association_clone,
             )
@@ -228,21 +235,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn load_tls_config(
     cert_path: &str,
     key_path: &str,
-) -> Result<native_tls::TlsAcceptor, Box<dyn std::error::Error>> {
+) -> Result<TlsAcceptor, Box<dyn std::error::Error>> {
     let cert = std::fs::read(cert_path)?;
     let key = std::fs::read(key_path)?;
 
-    let identity = native_tls::Identity::from_pkcs8(&cert, &key)?;
-    let acceptor = native_tls::TlsAcceptor::new(identity)?;
-
+    let identity = Identity::from_pkcs8(&cert, &key)?;
+    // Create native_tls TlsAcceptor with custom options
+    let mut builder = NativeTlsAcceptor::builder(identity);
+    // Set minimum TLS version to TLS 1.2
+    builder.min_protocol_version(Some(Protocol::Tlsv12));
+    // Build the native_tls acceptor
+    let native_acceptor = builder
+        .build()
+        .map_err(|e| format!("Failed to build TLS acceptor: {}", e))?;
+    // Convert to tokio_native_tls acceptor
+    let acceptor = TlsAcceptor::from(native_acceptor);
     Ok(acceptor)
 }
 
 async fn handle_websocket(
-    mut ws_stream: tokio_tungstenite::WebSocketStream<
-        impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-    >,
-    settings: &ServerSettings,
+    mut ws_stream: tokio_tungstenite::WebSocketStream<impl AsyncRead + AsyncWrite + Unpin>,
+    server_state: Arc<ServerState>,
     nats_connection: Arc<NatsConnection>,
 ) {
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
@@ -251,7 +264,7 @@ async fn handle_websocket(
     // Set up NATS subscription for this connection
     let nats_task = tokio::spawn(handle_nats_subscription(
         nats_connection.clone(),
-        settings.nats_subject.clone(),
+        server_state.settings.nats_subject.clone(),
         connection_state.clone(),
     ));
     // Handle incoming WebSocket messages
@@ -281,7 +294,7 @@ async fn handle_websocket(
                                     println!("Invalid JWT: {}", e);
                                 }
                             }
-                        } else if let Some(response) = handle_binary_message(&connection_state, msg.into_data(), settings, nats_connection.clone()).await {
+                        } else if let Some(response) = handle_binary_message(&connection_state, &server_state, msg.into_data(), nats_connection.clone()).await {
                             if ws_stream.send(response).await.is_err() {
                                 eprintln!("Failed to send response through WebSocket");
                                 break;
@@ -314,7 +327,7 @@ async fn handle_websocket(
 
 async fn handle_connection(
     stream: impl AsyncRead + AsyncWrite + Unpin,
-    settings: &ServerSettings,
+    server_state: Arc<ServerState>,
     nats_connection: Arc<NatsConnection>,
     apple_app_site_association: Arc<RwLock<String>>,
 ) {
@@ -353,7 +366,7 @@ async fn handle_connection(
         rewindable_stream.rewind();
         match tokio_tungstenite::accept_async(rewindable_stream).await {
             Ok(ws_stream) => {
-                handle_websocket(ws_stream, settings, nats_connection).await;
+                handle_websocket(ws_stream, server_state, nats_connection).await;
             }
             Err(e) => {
                 eprintln!("Failed to accept websocket: {}", e);
@@ -379,8 +392,8 @@ fn verify_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
 
 async fn handle_binary_message(
     connection_state: &Arc<ConnectionState>,
+    server_state: &Arc<ServerState>,
     data: Vec<u8>,
-    settings: &ServerSettings,
     nats_connection: Arc<NatsConnection>,
 ) -> Option<Message> {
     if data.is_empty() {
@@ -393,13 +406,22 @@ async fn handle_binary_message(
     match message_type {
         Some(MessageType::PublicKey) => handle_public_key(connection_state, payload).await, // incoming
         Some(MessageType::KasPublicKey) => handle_kas_public_key(payload).await, // outgoing
-        Some(MessageType::Rewrap) => handle_rewrap(connection_state, payload, settings).await, // incoming
-        Some(MessageType::RewrappedKey) => None, // outgoing
+        Some(MessageType::Rewrap) => {
+            handle_rewrap(connection_state, payload, &server_state.settings).await
+        } // incoming
+        Some(MessageType::RewrappedKey) => None,                                 // outgoing
         Some(MessageType::Nats) => {
-            handle_nats_publish(connection_state, payload, settings, nats_connection).await
+            handle_nats_publish(
+                connection_state,
+                payload,
+                &server_state.settings,
+                nats_connection,
+            )
+            .await
         } // internal
+        Some(MessageType::Event) => handle_event(server_state, payload).await,   // embedded
         None => {
-            println!("Unknown message type: {:?}", message_type);
+            // println!("Unknown message type: {:?}", message_type);
             None
         }
     }
@@ -581,15 +603,15 @@ async fn handle_public_key(
     }
     // println!("Client Public Key payload: {}", hex::encode(payload.as_ref()));
     if payload.len() != 33 {
-        println!("Client Public Key wrong size");
-        println!("Client Public Key length: {}", payload.len());
+        error!("Client Public Key wrong size");
+        error!("Client Public Key length: {}", payload.len());
         return None;
     }
     // Deserialize the public key sent by the client
     let client_public_key = match PublicKey::from_sec1_bytes(payload) {
         Ok(key) => key,
         Err(e) => {
-            println!("Error deserializing client public key: {:?}", e);
+            error!("Error deserializing client public key: {:?}", e);
             return None;
         }
     };
@@ -682,6 +704,143 @@ async fn handle_nats_message(
     Ok(())
 }
 
+async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option<Message> {
+    let start_time = Instant::now();
+    let mut event_data: Option<Vec<u8>> = None;
+    if let Ok(event) = root::<Event>(payload) {
+        println!("Event Action: {:?}", event.action());
+        println!("Event Timestamp: {:?}", event.timestamp());
+        println!("Event Status: {:?}", event.status());
+        println!("Event Data Type: {:?}", event.data_type());
+        // redis connection
+        let mut redis_conn = match server_state
+            .redis_client
+            .get_multiplexed_async_connection()
+            .await
+        {
+            Ok(conn) => conn,
+            Err(e) => {
+                error!("Failed to connect to Redis: {}", e);
+                return None;
+            }
+        };
+        // Deserialize the event data based on its type
+        match event.data_type() {
+            EventData::UserEvent => {
+                if let Some(user_event) = event.data_as_user_event() {
+                    println!("User Event:");
+                    println!("  Source Type: {:?}", user_event.source_type());
+                    println!("  Target Type: {:?}", user_event.target_type());
+                    println!("  Source ID: {:?}", user_event.source_id());
+                    println!("  Target ID: {:?}", user_event.target_id());
+                    let target_id = user_event.target_id().unwrap();
+                    // Retrieve the event object from Redis
+                    event_data = match redis_conn.get::<_, Vec<u8>>(target_id.bytes()).await {
+                        Ok(data) => {
+                            println!("redis target_id: {:?}", target_id);
+                            println!("redis data size: {} bytes", data.len());
+                            if data.is_empty() {
+                                error!("Retrieved data from Redis has size 0");
+                                return None;
+                            }
+                            Some(data)
+                        }
+                        Err(e) => {
+                            error!("Failed to retrieve event from Redis: {}", e);
+                            return None;
+                        }
+                    };
+                }
+            }
+            EventData::CacheEvent => {
+                if let Some(cache_event) = event.data_as_cache_event() {
+                    println!("Cache Event:");
+                    println!("  Target ID: {:?}", cache_event.target_id());
+                    println!("  Target Payload: {:?}", cache_event.target_payload());
+                    println!(
+                        "  Target Payload Size: {:?}",
+                        cache_event.target_payload()?.bytes().len()
+                    );
+                    println!("  TTL: {:?}", cache_event.ttl());
+                    println!("  One Time Access: {:?}", cache_event.one_time_access());
+                    // Cache the object in Redis with specified TTL
+                    let ttl = cache_event.ttl();
+                    if ttl > 0 {
+                        if let (Some(target_id), Some(target_payload)) =
+                            (cache_event.target_id(), cache_event.target_payload())
+                        {
+                            let target_id_bytes = target_id.bytes();
+                            let target_payload_bytes = target_payload.bytes();
+                            redis_conn
+                                .set_ex::<_, _, String>(
+                                    target_id_bytes,
+                                    target_payload_bytes,
+                                    ttl as u64,
+                                )
+                                .await
+                                .map_err(|e| {
+                                    error!("Failed to cache data in Redis: {}", e);
+                                })
+                                .ok()?;
+                        } else {
+                            error!("target_id or target_payload was None while caching with TTL");
+                            return None;
+                        }
+                    } else if let (Some(target_id), Some(target_payload)) =
+                        (cache_event.target_id(), cache_event.target_payload())
+                    {
+                        let target_id_bytes = target_id.bytes();
+                        let target_payload_bytes = target_payload.bytes();
+                        redis_conn
+                            .set::<_, _, String>(target_id_bytes, target_payload_bytes)
+                            .await
+                            .map_err(|e| {
+                                error!("Failed to cache data in Redis: {}", e);
+                            })
+                            .ok()?;
+                    } else {
+                        error!("target_id or target_payload was None while caching without TTL");
+                    }
+                    event_data = Some(cache_event.target_payload().unwrap().bytes().to_vec());
+                }
+            }
+            EventData::NONE => {
+                println!("No event data");
+            }
+            _ => {
+                println!("Unknown event data type: {:?}", event.data_type());
+            }
+        }
+    } else {
+        error!("Failed to parse Event from payload");
+        return None;
+    }
+    let response_data = match event_data {
+        Some(data) => {
+            let mut response = Vec::new();
+            response.push(MessageType::Event as u8);
+            response.extend_from_slice(&data);
+            response
+        }
+        None => {
+            error!("Event not found in Redis");
+            let mut response = Vec::new();
+            response.push(MessageType::Event as u8);
+            response.extend_from_slice(b"Event not found");
+            response
+        }
+    };
+
+    let total_time = start_time.elapsed();
+    log_timing(
+        &server_state.settings,
+        "Total time for handle_event",
+        total_time,
+    );
+
+    Some(Message::Binary(response_data))
+}
+
 fn init_kas_keys(key_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let pem_content = std::fs::read_to_string(key_path)?;
     let ec_pem_contents = pem_content.as_bytes();
@@ -740,6 +899,30 @@ fn custom_ecdh(
     Ok(shared_secret)
 }
 
+struct ServerState {
+    settings: ServerSettings,
+    redis_client: RedisClient,
+}
+
+impl ServerState {
+    fn new(settings: ServerSettings) -> Result<Self, redis::RedisError> {
+        info!("Attempting to connect to Redis at {}", settings.redis_url);
+        match RedisClient::open(settings.redis_url.clone()) {
+            Ok(client) => {
+                info!("Successfully connected to Redis server");
+                Ok(ServerState {
+                    settings,
+                    redis_client: client,
+                })
+            }
+            Err(e) => {
+                error!("Failed to connect to Redis server: {}", e);
+                Err(e)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 struct ServerSettings {
     port: u16,
@@ -750,6 +933,7 @@ struct ServerSettings {
     enable_timing_logs: bool,
     nats_url: String,
     nats_subject: String,
+    redis_url: String,
 }
 
 fn log_timing(settings: &ServerSettings, message: &str, duration: std::time::Duration) {
@@ -792,6 +976,7 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
             .unwrap_or(false),
         nats_url: env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string()),
         nats_subject: env::var("NATS_SUBJECT").unwrap_or_else(|_| "nanotdf.messages".to_string()),
+        redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string()),
     })
 }
 
