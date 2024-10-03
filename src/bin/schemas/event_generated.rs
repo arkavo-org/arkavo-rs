@@ -18,13 +18,14 @@ pub mod arkavo {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_ACTION: i8 = 7;
+    pub const ENUM_MAX_ACTION: i8 = 8;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_ACTION: [Action; 8] = [
+    pub const ENUM_VALUES_ACTION: [Action; 9] = [
+        Action::unused,
         Action::join,
         Action::apply,
         Action::approve,
@@ -40,18 +41,20 @@ pub mod arkavo {
     pub struct Action(pub i8);
     #[allow(non_upper_case_globals)]
     impl Action {
-        pub const join: Self = Self(0);
-        pub const apply: Self = Self(1);
-        pub const approve: Self = Self(2);
-        pub const leave: Self = Self(3);
-        pub const cache: Self = Self(4);
-        pub const store: Self = Self(5);
-        pub const share: Self = Self(6);
-        pub const invite: Self = Self(7);
+        pub const unused: Self = Self(0);
+        pub const join: Self = Self(1);
+        pub const apply: Self = Self(2);
+        pub const approve: Self = Self(3);
+        pub const leave: Self = Self(4);
+        pub const cache: Self = Self(5);
+        pub const store: Self = Self(6);
+        pub const share: Self = Self(7);
+        pub const invite: Self = Self(8);
 
         pub const ENUM_MIN: i8 = 0;
-        pub const ENUM_MAX: i8 = 7;
+        pub const ENUM_MAX: i8 = 8;
         pub const ENUM_VALUES: &'static [Self] = &[
+            Self::unused,
             Self::join,
             Self::apply,
             Self::approve,
@@ -64,6 +67,7 @@ pub mod arkavo {
         /// Returns the variant's name or "" if unknown.
         pub fn variant_name(self) -> Option<&'static str> {
             match self {
+                Self::unused => Some("unused"),
                 Self::join => Some("join"),
                 Self::apply => Some("apply"),
                 Self::approve => Some("approve"),
@@ -137,13 +141,14 @@ pub mod arkavo {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_ACTION_STATUS: i8 = 3;
+    pub const ENUM_MAX_ACTION_STATUS: i8 = 4;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_ACTION_STATUS: [ActionStatus; 4] = [
+    pub const ENUM_VALUES_ACTION_STATUS: [ActionStatus; 5] = [
+        ActionStatus::unused,
         ActionStatus::preparing,
         ActionStatus::fulfilling,
         ActionStatus::fulfilled,
@@ -155,14 +160,16 @@ pub mod arkavo {
     pub struct ActionStatus(pub i8);
     #[allow(non_upper_case_globals)]
     impl ActionStatus {
-        pub const preparing: Self = Self(0);
-        pub const fulfilling: Self = Self(1);
-        pub const fulfilled: Self = Self(2);
-        pub const failed: Self = Self(3);
+        pub const unused: Self = Self(0);
+        pub const preparing: Self = Self(1);
+        pub const fulfilling: Self = Self(2);
+        pub const fulfilled: Self = Self(3);
+        pub const failed: Self = Self(4);
 
         pub const ENUM_MIN: i8 = 0;
-        pub const ENUM_MAX: i8 = 3;
+        pub const ENUM_MAX: i8 = 4;
         pub const ENUM_VALUES: &'static [Self] = &[
+            Self::unused,
             Self::preparing,
             Self::fulfilling,
             Self::fulfilled,
@@ -171,6 +178,7 @@ pub mod arkavo {
         /// Returns the variant's name or "" if unknown.
         pub fn variant_name(self) -> Option<&'static str> {
             match self {
+                Self::unused => Some("unused"),
                 Self::preparing => Some("preparing"),
                 Self::fulfilling => Some("fulfilling"),
                 Self::fulfilled => Some("fulfilled"),
@@ -240,29 +248,35 @@ pub mod arkavo {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_ENTITY_TYPE: i8 = 1;
+    pub const ENUM_MAX_ENTITY_TYPE: i8 = 2;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_ENTITY_TYPE: [EntityType; 2] =
-        [EntityType::stream_profile, EntityType::account_profile];
+    pub const ENUM_VALUES_ENTITY_TYPE: [EntityType; 3] = [
+        EntityType::unused,
+        EntityType::stream_profile,
+        EntityType::account_profile,
+    ];
 
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
     #[repr(transparent)]
     pub struct EntityType(pub i8);
     #[allow(non_upper_case_globals)]
     impl EntityType {
-        pub const stream_profile: Self = Self(0);
-        pub const account_profile: Self = Self(1);
+        pub const unused: Self = Self(0);
+        pub const stream_profile: Self = Self(1);
+        pub const account_profile: Self = Self(2);
 
         pub const ENUM_MIN: i8 = 0;
-        pub const ENUM_MAX: i8 = 1;
-        pub const ENUM_VALUES: &'static [Self] = &[Self::stream_profile, Self::account_profile];
+        pub const ENUM_MAX: i8 = 2;
+        pub const ENUM_VALUES: &'static [Self] =
+            &[Self::unused, Self::stream_profile, Self::account_profile];
         /// Returns the variant's name or "" if unknown.
         pub fn variant_name(self) -> Option<&'static str> {
             match self {
+                Self::unused => Some("unused"),
                 Self::stream_profile => Some("stream_profile"),
                 Self::account_profile => Some("account_profile"),
                 _ => None,
@@ -471,7 +485,7 @@ pub mod arkavo {
             // which contains a valid value in this slot
             unsafe {
                 self._tab
-                    .get::<EntityType>(UserEvent::VT_SOURCE_TYPE, Some(EntityType::stream_profile))
+                    .get::<EntityType>(UserEvent::VT_SOURCE_TYPE, Some(EntityType::unused))
                     .unwrap()
             }
         }
@@ -482,7 +496,7 @@ pub mod arkavo {
             // which contains a valid value in this slot
             unsafe {
                 self._tab
-                    .get::<EntityType>(UserEvent::VT_TARGET_TYPE, Some(EntityType::stream_profile))
+                    .get::<EntityType>(UserEvent::VT_TARGET_TYPE, Some(EntityType::unused))
                     .unwrap()
             }
         }
@@ -547,8 +561,8 @@ pub mod arkavo {
         #[inline]
         fn default() -> Self {
             UserEventArgs {
-                source_type: EntityType::stream_profile,
-                target_type: EntityType::stream_profile,
+                source_type: EntityType::unused,
+                target_type: EntityType::unused,
                 source_id: None,
                 target_id: None,
             }
@@ -565,7 +579,7 @@ pub mod arkavo {
             self.fbb_.push_slot::<EntityType>(
                 UserEvent::VT_SOURCE_TYPE,
                 source_type,
-                EntityType::stream_profile,
+                EntityType::unused,
             );
         }
         #[inline]
@@ -573,7 +587,7 @@ pub mod arkavo {
             self.fbb_.push_slot::<EntityType>(
                 UserEvent::VT_TARGET_TYPE,
                 target_type,
-                EntityType::stream_profile,
+                EntityType::unused,
             );
         }
         #[inline]
@@ -870,7 +884,7 @@ pub mod arkavo {
             // which contains a valid value in this slot
             unsafe {
                 self._tab
-                    .get::<Action>(Event::VT_ACTION, Some(Action::join))
+                    .get::<Action>(Event::VT_ACTION, Some(Action::unused))
                     .unwrap()
             }
         }
@@ -888,7 +902,7 @@ pub mod arkavo {
             // which contains a valid value in this slot
             unsafe {
                 self._tab
-                    .get::<ActionStatus>(Event::VT_STATUS, Some(ActionStatus::preparing))
+                    .get::<ActionStatus>(Event::VT_STATUS, Some(ActionStatus::unused))
                     .unwrap()
             }
         }
@@ -992,9 +1006,9 @@ pub mod arkavo {
         #[inline]
         fn default() -> Self {
             EventArgs {
-                action: Action::join,
+                action: Action::unused,
                 timestamp: 0,
-                status: ActionStatus::preparing,
+                status: ActionStatus::unused,
                 data_type: EventData::NONE,
                 data: None,
             }
@@ -1009,7 +1023,7 @@ pub mod arkavo {
         #[inline]
         pub fn add_action(&mut self, action: Action) {
             self.fbb_
-                .push_slot::<Action>(Event::VT_ACTION, action, Action::join);
+                .push_slot::<Action>(Event::VT_ACTION, action, Action::unused);
         }
         #[inline]
         pub fn add_timestamp(&mut self, timestamp: u64) {
@@ -1019,7 +1033,7 @@ pub mod arkavo {
         #[inline]
         pub fn add_status(&mut self, status: ActionStatus) {
             self.fbb_
-                .push_slot::<ActionStatus>(Event::VT_STATUS, status, ActionStatus::preparing);
+                .push_slot::<ActionStatus>(Event::VT_STATUS, status, ActionStatus::unused);
         }
         #[inline]
         pub fn add_data_type(&mut self, data_type: EventData) {

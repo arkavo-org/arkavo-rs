@@ -760,7 +760,11 @@ async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option
                             let target_id_bytes = target_id.bytes();
                             let target_payload_bytes = target_payload.bytes();
                             redis_conn
-                                .set_ex::<_, _, String>(target_id_bytes, target_payload_bytes, ttl as u64)
+                                .set_ex::<_, _, String>(
+                                    target_id_bytes,
+                                    target_payload_bytes,
+                                    ttl as u64,
+                                )
                                 .await
                                 .map_err(|e| {
                                     error!("Failed to cache data in Redis: {}", e);
