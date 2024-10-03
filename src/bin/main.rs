@@ -1,13 +1,6 @@
 mod contracts;
 mod schemas;
 
-use std::env;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::RwLock;
-use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
-
 use crate::contracts::contract_simple_abac;
 use crate::schemas::event_generated::arkavo::{Event, EventData};
 use aes_gcm::aead::generic_array::GenericArray;
@@ -23,6 +16,7 @@ use hkdf::Hkdf;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use log::{error, info};
 use nanotdf::{BinaryParser, ProtocolEnum};
+use native_tls::{Identity, Protocol, TlsAcceptor as NativeTlsAcceptor};
 use once_cell::sync::OnceCell;
 use p256::ecdh::EphemeralSecret;
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
@@ -31,6 +25,12 @@ use redis::AsyncCommands;
 use redis::Client as RedisClient;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use std::env;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::RwLock;
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpListener;
@@ -235,13 +235,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn load_tls_config(
     cert_path: &str,
     key_path: &str,
-) -> Result<native_tls::TlsAcceptor, Box<dyn std::error::Error>> {
+) -> Result<TlsAcceptor, Box<dyn std::error::Error>> {
     let cert = std::fs::read(cert_path)?;
     let key = std::fs::read(key_path)?;
 
-    let identity = native_tls::Identity::from_pkcs8(&cert, &key)?;
-    let acceptor = native_tls::TlsAcceptor::new(identity)?;
-
+    let identity = Identity::from_pkcs8(&cert, &key)?;
+    // Create native_tls TlsAcceptor with custom options
+    let mut builder = NativeTlsAcceptor::builder(identity);
+    // Set minimum TLS version to TLS 1.2
+    builder.min_protocol_version(Some(Protocol::Tlsv12));
+    // Build the native_tls acceptor
+    let native_acceptor = builder
+        .build()
+        .map_err(|e| format!("Failed to build TLS acceptor: {}", e))?;
+    // Convert to tokio_native_tls acceptor
+    let acceptor = TlsAcceptor::from(native_acceptor);
     Ok(acceptor)
 }
 
@@ -729,8 +737,12 @@ async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option
                     // Retrieve the event object from Redis
                     event_data = match redis_conn.get::<_, Vec<u8>>(target_id.bytes()).await {
                         Ok(data) => {
-                            println!("  target_id: {:?}", target_id);
-                            println!("  data size: {} bytes", data.len());
+                            println!("redis target_id: {:?}", target_id);
+                            println!("redis data size: {} bytes", data.len());
+                            if data.len() == 0 {
+                                error!("Retrieved data from Redis has size 0");
+                                return None;
+                            }
                             Some(data)
                         }
                         Err(e) => {
