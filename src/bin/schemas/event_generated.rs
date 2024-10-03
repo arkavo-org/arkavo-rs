@@ -120,7 +120,7 @@ pub mod arkavo {
         }
     }
 
-    impl<'a> flatbuffers::Verifiable for Action {
+    impl flatbuffers::Verifiable for Action {
         #[inline]
         fn run_verifier(
             v: &mut flatbuffers::Verifier,
@@ -227,7 +227,7 @@ pub mod arkavo {
         }
     }
 
-    impl<'a> flatbuffers::Verifiable for ActionStatus {
+    impl flatbuffers::Verifiable for ActionStatus {
         #[inline]
         fn run_verifier(
             v: &mut flatbuffers::Verifier,
@@ -323,7 +323,7 @@ pub mod arkavo {
         }
     }
 
-    impl<'a> flatbuffers::Verifiable for EntityType {
+    impl flatbuffers::Verifiable for EntityType {
         #[inline]
         fn run_verifier(
             v: &mut flatbuffers::Verifier,
@@ -415,7 +415,7 @@ pub mod arkavo {
         }
     }
 
-    impl<'a> flatbuffers::Verifiable for EventData {
+    impl flatbuffers::Verifiable for EventData {
         #[inline]
         fn run_verifier(
             v: &mut flatbuffers::Verifier,
@@ -1002,7 +1002,7 @@ pub mod arkavo {
         pub data_type: EventData,
         pub data: Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
     }
-    impl<'a> Default for EventArgs {
+    impl Default for EventArgs {
         #[inline]
         fn default() -> Self {
             EventArgs {

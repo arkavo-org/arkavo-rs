@@ -163,10 +163,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Set up TLS if not disabled
     let tls_acceptor = if settings.tls_enabled {
-        Some(TlsAcceptor::from(load_tls_config(
+        Some(load_tls_config(
             &settings.tls_cert_path,
             &settings.tls_key_path,
-        )?))
+        )?)
     } else {
         None
     };
@@ -739,7 +739,7 @@ async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option
                         Ok(data) => {
                             println!("redis target_id: {:?}", target_id);
                             println!("redis data size: {} bytes", data.len());
-                            if data.len() == 0 {
+                            if data.is_empty() {
                                 error!("Retrieved data from Redis has size 0");
                                 return None;
                             }
@@ -786,24 +786,20 @@ async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option
                             error!("target_id or target_payload was None while caching with TTL");
                             return None;
                         }
+                    } else if let (Some(target_id), Some(target_payload)) =
+                        (cache_event.target_id(), cache_event.target_payload())
+                    {
+                        let target_id_bytes = target_id.bytes();
+                        let target_payload_bytes = target_payload.bytes();
+                        redis_conn
+                            .set::<_, _, String>(target_id_bytes, target_payload_bytes)
+                            .await
+                            .map_err(|e| {
+                                error!("Failed to cache data in Redis: {}", e);
+                            })
+                            .ok()?;
                     } else {
-                        if let (Some(target_id), Some(target_payload)) =
-                            (cache_event.target_id(), cache_event.target_payload())
-                        {
-                            let target_id_bytes = target_id.bytes();
-                            let target_payload_bytes = target_payload.bytes();
-                            redis_conn
-                                .set::<_, _, String>(target_id_bytes, target_payload_bytes)
-                                .await
-                                .map_err(|e| {
-                                    error!("Failed to cache data in Redis: {}", e);
-                                })
-                                .ok()?;
-                        } else {
-                            error!(
-                                "target_id or target_payload was None while caching without TTL"
-                            );
-                        }
+                        error!("target_id or target_payload was None while caching without TTL");
                     }
                     event_data = Some(cache_event.target_payload().unwrap().bytes().to_vec());
                 }
