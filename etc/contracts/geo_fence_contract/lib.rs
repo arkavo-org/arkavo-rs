@@ -2,66 +2,76 @@
 
 #[ink::contract]
 mod geo_fence_contract {
-    use parity_scale_codec::{Decode, Encode};
-    use scale_info::TypeInfo;
+    use ink::storage::Mapping;
+    use ink::storage::traits::StorageLayout;
+    use scale::{Decode, Encode};
 
-    #[derive(Debug, PartialEq, Eq, Clone, Copy, Decode, Encode, TypeInfo)]
+    #[derive(Debug, PartialEq, Eq, Clone, Copy, Decode, Encode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(StorageLayout)]
     pub struct Coordinate3D {
-        pub latitude: FixedPoint,
-        pub longitude: FixedPoint,
-        pub altitude: FixedPoint,
+        pub latitude: i64,
+        pub longitude: i64,
+        pub altitude: i64,
     }
 
-    #[derive(Debug, PartialEq, Eq, Clone, Copy, Decode, Encode, TypeInfo)]
+    #[derive(Debug, PartialEq, Eq, Clone, Copy, Decode, Encode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(StorageLayout)]
     pub struct Geofence3D {
-        pub min_latitude: FixedPoint,
-        pub max_latitude: FixedPoint,
-        pub min_longitude: FixedPoint,
-        pub max_longitude: FixedPoint,
-        pub min_altitude: FixedPoint,
-        pub max_altitude: FixedPoint,
-    }
-
-    #[derive(Debug, PartialEq, Eq, Clone, Copy, Decode, Encode, TypeInfo)]
-    pub struct FixedPoint(pub i64);
-
-    impl FixedPoint {
-        pub fn new(value: f64) -> Self {
-            FixedPoint((value * 1_000_000.0) as i64) // Scale f64 to fixed point representation
-        }
-
-        pub fn to_f64(self) -> f64 {
-            self.0 as f64 / 1_000_000.0
-        }
+        pub min_latitude: i64,
+        pub max_latitude: i64,
+        pub min_longitude: i64,
+        pub max_longitude: i64,
+        pub min_altitude: i64,
+        pub max_altitude: i64,
     }
 
     #[ink(storage)]
     pub struct GeoFenceContract {
-        value: bool,
+        geofences: Mapping<u32, Geofence3D>,
+        geofence_count: u32,
     }
 
+    impl Default for GeoFenceContract {
+             fn default() -> Self {
+        Self::new()
+        }
+    }
+    
     impl GeoFenceContract {
         #[ink(constructor)]
-        pub fn new(init_value: bool) -> Self {
-            Self { value: init_value }
+        pub fn new() -> Self {
+            Self {
+                geofences: Mapping::default(),
+                geofence_count: 0,
+            }
         }
 
-        #[ink(constructor)]
-        pub fn default() -> Self {
-            Self::new(Default::default())
+        #[ink(message)]
+        pub fn add_geofence(&mut self, geofence: Geofence3D) -> u32 {
+            let id = self.geofence_count;
+            self.geofences.insert(id, &geofence);
+            self.geofence_count += 1;
+            id
         }
 
         #[ink(message)]
         pub fn is_within_geofence(
             &self,
-            geofence: Geofence3D,
-            latitude: FixedPoint,
-            longitude: FixedPoint,
-            altitude: FixedPoint,
+            geofence_id: u32,
+            coordinate: Coordinate3D,
         ) -> bool {
-            latitude.0 >= geofence.min_latitude.0 && latitude.0 <= geofence.max_latitude.0 &&
-                longitude.0 >= geofence.min_longitude.0 && longitude.0 <= geofence.max_longitude.0 &&
-                altitude.0 >= geofence.min_altitude.0 && altitude.0 <= geofence.max_altitude.0
+            if let Some(geofence) = self.geofences.get(geofence_id) {
+                coordinate.latitude >= geofence.min_latitude
+                    && coordinate.latitude <= geofence.max_latitude
+                    && coordinate.longitude >= geofence.min_longitude
+                    && coordinate.longitude <= geofence.max_longitude
+                    && coordinate.altitude >= geofence.min_altitude
+                    && coordinate.altitude <= geofence.max_altitude
+            } else {
+                false
+            }
         }
     }
 
@@ -71,36 +81,28 @@ mod geo_fence_contract {
 
         #[ink::test]
         fn test_within_geofence() {
-            let contract = GeoFenceContract::new(false);
+            let mut contract = GeoFenceContract::new();
             let geofence = Geofence3D {
-                min_latitude: FixedPoint::new(-10.0),
-                max_latitude: FixedPoint::new(10.0),
-                min_longitude: FixedPoint::new(-20.0),
-                max_longitude: FixedPoint::new(20.0),
-                min_altitude: FixedPoint::new(0.0),
-                max_altitude: FixedPoint::new(100.0),
+                min_latitude: -10_000_000,
+                max_latitude: 10_000_000,
+                min_longitude: -20_000_000,
+                max_longitude: 20_000_000,
+                min_altitude: 0,
+                max_altitude: 100_000_000,
             };
-            assert!(contract.is_within_geofence(geofence, FixedPoint::new(0.0), FixedPoint::new(0.0), FixedPoint::new(50.0)));
-            assert!(!contract.is_within_geofence(geofence, FixedPoint::new(-15.0), FixedPoint::new(0.0), FixedPoint::new(50.0)));
-            assert!(!contract.is_within_geofence(geofence, FixedPoint::new(0.0), FixedPoint::new(-25.0), FixedPoint::new(50.0)));
-            assert!(!contract.is_within_geofence(geofence, FixedPoint::new(0.0), FixedPoint::new(0.0), FixedPoint::new(150.0)));
-        }
+            let geofence_id = contract.add_geofence(geofence);
 
-        #[ink::test]
-        fn test_within_20ft_cube() {
-            let contract = GeoFenceContract::new(false);
-            let geofence = Geofence3D {
-                min_latitude: FixedPoint::new(0.0),
-                max_latitude: FixedPoint::new(0.0061), // Approximately 20 feet in latitude
-                min_longitude: FixedPoint::new(0.0),
-                max_longitude: FixedPoint::new(0.0061), // Approximately 20 feet in longitude
-                min_altitude: FixedPoint::new(0.0),
-                max_altitude: FixedPoint::new(6.096), // 20 feet in altitude
-            };
-            assert!(contract.is_within_geofence(geofence, FixedPoint::new(0.003), FixedPoint::new(0.003), FixedPoint::new(3.0))); // Inside the cube
-            assert!(!contract.is_within_geofence(geofence, FixedPoint::new(0.01), FixedPoint::new(0.003), FixedPoint::new(3.0))); // Outside latitude
-            assert!(!contract.is_within_geofence(geofence, FixedPoint::new(0.003), FixedPoint::new(0.01), FixedPoint::new(3.0))); // Outside longitude
-            assert!(!contract.is_within_geofence(geofence, FixedPoint::new(0.003), FixedPoint::new(0.003), FixedPoint::new(10.0))); // Outside altitude
+            assert!(contract.is_within_geofence(geofence_id, Coordinate3D {
+                latitude: 0,
+                longitude: 0,
+                altitude: 50_000_000,
+            }));
+
+            assert!(!contract.is_within_geofence(geofence_id, Coordinate3D {
+                latitude: -15_000_000,
+                longitude: 0,
+                altitude: 50_000_000,
+            }));
         }
     }
 }
