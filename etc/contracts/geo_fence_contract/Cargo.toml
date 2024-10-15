@@ -24,3 +24,6 @@ std = [
 ]
 ink-as-dependency = []
 e2e-tests = []
+# do not add
+#__ink_dylint_Constructor = []
+#__ink_dylint_Storage = []
