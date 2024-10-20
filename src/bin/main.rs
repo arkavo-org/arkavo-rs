@@ -437,7 +437,7 @@ async fn handle_binary_message(
             )
             .await
         } // internal
-        Some(MessageType::Event) => handle_event(server_state, payload).await,   // embedded
+        Some(MessageType::Event) => handle_event(server_state, payload, nats_connection).await,   // embedded
         None => {
             // println!("Unknown message type: {:?}", message_type);
             None
@@ -822,7 +822,7 @@ async fn handle_nats_message(
     Ok(())
 }
 
-async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option<Message> {
+async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8], nats_connection: Arc<NatsConnection>,) -> Option<Message> {
     let start_time = Instant::now();
     let mut event_data: Option<Vec<u8>> = None;
     if let Ok(event) = root::<Event>(payload) {
@@ -868,7 +868,7 @@ async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option
                             return None;
                         }
                     };
-                    // if cache miss then route to device
+                    // TODO if cache miss then route to device
                 }
             }
             EventData::CacheEvent => {
@@ -923,11 +923,52 @@ async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option
                     event_data = Some(cache_event.target_payload().unwrap().bytes().to_vec());
                 }
             }
+            EventData::RouteEvent => {
+                if let Some(route_event) = event.data_as_route_event() {
+                    if let Some(target_id) = route_event.target_id() {
+                        println!("Route Event:");
+                        println!("  Target ID: {:?}", target_id);
+                        let public_id = bs58::encode(target_id.bytes()).into_string();
+                        println!("  Public ID: {}", public_id);
+                        let subject = format!("profile.{}", public_id);
+                        println!("  subject: {}", subject);
+                        // Create NATS message
+                        // Create NATS message
+                        let nats_message = match NATSMessage::new(payload) {
+                            Ok(msg) => msg,
+                            Err(e) => {
+                                error!("Failed to create NATS message: {}", e);
+                                return None;
+                            }
+                        };
+                        // Get NATS client
+                        if let Some(nats_client) = nats_connection.get_client().await {
+                            // Send the event to NATS
+                            match nats_message.send_to_nats(&nats_client, subject).await {
+                                Ok(_) => {
+                                    println!("Successfully sent route event to NATS");
+                                    return None;
+                                }
+                                Err(e) => {
+                                    error!("Failed to send route event to NATS: {}", e);
+                                    return None;
+                                }
+                            }
+                        } else {
+                            error!("NATS client not available");
+                            return None;
+                        }
+                    } else {
+                        error!("Target ID is missing.");
+                        return None;
+                    }
+                }
+            }
             EventData::NONE => {
-                println!("No event data");
+                error!("No event data");
             }
             _ => {
-                println!("Unknown event data type: {:?}", event.data_type());
+                error!("Unknown event data type: {:?}", event.data_type());
             }
         }
     } else {

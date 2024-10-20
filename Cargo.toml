@@ -47,7 +47,7 @@ redis = { version = "0.27.2", features = ["tokio-comp"] }
 flatbuffers = "24.3.25"
 scale = { package = "parity-scale-codec", version = "3.6.12", default-features = false, features = ["derive"] }
 scale-info = { version = "2.11.3", default-features = false, features = ["derive"], optional = true }
-
+bs58 = "0.5.1"
 
 [dev-dependencies]
 criterion = "0.5.1"

@@ -9,20 +9,11 @@ pub mod arkavo {
     extern crate flatbuffers;
     use self::flatbuffers::Follow;
 
-    #[deprecated(
-        since = "2.0.0",
-        note = "Use associated constants instead. This will no longer be generated in 2021."
-    )]
+    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
     pub const ENUM_MIN_ACTION: i8 = 0;
-    #[deprecated(
-        since = "2.0.0",
-        note = "Use associated constants instead. This will no longer be generated in 2021."
-    )]
+    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
     pub const ENUM_MAX_ACTION: i8 = 8;
-    #[deprecated(
-        since = "2.0.0",
-        note = "Use associated constants instead. This will no longer be generated in 2021."
-    )]
+    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
     #[allow(non_camel_case_types)]
     pub const ENUM_VALUES_ACTION: [Action; 9] = [
         Action::unused,
@@ -120,11 +111,10 @@ pub mod arkavo {
         }
     }
 
-    impl flatbuffers::Verifiable for Action {
+    impl<'a> flatbuffers::Verifiable for Action {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier,
-            pos: usize,
+            v: &mut flatbuffers::Verifier, pos: usize
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             i8::run_verifier(v, pos)
@@ -132,20 +122,11 @@ pub mod arkavo {
     }
 
     impl flatbuffers::SimpleToVerifyInSlice for Action {}
-    #[deprecated(
-        since = "2.0.0",
-        note = "Use associated constants instead. This will no longer be generated in 2021."
-    )]
+    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
     pub const ENUM_MIN_ACTION_STATUS: i8 = 0;
-    #[deprecated(
-        since = "2.0.0",
-        note = "Use associated constants instead. This will no longer be generated in 2021."
-    )]
+    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
     pub const ENUM_MAX_ACTION_STATUS: i8 = 4;
-    #[deprecated(
-        since = "2.0.0",
-        note = "Use associated constants instead. This will no longer be generated in 2021."
-    )]
+    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
     #[allow(non_camel_case_types)]
     pub const ENUM_VALUES_ACTION_STATUS: [ActionStatus; 5] = [
         ActionStatus::unused,
@@ -227,11 +208,10 @@ pub mod arkavo {
         }
     }
 
-    impl flatbuffers::Verifiable for ActionStatus {
+    impl<'a> flatbuffers::Verifiable for ActionStatus {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier,
-            pos: usize,
+            v: &mut flatbuffers::Verifier, pos: usize
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             i8::run_verifier(v, pos)
@@ -239,25 +219,17 @@ pub mod arkavo {
     }
 
     impl flatbuffers::SimpleToVerifyInSlice for ActionStatus {}
-    #[deprecated(
-        since = "2.0.0",
-        note = "Use associated constants instead. This will no longer be generated in 2021."
-    )]
+    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
     pub const ENUM_MIN_ENTITY_TYPE: i8 = 0;
-    #[deprecated(
-        since = "2.0.0",
-        note = "Use associated constants instead. This will no longer be generated in 2021."
-    )]
-    pub const ENUM_MAX_ENTITY_TYPE: i8 = 2;
-    #[deprecated(
-        since = "2.0.0",
-        note = "Use associated constants instead. This will no longer be generated in 2021."
-    )]
+    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    pub const ENUM_MAX_ENTITY_TYPE: i8 = 3;
+    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_ENTITY_TYPE: [EntityType; 3] = [
+    pub const ENUM_VALUES_ENTITY_TYPE: [EntityType; 4] = [
         EntityType::unused,
         EntityType::stream_profile,
         EntityType::account_profile,
+        EntityType::server,
     ];
 
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -268,17 +240,23 @@ pub mod arkavo {
         pub const unused: Self = Self(0);
         pub const stream_profile: Self = Self(1);
         pub const account_profile: Self = Self(2);
+        pub const server: Self = Self(3);
 
         pub const ENUM_MIN: i8 = 0;
-        pub const ENUM_MAX: i8 = 2;
-        pub const ENUM_VALUES: &'static [Self] =
-            &[Self::unused, Self::stream_profile, Self::account_profile];
+        pub const ENUM_MAX: i8 = 3;
+        pub const ENUM_VALUES: &'static [Self] = &[
+            Self::unused,
+            Self::stream_profile,
+            Self::account_profile,
+            Self::server,
+        ];
         /// Returns the variant's name or "" if unknown.
         pub fn variant_name(self) -> Option<&'static str> {
             match self {
                 Self::unused => Some("unused"),
                 Self::stream_profile => Some("stream_profile"),
                 Self::account_profile => Some("account_profile"),
+                Self::server => Some("server"),
                 _ => None,
             }
         }
@@ -323,11 +301,10 @@ pub mod arkavo {
         }
     }
 
-    impl flatbuffers::Verifiable for EntityType {
+    impl<'a> flatbuffers::Verifiable for EntityType {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier,
-            pos: usize,
+            v: &mut flatbuffers::Verifier, pos: usize
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             i8::run_verifier(v, pos)
@@ -335,23 +312,107 @@ pub mod arkavo {
     }
 
     impl flatbuffers::SimpleToVerifyInSlice for EntityType {}
-    #[deprecated(
-        since = "2.0.0",
-        note = "Use associated constants instead. This will no longer be generated in 2021."
-    )]
-    pub const ENUM_MIN_EVENT_DATA: u8 = 0;
-    #[deprecated(
-        since = "2.0.0",
-        note = "Use associated constants instead. This will no longer be generated in 2021."
-    )]
-    pub const ENUM_MAX_EVENT_DATA: u8 = 2;
-    #[deprecated(
-        since = "2.0.0",
-        note = "Use associated constants instead. This will no longer be generated in 2021."
-    )]
+    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    pub const ENUM_MIN_ATTRIBUTE_TYPE: i8 = 0;
+    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    pub const ENUM_MAX_ATTRIBUTE_TYPE: i8 = 2;
+    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_EVENT_DATA: [EventData; 3] =
-        [EventData::NONE, EventData::UserEvent, EventData::CacheEvent];
+    pub const ENUM_VALUES_ATTRIBUTE_TYPE: [AttributeType; 3] = [
+        AttributeType::unused,
+        AttributeType::time,
+        AttributeType::location,
+    ];
+
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    #[repr(transparent)]
+    pub struct AttributeType(pub i8);
+    #[allow(non_upper_case_globals)]
+    impl AttributeType {
+        pub const unused: Self = Self(0);
+        pub const time: Self = Self(1);
+        pub const location: Self = Self(2);
+
+        pub const ENUM_MIN: i8 = 0;
+        pub const ENUM_MAX: i8 = 2;
+        pub const ENUM_VALUES: &'static [Self] = &[
+            Self::unused,
+            Self::time,
+            Self::location,
+        ];
+        /// Returns the variant's name or "" if unknown.
+        pub fn variant_name(self) -> Option<&'static str> {
+            match self {
+                Self::unused => Some("unused"),
+                Self::time => Some("time"),
+                Self::location => Some("location"),
+                _ => None,
+            }
+        }
+    }
+    impl core::fmt::Debug for AttributeType {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            if let Some(name) = self.variant_name() {
+                f.write_str(name)
+            } else {
+                f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+            }
+        }
+    }
+    impl<'a> flatbuffers::Follow<'a> for AttributeType {
+        type Inner = Self;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
+            Self(b)
+        }
+    }
+
+    impl flatbuffers::Push for AttributeType {
+        type Output = AttributeType;
+        #[inline]
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            flatbuffers::emplace_scalar::<i8>(dst, self.0);
+        }
+    }
+
+    impl flatbuffers::EndianScalar for AttributeType {
+        type Scalar = i8;
+        #[inline]
+        fn to_little_endian(self) -> i8 {
+            self.0.to_le()
+        }
+        #[inline]
+        #[allow(clippy::wrong_self_convention)]
+        fn from_little_endian(v: i8) -> Self {
+            let b = i8::from_le(v);
+            Self(b)
+        }
+    }
+
+    impl<'a> flatbuffers::Verifiable for AttributeType {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier, pos: usize
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            i8::run_verifier(v, pos)
+        }
+    }
+
+    impl flatbuffers::SimpleToVerifyInSlice for AttributeType {}
+    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    pub const ENUM_MIN_EVENT_DATA: u8 = 0;
+    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    pub const ENUM_MAX_EVENT_DATA: u8 = 3;
+    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    #[allow(non_camel_case_types)]
+    pub const ENUM_VALUES_EVENT_DATA: [EventData; 4] = [
+        EventData::NONE,
+        EventData::UserEvent,
+        EventData::CacheEvent,
+        EventData::RouteEvent,
+    ];
 
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
     #[repr(transparent)]
@@ -361,16 +422,23 @@ pub mod arkavo {
         pub const NONE: Self = Self(0);
         pub const UserEvent: Self = Self(1);
         pub const CacheEvent: Self = Self(2);
+        pub const RouteEvent: Self = Self(3);
 
         pub const ENUM_MIN: u8 = 0;
-        pub const ENUM_MAX: u8 = 2;
-        pub const ENUM_VALUES: &'static [Self] = &[Self::NONE, Self::UserEvent, Self::CacheEvent];
+        pub const ENUM_MAX: u8 = 3;
+        pub const ENUM_VALUES: &'static [Self] = &[
+            Self::NONE,
+            Self::UserEvent,
+            Self::CacheEvent,
+            Self::RouteEvent,
+        ];
         /// Returns the variant's name or "" if unknown.
         pub fn variant_name(self) -> Option<&'static str> {
             match self {
                 Self::NONE => Some("NONE"),
                 Self::UserEvent => Some("UserEvent"),
                 Self::CacheEvent => Some("CacheEvent"),
+                Self::RouteEvent => Some("RouteEvent"),
                 _ => None,
             }
         }
@@ -415,11 +483,10 @@ pub mod arkavo {
         }
     }
 
-    impl flatbuffers::Verifiable for EventData {
+    impl<'a> flatbuffers::Verifiable for EventData {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier,
-            pos: usize,
+            v: &mut flatbuffers::Verifier, pos: usize
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             u8::run_verifier(v, pos)
@@ -440,9 +507,7 @@ pub mod arkavo {
         type Inner = UserEvent<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self {
-                _tab: flatbuffers::Table::new(buf, loc),
-            }
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
         }
     }
 
@@ -451,102 +516,85 @@ pub mod arkavo {
         pub const VT_TARGET_TYPE: flatbuffers::VOffsetT = 6;
         pub const VT_SOURCE_ID: flatbuffers::VOffsetT = 8;
         pub const VT_TARGET_ID: flatbuffers::VOffsetT = 10;
+        pub const VT_ATTRIBUTE_TYPE: flatbuffers::VOffsetT = 12;
+        pub const VT_ENTITY_TYPE: flatbuffers::VOffsetT = 14;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
             UserEvent { _tab: table }
         }
         #[allow(unused_mut)]
-        pub fn create<
-            'bldr: 'args,
-            'args: 'mut_bldr,
-            'mut_bldr,
-            A: flatbuffers::Allocator + 'bldr,
-        >(
+        pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
             _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-            args: &'args UserEventArgs<'args>,
+            args: &'args UserEventArgs<'args>
         ) -> flatbuffers::WIPOffset<UserEvent<'bldr>> {
             let mut builder = UserEventBuilder::new(_fbb);
-            if let Some(x) = args.target_id {
-                builder.add_target_id(x);
-            }
-            if let Some(x) = args.source_id {
-                builder.add_source_id(x);
-            }
+            if let Some(x) = args.attribute_type { builder.add_attribute_type(x); }
+            if let Some(x) = args.target_id { builder.add_target_id(x); }
+            if let Some(x) = args.source_id { builder.add_source_id(x); }
+            builder.add_entity_type(args.entity_type);
             builder.add_target_type(args.target_type);
             builder.add_source_type(args.source_type);
             builder.finish()
         }
+
 
         #[inline]
         pub fn source_type(&self) -> EntityType {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<EntityType>(UserEvent::VT_SOURCE_TYPE, Some(EntityType::unused))
-                    .unwrap()
-            }
+            unsafe { self._tab.get::<EntityType>(UserEvent::VT_SOURCE_TYPE, Some(EntityType::unused)).unwrap()}
         }
         #[inline]
         pub fn target_type(&self) -> EntityType {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<EntityType>(UserEvent::VT_TARGET_TYPE, Some(EntityType::unused))
-                    .unwrap()
-            }
+            unsafe { self._tab.get::<EntityType>(UserEvent::VT_TARGET_TYPE, Some(EntityType::unused)).unwrap()}
         }
         #[inline]
         pub fn source_id(&self) -> Option<flatbuffers::Vector<'a, u8>> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
-                        UserEvent::VT_SOURCE_ID,
-                        None,
-                    )
-            }
+            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(UserEvent::VT_SOURCE_ID, None)}
         }
         #[inline]
         pub fn target_id(&self) -> Option<flatbuffers::Vector<'a, u8>> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
-                        UserEvent::VT_TARGET_ID,
-                        None,
-                    )
-            }
+            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(UserEvent::VT_TARGET_ID, None)}
+        }
+        #[inline]
+        pub fn attribute_type(&self) -> Option<flatbuffers::Vector<'a, AttributeType>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, AttributeType>>>(UserEvent::VT_ATTRIBUTE_TYPE, None)}
+        }
+        #[inline]
+        pub fn entity_type(&self) -> EntityType {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<EntityType>(UserEvent::VT_ENTITY_TYPE, Some(EntityType::unused)).unwrap()}
         }
     }
 
     impl flatbuffers::Verifiable for UserEvent<'_> {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier,
-            pos: usize,
+            v: &mut flatbuffers::Verifier, pos: usize
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             v.visit_table(pos)?
                 .visit_field::<EntityType>("source_type", Self::VT_SOURCE_TYPE, false)?
                 .visit_field::<EntityType>("target_type", Self::VT_TARGET_TYPE, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
-                    "source_id",
-                    Self::VT_SOURCE_ID,
-                    false,
-                )?
-                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
-                    "target_id",
-                    Self::VT_TARGET_ID,
-                    false,
-                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("source_id", Self::VT_SOURCE_ID, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("target_id", Self::VT_TARGET_ID, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, AttributeType>>>("attribute_type", Self::VT_ATTRIBUTE_TYPE, false)?
+                .visit_field::<EntityType>("entity_type", Self::VT_ENTITY_TYPE, false)?
                 .finish();
             Ok(())
         }
@@ -556,6 +604,8 @@ pub mod arkavo {
         pub target_type: EntityType,
         pub source_id: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
         pub target_id: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+        pub attribute_type: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, AttributeType>>>,
+        pub entity_type: EntityType,
     }
     impl<'a> Default for UserEventArgs<'a> {
         #[inline]
@@ -565,6 +615,8 @@ pub mod arkavo {
                 target_type: EntityType::unused,
                 source_id: None,
                 target_id: None,
+                attribute_type: None,
+                entity_type: EntityType::unused,
             }
         }
     }
@@ -576,40 +628,30 @@ pub mod arkavo {
     impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> UserEventBuilder<'a, 'b, A> {
         #[inline]
         pub fn add_source_type(&mut self, source_type: EntityType) {
-            self.fbb_.push_slot::<EntityType>(
-                UserEvent::VT_SOURCE_TYPE,
-                source_type,
-                EntityType::unused,
-            );
+            self.fbb_.push_slot::<EntityType>(UserEvent::VT_SOURCE_TYPE, source_type, EntityType::unused);
         }
         #[inline]
         pub fn add_target_type(&mut self, target_type: EntityType) {
-            self.fbb_.push_slot::<EntityType>(
-                UserEvent::VT_TARGET_TYPE,
-                target_type,
-                EntityType::unused,
-            );
+            self.fbb_.push_slot::<EntityType>(UserEvent::VT_TARGET_TYPE, target_type, EntityType::unused);
         }
         #[inline]
-        pub fn add_source_id(
-            &mut self,
-            source_id: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
-        ) {
-            self.fbb_
-                .push_slot_always::<flatbuffers::WIPOffset<_>>(UserEvent::VT_SOURCE_ID, source_id);
+        pub fn add_source_id(&mut self, source_id: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(UserEvent::VT_SOURCE_ID, source_id);
         }
         #[inline]
-        pub fn add_target_id(
-            &mut self,
-            target_id: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
-        ) {
-            self.fbb_
-                .push_slot_always::<flatbuffers::WIPOffset<_>>(UserEvent::VT_TARGET_ID, target_id);
+        pub fn add_target_id(&mut self, target_id: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(UserEvent::VT_TARGET_ID, target_id);
         }
         #[inline]
-        pub fn new(
-            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-        ) -> UserEventBuilder<'a, 'b, A> {
+        pub fn add_attribute_type(&mut self, attribute_type: flatbuffers::WIPOffset<flatbuffers::Vector<'b , AttributeType>>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(UserEvent::VT_ATTRIBUTE_TYPE, attribute_type);
+        }
+        #[inline]
+        pub fn add_entity_type(&mut self, entity_type: EntityType) {
+            self.fbb_.push_slot::<EntityType>(UserEvent::VT_ENTITY_TYPE, entity_type, EntityType::unused);
+        }
+        #[inline]
+        pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> UserEventBuilder<'a, 'b, A> {
             let start = _fbb.start_table();
             UserEventBuilder {
                 fbb_: _fbb,
@@ -630,6 +672,8 @@ pub mod arkavo {
             ds.field("target_type", &self.target_type());
             ds.field("source_id", &self.source_id());
             ds.field("target_id", &self.target_id());
+            ds.field("attribute_type", &self.attribute_type());
+            ds.field("entity_type", &self.entity_type());
             ds.finish()
         }
     }
@@ -644,9 +688,7 @@ pub mod arkavo {
         type Inner = CacheEvent<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self {
-                _tab: flatbuffers::Table::new(buf, loc),
-            }
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
         }
     }
 
@@ -661,90 +703,57 @@ pub mod arkavo {
             CacheEvent { _tab: table }
         }
         #[allow(unused_mut)]
-        pub fn create<
-            'bldr: 'args,
-            'args: 'mut_bldr,
-            'mut_bldr,
-            A: flatbuffers::Allocator + 'bldr,
-        >(
+        pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
             _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-            args: &'args CacheEventArgs<'args>,
+            args: &'args CacheEventArgs<'args>
         ) -> flatbuffers::WIPOffset<CacheEvent<'bldr>> {
             let mut builder = CacheEventBuilder::new(_fbb);
             builder.add_ttl(args.ttl);
-            if let Some(x) = args.target_payload {
-                builder.add_target_payload(x);
-            }
-            if let Some(x) = args.target_id {
-                builder.add_target_id(x);
-            }
+            if let Some(x) = args.target_payload { builder.add_target_payload(x); }
+            if let Some(x) = args.target_id { builder.add_target_id(x); }
             builder.add_one_time_access(args.one_time_access);
             builder.finish()
         }
+
 
         #[inline]
         pub fn target_id(&self) -> Option<flatbuffers::Vector<'a, u8>> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
-                        CacheEvent::VT_TARGET_ID,
-                        None,
-                    )
-            }
+            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(CacheEvent::VT_TARGET_ID, None)}
         }
         #[inline]
         pub fn target_payload(&self) -> Option<flatbuffers::Vector<'a, u8>> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
-                        CacheEvent::VT_TARGET_PAYLOAD,
-                        None,
-                    )
-            }
+            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(CacheEvent::VT_TARGET_PAYLOAD, None)}
         }
         #[inline]
         pub fn ttl(&self) -> u32 {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<u32>(CacheEvent::VT_TTL, Some(0)).unwrap() }
+            unsafe { self._tab.get::<u32>(CacheEvent::VT_TTL, Some(0)).unwrap()}
         }
         #[inline]
         pub fn one_time_access(&self) -> bool {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<bool>(CacheEvent::VT_ONE_TIME_ACCESS, Some(false))
-                    .unwrap()
-            }
+            unsafe { self._tab.get::<bool>(CacheEvent::VT_ONE_TIME_ACCESS, Some(false)).unwrap()}
         }
     }
 
     impl flatbuffers::Verifiable for CacheEvent<'_> {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier,
-            pos: usize,
+            v: &mut flatbuffers::Verifier, pos: usize
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             v.visit_table(pos)?
-                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
-                    "target_id",
-                    Self::VT_TARGET_ID,
-                    false,
-                )?
-                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
-                    "target_payload",
-                    Self::VT_TARGET_PAYLOAD,
-                    false,
-                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("target_id", Self::VT_TARGET_ID, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("target_payload", Self::VT_TARGET_PAYLOAD, false)?
                 .visit_field::<u32>("ttl", Self::VT_TTL, false)?
                 .visit_field::<bool>("one_time_access", Self::VT_ONE_TIME_ACCESS, false)?
                 .finish();
@@ -775,22 +784,12 @@ pub mod arkavo {
     }
     impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> CacheEventBuilder<'a, 'b, A> {
         #[inline]
-        pub fn add_target_id(
-            &mut self,
-            target_id: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
-        ) {
-            self.fbb_
-                .push_slot_always::<flatbuffers::WIPOffset<_>>(CacheEvent::VT_TARGET_ID, target_id);
+        pub fn add_target_id(&mut self, target_id: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(CacheEvent::VT_TARGET_ID, target_id);
         }
         #[inline]
-        pub fn add_target_payload(
-            &mut self,
-            target_payload: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
-        ) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
-                CacheEvent::VT_TARGET_PAYLOAD,
-                target_payload,
-            );
+        pub fn add_target_payload(&mut self, target_payload: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(CacheEvent::VT_TARGET_PAYLOAD, target_payload);
         }
         #[inline]
         pub fn add_ttl(&mut self, ttl: u32) {
@@ -798,13 +797,10 @@ pub mod arkavo {
         }
         #[inline]
         pub fn add_one_time_access(&mut self, one_time_access: bool) {
-            self.fbb_
-                .push_slot::<bool>(CacheEvent::VT_ONE_TIME_ACCESS, one_time_access, false);
+            self.fbb_.push_slot::<bool>(CacheEvent::VT_ONE_TIME_ACCESS, one_time_access, false);
         }
         #[inline]
-        pub fn new(
-            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-        ) -> CacheEventBuilder<'a, 'b, A> {
+        pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> CacheEventBuilder<'a, 'b, A> {
             let start = _fbb.start_table();
             CacheEventBuilder {
                 fbb_: _fbb,
@@ -828,6 +824,204 @@ pub mod arkavo {
             ds.finish()
         }
     }
+    pub enum RouteEventOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct RouteEvent<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for RouteEvent<'a> {
+        type Inner = RouteEvent<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> RouteEvent<'a> {
+        pub const VT_TARGET_TYPE: flatbuffers::VOffsetT = 4;
+        pub const VT_TARGET_ID: flatbuffers::VOffsetT = 6;
+        pub const VT_SOURCE_TYPE: flatbuffers::VOffsetT = 8;
+        pub const VT_SOURCE_ID: flatbuffers::VOffsetT = 10;
+        pub const VT_ATTRIBUTE_TYPE: flatbuffers::VOffsetT = 12;
+        pub const VT_ENTITY_TYPE: flatbuffers::VOffsetT = 14;
+        pub const VT_PAYLOAD: flatbuffers::VOffsetT = 16;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            RouteEvent { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args RouteEventArgs<'args>
+        ) -> flatbuffers::WIPOffset<RouteEvent<'bldr>> {
+            let mut builder = RouteEventBuilder::new(_fbb);
+            if let Some(x) = args.payload { builder.add_payload(x); }
+            if let Some(x) = args.source_id { builder.add_source_id(x); }
+            if let Some(x) = args.target_id { builder.add_target_id(x); }
+            builder.add_entity_type(args.entity_type);
+            builder.add_attribute_type(args.attribute_type);
+            builder.add_source_type(args.source_type);
+            builder.add_target_type(args.target_type);
+            builder.finish()
+        }
+
+
+        #[inline]
+        pub fn target_type(&self) -> EntityType {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<EntityType>(RouteEvent::VT_TARGET_TYPE, Some(EntityType::unused)).unwrap()}
+        }
+        #[inline]
+        pub fn target_id(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(RouteEvent::VT_TARGET_ID, None)}
+        }
+        #[inline]
+        pub fn source_type(&self) -> EntityType {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<EntityType>(RouteEvent::VT_SOURCE_TYPE, Some(EntityType::unused)).unwrap()}
+        }
+        #[inline]
+        pub fn source_id(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(RouteEvent::VT_SOURCE_ID, None)}
+        }
+        #[inline]
+        pub fn attribute_type(&self) -> AttributeType {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<AttributeType>(RouteEvent::VT_ATTRIBUTE_TYPE, Some(AttributeType::unused)).unwrap()}
+        }
+        #[inline]
+        pub fn entity_type(&self) -> EntityType {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<EntityType>(RouteEvent::VT_ENTITY_TYPE, Some(EntityType::unused)).unwrap()}
+        }
+        #[inline]
+        pub fn payload(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(RouteEvent::VT_PAYLOAD, None)}
+        }
+    }
+
+    impl flatbuffers::Verifiable for RouteEvent<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier, pos: usize
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            v.visit_table(pos)?
+                .visit_field::<EntityType>("target_type", Self::VT_TARGET_TYPE, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("target_id", Self::VT_TARGET_ID, false)?
+                .visit_field::<EntityType>("source_type", Self::VT_SOURCE_TYPE, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("source_id", Self::VT_SOURCE_ID, false)?
+                .visit_field::<AttributeType>("attribute_type", Self::VT_ATTRIBUTE_TYPE, false)?
+                .visit_field::<EntityType>("entity_type", Self::VT_ENTITY_TYPE, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("payload", Self::VT_PAYLOAD, false)?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct RouteEventArgs<'a> {
+        pub target_type: EntityType,
+        pub target_id: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+        pub source_type: EntityType,
+        pub source_id: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+        pub attribute_type: AttributeType,
+        pub entity_type: EntityType,
+        pub payload: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+    }
+    impl<'a> Default for RouteEventArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            RouteEventArgs {
+                target_type: EntityType::unused,
+                target_id: None,
+                source_type: EntityType::unused,
+                source_id: None,
+                attribute_type: AttributeType::unused,
+                entity_type: EntityType::unused,
+                payload: None,
+            }
+        }
+    }
+
+    pub struct RouteEventBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> RouteEventBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_target_type(&mut self, target_type: EntityType) {
+            self.fbb_.push_slot::<EntityType>(RouteEvent::VT_TARGET_TYPE, target_type, EntityType::unused);
+        }
+        #[inline]
+        pub fn add_target_id(&mut self, target_id: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(RouteEvent::VT_TARGET_ID, target_id);
+        }
+        #[inline]
+        pub fn add_source_type(&mut self, source_type: EntityType) {
+            self.fbb_.push_slot::<EntityType>(RouteEvent::VT_SOURCE_TYPE, source_type, EntityType::unused);
+        }
+        #[inline]
+        pub fn add_source_id(&mut self, source_id: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(RouteEvent::VT_SOURCE_ID, source_id);
+        }
+        #[inline]
+        pub fn add_attribute_type(&mut self, attribute_type: AttributeType) {
+            self.fbb_.push_slot::<AttributeType>(RouteEvent::VT_ATTRIBUTE_TYPE, attribute_type, AttributeType::unused);
+        }
+        #[inline]
+        pub fn add_entity_type(&mut self, entity_type: EntityType) {
+            self.fbb_.push_slot::<EntityType>(RouteEvent::VT_ENTITY_TYPE, entity_type, EntityType::unused);
+        }
+        #[inline]
+        pub fn add_payload(&mut self, payload: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(RouteEvent::VT_PAYLOAD, payload);
+        }
+        #[inline]
+        pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> RouteEventBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            RouteEventBuilder {
+                fbb_: _fbb,
+                start_: start,
+            }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<RouteEvent<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for RouteEvent<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("RouteEvent");
+            ds.field("target_type", &self.target_type());
+            ds.field("target_id", &self.target_id());
+            ds.field("source_type", &self.source_type());
+            ds.field("source_id", &self.source_id());
+            ds.field("attribute_type", &self.attribute_type());
+            ds.field("entity_type", &self.entity_type());
+            ds.field("payload", &self.payload());
+            ds.finish()
+        }
+    }
     pub enum EventOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -839,9 +1033,7 @@ pub mod arkavo {
         type Inner = Event<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self {
-                _tab: flatbuffers::Table::new(buf, loc),
-            }
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
         }
     }
 
@@ -857,78 +1049,54 @@ pub mod arkavo {
             Event { _tab: table }
         }
         #[allow(unused_mut)]
-        pub fn create<
-            'bldr: 'args,
-            'args: 'mut_bldr,
-            'mut_bldr,
-            A: flatbuffers::Allocator + 'bldr,
-        >(
+        pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
             _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-            args: &'args EventArgs,
+            args: &'args EventArgs
         ) -> flatbuffers::WIPOffset<Event<'bldr>> {
             let mut builder = EventBuilder::new(_fbb);
             builder.add_timestamp(args.timestamp);
-            if let Some(x) = args.data {
-                builder.add_data(x);
-            }
+            if let Some(x) = args.data { builder.add_data(x); }
             builder.add_data_type(args.data_type);
             builder.add_status(args.status);
             builder.add_action(args.action);
             builder.finish()
         }
 
+
         #[inline]
         pub fn action(&self) -> Action {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<Action>(Event::VT_ACTION, Some(Action::unused))
-                    .unwrap()
-            }
+            unsafe { self._tab.get::<Action>(Event::VT_ACTION, Some(Action::unused)).unwrap()}
         }
         #[inline]
         pub fn timestamp(&self) -> u64 {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<u64>(Event::VT_TIMESTAMP, Some(0)).unwrap() }
+            unsafe { self._tab.get::<u64>(Event::VT_TIMESTAMP, Some(0)).unwrap()}
         }
         #[inline]
         pub fn status(&self) -> ActionStatus {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<ActionStatus>(Event::VT_STATUS, Some(ActionStatus::unused))
-                    .unwrap()
-            }
+            unsafe { self._tab.get::<ActionStatus>(Event::VT_STATUS, Some(ActionStatus::unused)).unwrap()}
         }
         #[inline]
         pub fn data_type(&self) -> EventData {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<EventData>(Event::VT_DATA_TYPE, Some(EventData::NONE))
-                    .unwrap()
-            }
+            unsafe { self._tab.get::<EventData>(Event::VT_DATA_TYPE, Some(EventData::NONE)).unwrap()}
         }
         #[inline]
         pub fn data(&self) -> Option<flatbuffers::Table<'a>> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Table<'a>>>(
-                        Event::VT_DATA,
-                        None,
-                    )
-            }
+            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Table<'a>>>(Event::VT_DATA, None)}
         }
         #[inline]
         #[allow(non_snake_case)]
@@ -959,38 +1127,41 @@ pub mod arkavo {
                 None
             }
         }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn data_as_route_event(&self) -> Option<RouteEvent<'a>> {
+            if self.data_type() == EventData::RouteEvent {
+                self.data().map(|t| {
+                    // Safety:
+                    // Created from a valid Table for this object
+                    // Which contains a valid union in this slot
+                    unsafe { RouteEvent::init_from_table(t) }
+                })
+            } else {
+                None
+            }
+        }
+
     }
 
     impl flatbuffers::Verifiable for Event<'_> {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier,
-            pos: usize,
+            v: &mut flatbuffers::Verifier, pos: usize
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             v.visit_table(pos)?
                 .visit_field::<Action>("action", Self::VT_ACTION, false)?
                 .visit_field::<u64>("timestamp", Self::VT_TIMESTAMP, false)?
                 .visit_field::<ActionStatus>("status", Self::VT_STATUS, false)?
-                .visit_union::<EventData, _>(
-                    "data_type",
-                    Self::VT_DATA_TYPE,
-                    "data",
-                    Self::VT_DATA,
-                    false,
-                    |key, v, pos| match key {
-                        EventData::UserEvent => v
-                            .verify_union_variant::<flatbuffers::ForwardsUOffset<UserEvent>>(
-                                "EventData::UserEvent",
-                                pos,
-                            ),
-                        EventData::CacheEvent => v
-                            .verify_union_variant::<flatbuffers::ForwardsUOffset<CacheEvent>>(
-                                "EventData::CacheEvent",
-                                pos,
-                            ),
+                .visit_union::<EventData, _>("data_type", Self::VT_DATA_TYPE, "data", Self::VT_DATA, false, |key, v, pos| {
+                    match key {
+                        EventData::UserEvent => v.verify_union_variant::<flatbuffers::ForwardsUOffset<UserEvent>>("EventData::UserEvent", pos),
+                        EventData::CacheEvent => v.verify_union_variant::<flatbuffers::ForwardsUOffset<CacheEvent>>("EventData::CacheEvent", pos),
+                        EventData::RouteEvent => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RouteEvent>>("EventData::RouteEvent", pos),
                         _ => Ok(()),
-                    },
-                )?
+                    }
+                })?
                 .finish();
             Ok(())
         }
@@ -1002,7 +1173,7 @@ pub mod arkavo {
         pub data_type: EventData,
         pub data: Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
     }
-    impl Default for EventArgs {
+    impl<'a> Default for EventArgs {
         #[inline]
         fn default() -> Self {
             EventArgs {
@@ -1022,28 +1193,23 @@ pub mod arkavo {
     impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> EventBuilder<'a, 'b, A> {
         #[inline]
         pub fn add_action(&mut self, action: Action) {
-            self.fbb_
-                .push_slot::<Action>(Event::VT_ACTION, action, Action::unused);
+            self.fbb_.push_slot::<Action>(Event::VT_ACTION, action, Action::unused);
         }
         #[inline]
         pub fn add_timestamp(&mut self, timestamp: u64) {
-            self.fbb_
-                .push_slot::<u64>(Event::VT_TIMESTAMP, timestamp, 0);
+            self.fbb_.push_slot::<u64>(Event::VT_TIMESTAMP, timestamp, 0);
         }
         #[inline]
         pub fn add_status(&mut self, status: ActionStatus) {
-            self.fbb_
-                .push_slot::<ActionStatus>(Event::VT_STATUS, status, ActionStatus::unused);
+            self.fbb_.push_slot::<ActionStatus>(Event::VT_STATUS, status, ActionStatus::unused);
         }
         #[inline]
         pub fn add_data_type(&mut self, data_type: EventData) {
-            self.fbb_
-                .push_slot::<EventData>(Event::VT_DATA_TYPE, data_type, EventData::NONE);
+            self.fbb_.push_slot::<EventData>(Event::VT_DATA_TYPE, data_type, EventData::NONE);
         }
         #[inline]
         pub fn add_data(&mut self, data: flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>) {
-            self.fbb_
-                .push_slot_always::<flatbuffers::WIPOffset<_>>(Event::VT_DATA, data);
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Event::VT_DATA, data);
         }
         #[inline]
         pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> EventBuilder<'a, 'b, A> {
@@ -1072,26 +1238,27 @@ pub mod arkavo {
                     if let Some(x) = self.data_as_user_event() {
                         ds.field("data", &x)
                     } else {
-                        ds.field(
-                            "data",
-                            &"InvalidFlatbuffer: Union discriminant does not match value.",
-                        )
+                        ds.field("data", &"InvalidFlatbuffer: Union discriminant does not match value.")
                     }
-                }
+                },
                 EventData::CacheEvent => {
                     if let Some(x) = self.data_as_cache_event() {
                         ds.field("data", &x)
                     } else {
-                        ds.field(
-                            "data",
-                            &"InvalidFlatbuffer: Union discriminant does not match value.",
-                        )
+                        ds.field("data", &"InvalidFlatbuffer: Union discriminant does not match value.")
                     }
-                }
+                },
+                EventData::RouteEvent => {
+                    if let Some(x) = self.data_as_route_event() {
+                        ds.field("data", &x)
+                    } else {
+                        ds.field("data", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                },
                 _ => {
                     let x: Option<()> = None;
                     ds.field("data", &x)
-                }
+                },
             };
             ds.finish()
         }
@@ -1113,9 +1280,7 @@ pub mod arkavo {
     /// catch every error, or be maximally performant. For the
     /// previous, unchecked, behavior use
     /// `size_prefixed_root_as_event_unchecked`.
-    pub fn size_prefixed_root_as_event(
-        buf: &[u8],
-    ) -> Result<Event, flatbuffers::InvalidFlatbuffer> {
+    pub fn size_prefixed_root_as_event(buf: &[u8]) -> Result<Event, flatbuffers::InvalidFlatbuffer> {
         flatbuffers::size_prefixed_root::<Event>(buf)
     }
     #[inline]
@@ -1161,16 +1326,13 @@ pub mod arkavo {
     #[inline]
     pub fn finish_event_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(
         fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-        root: flatbuffers::WIPOffset<Event<'a>>,
-    ) {
+        root: flatbuffers::WIPOffset<Event<'a>>) {
         fbb.finish(root, None);
     }
 
     #[inline]
-    pub fn finish_size_prefixed_event_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(
-        fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-        root: flatbuffers::WIPOffset<Event<'a>>,
-    ) {
+    pub fn finish_size_prefixed_event_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>, root: flatbuffers::WIPOffset<Event<'a>>) {
         fbb.finish_size_prefixed(root, None);
     }
-} // pub mod Arkavo
+}  // pub mod Arkavo
+

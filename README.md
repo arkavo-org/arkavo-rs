@@ -123,9 +123,9 @@ redis-server
 
 #### Start backend
 
- ```shell
- cargo run
- ```
+```shell
+cargo run
+```
 
 The server will start and listen on the configured port.
 
