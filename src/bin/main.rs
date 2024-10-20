@@ -2,6 +2,7 @@ mod contracts;
 mod schemas;
 
 use crate::contracts::contract_simple_abac;
+use crate::contracts::geo_fence_contract;
 use crate::schemas::event_generated::arkavo::{Event, EventData};
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::KeyInit;
@@ -15,7 +16,7 @@ use futures_util::{SinkExt, StreamExt};
 use hkdf::Hkdf;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use log::{error, info};
-use nanotdf::{BinaryParser, ProtocolEnum};
+use nanotdf::{BinaryParser, PolicyType, ProtocolEnum, ResourceLocator};
 use native_tls::{Identity, Protocol, TlsAcceptor as NativeTlsAcceptor};
 use once_cell::sync::OnceCell;
 use p256::ecdh::EphemeralSecret;
@@ -267,6 +268,7 @@ async fn handle_websocket(
         server_state.settings.nats_subject.clone(),
         connection_state.clone(),
     ));
+    let mut public_id_nats_task: Option<tokio::task::JoinHandle<()>> = None;
     // Handle incoming WebSocket messages
     loop {
         tokio::select! {
@@ -280,15 +282,28 @@ async fn handle_websocket(
                         if msg.is_text() {
                             // Handle JWT token
                             let token = msg.into_text().unwrap();
-                            // println!("token: {}", token);
+                            println!("token: {}", token);
                             match verify_token(&token) {
                                 Ok(claims) => {
                                     println!("Valid JWT received. Claims: {:?}", claims);
                                     // store the claims
                                     {
                                         let mut claims_lock = connection_state.claims_lock.write().unwrap();
-                                        *claims_lock = Some(claims);
+                                        *claims_lock = Some(claims.clone());
                                     }
+                                    // Extract publicID from claims and subscribe to `profile.<publicID>`
+                                    let public_id = claims.sub;
+                                    let subject = format!("profile.{}", public_id);
+                                    // Cancel any existing `publicID`-specific NATS task
+                                    if let Some(task) = public_id_nats_task.take() {
+                                        task.abort();
+                                    }
+                                    // Set up new NATS subscription for `profile.<publicID>`
+                                    public_id_nats_task = Some(tokio::spawn(handle_nats_subscription(
+                                        nats_connection.clone(),
+                                        subject,
+                                        connection_state.clone(),
+                                    )));
                                 }
                                 Err(e) => {
                                     println!("Invalid JWT: {}", e);
@@ -323,6 +338,9 @@ async fn handle_websocket(
     }
     // Cancel the NATS subscription when the WebSocket connection closes
     nats_task.abort();
+    if let Some(task) = public_id_nats_task {
+        task.abort();
+    }
 }
 
 async fn handle_connection(
@@ -489,38 +507,138 @@ async fn handle_rewrap(
     }
     // TDF contract
     let policy = header.get_policy();
-    let locator = policy.get_locator();
-    let locator = match locator {
-        Some(locator) => locator,
-        None => {
-            info!("Missing TDF locator");
-            return None;
+    let locator: Option<&ResourceLocator>;
+    let mut embedded_locator: Option<ResourceLocator> = None;
+    let mut policy_body: Option<&[u8]> = None;
+
+    match policy.policy_type {
+        PolicyType::Remote => {
+            locator = policy.get_locator().as_ref();
         }
-    };
-    if locator.protocol_enum == ProtocolEnum::SharedResource {
-        // println!("contract {}", locator.body.clone());
-        if !locator.body.is_empty() {
-            let claims_result = match connection_state.claims_lock.read() {
-                Ok(read_lock) => match read_lock.clone() {
-                    Some(value) => Ok(value.sub),
-                    None => Err("Error: Clone cannot be performed"),
-                },
-                Err(_) => Err("Error: Read lock cannot be obtained"),
-            };
-            // execute contract
-            let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
-            if claims_result.is_ok()
-                && !contract.check_access(claims_result.unwrap(), locator.body.clone())
-            {
-                // binary response
-                let mut response_data = Vec::new();
-                response_data.push(MessageType::RewrappedKey as u8);
-                response_data.extend_from_slice(tdf_ephemeral_key_bytes);
-                // timing
-                let total_time = start_time.elapsed();
-                log_timing(settings, "Time to deny", total_time);
-                // DENY
-                return Some(Message::Binary(response_data));
+        PolicyType::Embedded => {
+            if let Some(body) = &policy.body {
+                let mut parser = BinaryParser::new(body);
+                if let Ok(parsed_locator) = parser.read_kas_field() {
+                    embedded_locator = Some(parsed_locator);
+                    policy_body = Some(&body[parser.position..]);
+                }
+            }
+            locator = embedded_locator.as_ref();
+        }
+    }
+    if let Some(locator) = &locator {
+        if locator.protocol_enum == ProtocolEnum::SharedResource {
+            println!("contract {}", locator.body.clone());
+            if !locator.body.is_empty() {
+                let claims_result = match connection_state.claims_lock.read() {
+                    Ok(read_lock) => match read_lock.clone() {
+                        Some(value) => Ok(value.sub),
+                        None => Err("Error: Clone cannot be performed"),
+                    },
+                    Err(_) => Err("Error: Read lock cannot be obtained"),
+                };
+                // geo_fence_contract
+                if locator
+                    .body
+                    .contains("5H6sLwXKBv3cdm5VVRxrvA8p5cux2Rrni5CQ4GRyYKo4b9B4")
+                {
+                    println!("contract geofence");
+                    let contract = geo_fence_contract::geo_fence_contract::GeoFenceContract::new();
+                    // Parse the geofence data from the policy body
+                    if let Some(body) = policy_body {
+                        if body.len() >= 24 {
+                            // Ensure we have enough bytes for the geofence data
+                            let geofence = geo_fence_contract::geo_fence_contract::Geofence3D {
+                                min_latitude: i32::from_be_bytes([
+                                    body[0], body[1], body[2], body[3],
+                                ]) as i64,
+                                max_latitude: i32::from_be_bytes([
+                                    body[4], body[5], body[6], body[7],
+                                ]) as i64,
+                                min_longitude: i32::from_be_bytes([
+                                    body[8], body[9], body[10], body[11],
+                                ]) as i64,
+                                max_longitude: i32::from_be_bytes([
+                                    body[12], body[13], body[14], body[15],
+                                ]) as i64,
+                                min_altitude: i32::from_be_bytes([
+                                    body[16], body[17], body[18], body[19],
+                                ]) as i64,
+                                max_altitude: i32::from_be_bytes([
+                                    body[20], body[21], body[22], body[23],
+                                ]) as i64,
+                            };
+
+                            // For this example, we'll use a fixed coordinate. In a real scenario,
+                            // you might want to get this from the claims or another source.
+                            let coordinate = geo_fence_contract::geo_fence_contract::Coordinate3D {
+                                latitude: 374305000,
+                                longitude: -1221015000,
+                                altitude: 1000,
+                            };
+
+                            if claims_result.is_ok()
+                                && !contract.is_within_geofence(geofence, coordinate)
+                            {
+                                // binary response for DENY
+                                let mut response_data: Vec<u8> = Vec::new();
+                                response_data.push(MessageType::RewrappedKey as u8);
+                                response_data.extend_from_slice(tdf_ephemeral_key_bytes);
+                                // timing
+                                let total_time = start_time.elapsed();
+                                log_timing(settings, "Time to deny", total_time);
+                                // DENY
+                                return Some(Message::Binary(response_data));
+                            }
+                        }
+                    }
+                    // let geofence = geo_fence_contract::geo_fence_contract::Geofence3D {
+                    //     min_latitude: -10_000_000,
+                    //     max_latitude: 10_000_000,
+                    //     min_longitude: -20_000_000,
+                    //     max_longitude: 20_000_000,
+                    //     min_altitude: 0,
+                    //     max_altitude: 100_000_000,
+                    // };
+                    // let coordinate = geo_fence_contract::geo_fence_contract::Coordinate3D {
+                    //     latitude: 0,
+                    //     longitude: 0,
+                    //     altitude: 50_000_000,
+                    // };
+                    // if claims_result.is_ok()
+                    //     && !contract.is_within_geofence(geofence, coordinate)
+                    // {
+                    //     // binary response
+                    //     let mut response_data: Vec<u8> = Vec::new();
+                    //     response_data.push(MessageType::RewrappedKey as u8);
+                    //     response_data.extend_from_slice(tdf_ephemeral_key_bytes);
+                    //     // timing
+                    //     let total_time = start_time.elapsed();
+                    //     log_timing(settings, "Time to deny", total_time);
+                    //     // DENY
+                    //     return Some(Message::Binary(response_data));
+                    // }
+                }
+                // simple_abac
+                else if locator
+                    .body
+                    .contains("5Cqk3ERPToSMuY8UoKJtcmo4fs1iVyQpq6ndzWzpzWezAF1W")
+                {
+                    let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
+                    if claims_result.is_ok()
+                        && !contract.check_access(claims_result.unwrap(), locator.body.clone())
+                    {
+                        // binary response
+                        let mut response_data = Vec::new();
+                        response_data.push(MessageType::RewrappedKey as u8);
+                        response_data.extend_from_slice(tdf_ephemeral_key_bytes);
+                        // timing
+                        let total_time = start_time.elapsed();
+                        log_timing(settings, "Time to deny", total_time);
+                        // DENY
+                        return Some(Message::Binary(response_data));
+                    }
+                }
             }
         }
     }
@@ -750,6 +868,7 @@ async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option
                             return None;
                         }
                     };
+                    // if cache miss then route to device
                 }
             }
             EventData::CacheEvent => {
