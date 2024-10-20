@@ -792,7 +792,7 @@ async fn handle_nats_subscription(
                 Ok(mut subscription) => {
                     info!("Subscribed to NATS subject: {}", subject);
                     while let Some(msg) = subscription.next().await {
-                        if let Err(e) = handle_nats_message(msg, connection_state.clone()).await {
+                        if let Err(e) = handle_nats_event(msg, connection_state.clone()).await {
                             error!("Error handling NATS message: {}", e);
                         }
                     }
@@ -808,12 +808,12 @@ async fn handle_nats_subscription(
         tokio::time::sleep(NATS_RETRY_INTERVAL).await;
     }
 }
-async fn handle_nats_message(
+async fn handle_nats_event(
     msg: NatsMessage,
     connection_state: Arc<ConnectionState>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ws_message = Message::Binary(
-        vec![MessageType::Nats as u8]
+        vec![MessageType::Event as u8]
             .into_iter()
             .chain(msg.payload)
             .collect(),
@@ -821,7 +821,6 @@ async fn handle_nats_message(
     connection_state.outgoing_tx.send(ws_message)?;
     Ok(())
 }
-
 async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8], nats_connection: Arc<NatsConnection>,) -> Option<Message> {
     let start_time = Instant::now();
     let mut event_data: Option<Vec<u8>> = None;
