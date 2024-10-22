@@ -38,6 +38,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex};
 use tokio_native_tls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::Message;
+use crate::contracts::geo_fence_contract::geo_fence_contract::Geofence3D;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct PublicKeyMessage {
@@ -548,33 +549,20 @@ async fn handle_rewrap(
                     if let Some(body) = policy_body {
                         if body.len() >= 24 {
                             // Ensure we have enough bytes for the geofence data
-                            let geofence = geo_fence_contract::geo_fence_contract::Geofence3D {
-                                min_latitude: i32::from_be_bytes([
-                                    body[0], body[1], body[2], body[3],
-                                ]) as i64,
-                                max_latitude: i32::from_be_bytes([
-                                    body[4], body[5], body[6], body[7],
-                                ]) as i64,
-                                min_longitude: i32::from_be_bytes([
-                                    body[8], body[9], body[10], body[11],
-                                ]) as i64,
-                                max_longitude: i32::from_be_bytes([
-                                    body[12], body[13], body[14], body[15],
-                                ]) as i64,
-                                min_altitude: i32::from_be_bytes([
-                                    body[16], body[17], body[18], body[19],
-                                ]) as i64,
-                                max_altitude: i32::from_be_bytes([
-                                    body[20], body[21], body[22], body[23],
-                                ]) as i64,
+                            let geofence = Geofence3D {
+                                min_latitude: 0.0,
+                                max_latitude: 0.00061, // Approximately 20 feet in latitude
+                                min_longitude: 0.0,
+                                max_longitude: 0.00061, // Approximately 20 feet in longitude
+                                min_altitude: 0.0,
+                                max_altitude: 6.1, // 20 feet in altitude
                             };
 
-                            // For this example, we'll use a fixed coordinate. In a real scenario,
-                            // you might want to get this from the claims or another source.
+                            // Get from rewrap request, second payload will be NanoTDF location
                             let coordinate = geo_fence_contract::geo_fence_contract::Coordinate3D {
-                                latitude: 374305000,
-                                longitude: -1221015000,
-                                altitude: 1000,
+                                latitude: 0.0003,
+                                longitude: 0.0003,
+                                altitude: 3.0,
                             };
 
                             if claims_result.is_ok()
