@@ -30,7 +30,7 @@ pub mod geo_fence_contract {
             Self::new()
         }
     }
-    
+
     impl GeoFenceContract {
         #[ink(constructor)]
         pub fn new() -> Self {
@@ -38,11 +38,7 @@ pub mod geo_fence_contract {
         }
 
         #[ink(message)]
-        pub fn is_within_geofence(
-            &self,
-            geofence: Geofence3D,
-            coordinate: Coordinate3D,
-        ) -> bool {
+        pub fn is_within_geofence(&self, geofence: Geofence3D, coordinate: Coordinate3D) -> bool {
             coordinate.latitude >= geofence.min_latitude
                 && coordinate.latitude <= geofence.max_latitude
                 && coordinate.longitude >= geofence.min_longitude
@@ -68,17 +64,23 @@ pub mod geo_fence_contract {
                 max_altitude: 100_000.0,
             };
 
-            assert!(contract.is_within_geofence(geofence, Coordinate3D {
-                latitude: 0.0,
-                longitude: 0.0,
-                altitude: 50_000.0,
-            }));
+            assert!(contract.is_within_geofence(
+                geofence,
+                Coordinate3D {
+                    latitude: 0.0,
+                    longitude: 0.0,
+                    altitude: 50_000.0,
+                }
+            ));
 
-            assert!(!contract.is_within_geofence(geofence, Coordinate3D {
-                latitude: -15.0,
-                longitude: 0.0,
-                altitude: 50_000.0,
-            }));
+            assert!(!contract.is_within_geofence(
+                geofence,
+                Coordinate3D {
+                    latitude: -15.0,
+                    longitude: 0.0,
+                    altitude: 50_000.0,
+                }
+            ));
         }
 
         #[ink::test]
@@ -93,29 +95,41 @@ pub mod geo_fence_contract {
                 max_altitude: 6.1, // 20 feet in altitude
             };
 
-            assert!(contract.is_within_geofence(geofence, Coordinate3D {
-                latitude: 0.0003,
-                longitude: 0.0003,
-                altitude: 3.0,
-            })); // Inside the cube
+            assert!(contract.is_within_geofence(
+                geofence,
+                Coordinate3D {
+                    latitude: 0.0003,
+                    longitude: 0.0003,
+                    altitude: 3.0,
+                }
+            )); // Inside the cube
 
-            assert!(!contract.is_within_geofence(geofence, Coordinate3D {
-                latitude: 0.001,
-                longitude: 0.0003,
-                altitude: 3.0,
-            })); // Outside latitude
+            assert!(!contract.is_within_geofence(
+                geofence,
+                Coordinate3D {
+                    latitude: 0.001,
+                    longitude: 0.0003,
+                    altitude: 3.0,
+                }
+            )); // Outside latitude
 
-            assert!(!contract.is_within_geofence(geofence, Coordinate3D {
-                latitude: 0.0003,
-                longitude: 0.001,
-                altitude: 3.0,
-            })); // Outside longitude
+            assert!(!contract.is_within_geofence(
+                geofence,
+                Coordinate3D {
+                    latitude: 0.0003,
+                    longitude: 0.001,
+                    altitude: 3.0,
+                }
+            )); // Outside longitude
 
-            assert!(!contract.is_within_geofence(geofence, Coordinate3D {
-                latitude: 0.0003,
-                longitude: 0.0003,
-                altitude: 10.0,
-            })); // Outside altitude
+            assert!(!contract.is_within_geofence(
+                geofence,
+                Coordinate3D {
+                    latitude: 0.0003,
+                    longitude: 0.0003,
+                    altitude: 10.0,
+                }
+            )); // Outside altitude
         }
     }
 }

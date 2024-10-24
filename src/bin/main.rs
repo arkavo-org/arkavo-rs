@@ -3,6 +3,7 @@ mod schemas;
 
 use crate::contracts::contract_simple_abac;
 use crate::contracts::geo_fence_contract;
+use crate::contracts::geo_fence_contract::geo_fence_contract::Geofence3D;
 use crate::schemas::event_generated::arkavo::{Event, EventData};
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::KeyInit;
@@ -38,7 +39,6 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex};
 use tokio_native_tls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::Message;
-use crate::contracts::geo_fence_contract::geo_fence_contract::Geofence3D;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct PublicKeyMessage {
@@ -438,7 +438,7 @@ async fn handle_binary_message(
             )
             .await
         } // internal
-        Some(MessageType::Event) => handle_event(server_state, payload, nats_connection).await,   // embedded
+        Some(MessageType::Event) => handle_event(server_state, payload, nats_connection).await, // embedded
         None => {
             // println!("Unknown message type: {:?}", message_type);
             None
@@ -809,7 +809,11 @@ async fn handle_nats_event(
     connection_state.outgoing_tx.send(ws_message)?;
     Ok(())
 }
-async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8], nats_connection: Arc<NatsConnection>,) -> Option<Message> {
+async fn handle_event(
+    server_state: &Arc<ServerState>,
+    payload: &[u8],
+    nats_connection: Arc<NatsConnection>,
+) -> Option<Message> {
     let start_time = Instant::now();
     let mut event_data: Option<Vec<u8>> = None;
     if let Ok(event) = root::<Event>(payload) {
