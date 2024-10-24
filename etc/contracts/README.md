@@ -45,6 +45,13 @@ cargo contract build --features e2e-tests
 
 ### Deploy
 
+#### Content Rating
+
+```text
+Code hash 0xcee0206b80f939ec9da4c69a62284e22e0fa05c98e0c7341deeb3a7e835ef261
+Contract 5HKLo6CKbt1Z5dU4wZ3MiufeZzjM6JGwKUWUQ6a91fmuA6RB
+```
+
 #### Geofence
 
 ```text
@@ -57,6 +64,11 @@ Contract 5H6sLwXKBv3cdm5VVRxrvA8p5cux2Rrni5CQ4GRyYKo4b9B4
 ```text
 Code hash 0xee2250ba4215f273e571ecdfc2a373ccc96de5f82c19fcdaca889218fac5ac39
 Contract 5D35jFeQboveKiaQSxyLKENGqrnjgUc7B4D23QbhJK4Yr7jT
+```
+
+```shell
+cargo contract upload --url ws://127.0.0.1:9944 --suri //Alice content_rating/target/ink/content_rating.wasm
+cargo contract instantiate --url ws://127.0.0.1:9944 --suri //Alice content_rating/target/ink/content_rating.wasm --execute
 ```
 
 ```shell
