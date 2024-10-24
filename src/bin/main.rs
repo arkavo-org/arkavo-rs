@@ -1,9 +1,9 @@
 mod contracts;
 mod schemas;
 
-use crate::contracts::contract_simple_abac;
-use crate::contracts::geo_fence_contract;
+use crate::contracts::content_rating::content_rating::{AgeLevel, ContentRating, Rating, RatingLevel};
 use crate::contracts::geo_fence_contract::geo_fence_contract::Geofence3D;
+use crate::contracts::{contract_simple_abac, geo_fence_contract};
 use crate::schemas::event_generated::arkavo::{Event, EventData};
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::KeyInit;
@@ -606,6 +606,37 @@ async fn handle_rewrap(
                     //     // DENY
                     //     return Some(Message::Binary(response_data));
                     // }
+                }
+                // content_rating
+                else if locator
+                    .body
+                    .contains("5HKLo6CKbt1Z5dU4wZ3MiufeZzjM6JGwKUWUQ6a91fmuA6RB")
+                {
+                    println!("contract content rating");
+                    let contract = ContentRating::new();
+                    // Parse the content rating data from the policy body
+                    if let Some(body) = policy_body {
+                        if body.len() >= 8 {
+                            let age_level = AgeLevel::Kids;
+                            let rating = Rating {
+                                violent: RatingLevel::Mild,
+                                sexual: RatingLevel::None,
+                                profane: RatingLevel::None,
+                                substance: RatingLevel::None,
+                                hate: RatingLevel::None,
+                                harm: RatingLevel::None,
+                                mature: RatingLevel::None,
+                                bully: RatingLevel::None,
+                            };
+                            if !contract.check_content(age_level, rating) {
+                                println!("content rating DENY");
+                                return None;
+                            }
+                        } else {
+                            println!("policy body DENY");
+                            return None;
+                        }
+                    }
                 }
                 // simple_abac
                 else if locator
