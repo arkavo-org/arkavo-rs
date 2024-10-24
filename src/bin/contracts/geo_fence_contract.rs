@@ -25,6 +25,12 @@ pub mod geo_fence_contract {
     #[ink(storage)]
     pub struct GeoFenceContract {}
 
+    impl Default for GeoFenceContract {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+    
     impl GeoFenceContract {
         #[ink(constructor)]
         pub fn new() -> Self {
