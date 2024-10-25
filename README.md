@@ -25,6 +25,8 @@ brew install nats-server redis flatbuffers
 
 ```shell
 flatc --binary --rust idl/event.fbs
+flatc --binary --rust idl/entity.fbs
+flatc --binary --rust idl/metadata.fbs
 ```
 
 ### Installation
@@ -123,9 +125,9 @@ redis-server
 
 #### Start backend
 
- ```shell
- cargo run
- ```
+```shell
+cargo run
+```
 
 The server will start and listen on the configured port.
 
