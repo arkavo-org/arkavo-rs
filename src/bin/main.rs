@@ -1,8 +1,14 @@
 mod contracts;
 mod schemas;
 
-use crate::contracts::contract_simple_abac;
+use crate::contracts::content_rating::content_rating::{
+    AgeLevel, ContentRating, Rating, RatingLevel,
+};
+use crate::contracts::geo_fence_contract::geo_fence_contract::Geofence3D;
+use crate::contracts::{contract_simple_abac, geo_fence_contract};
 use crate::schemas::event_generated::arkavo::{Event, EventData};
+use crate::schemas::metadata_generated::arkavo;
+use crate::schemas::metadata_generated::arkavo::{root_as_metadata, Metadata};
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::KeyInit;
 use aes_gcm::aead::{Aead, Key};
@@ -15,7 +21,7 @@ use futures_util::{SinkExt, StreamExt};
 use hkdf::Hkdf;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use log::{error, info};
-use nanotdf::{BinaryParser, ProtocolEnum};
+use nanotdf::{BinaryParser, PolicyType, ProtocolEnum, ResourceLocator};
 use native_tls::{Identity, Protocol, TlsAcceptor as NativeTlsAcceptor};
 use once_cell::sync::OnceCell;
 use p256::ecdh::EphemeralSecret;
@@ -267,6 +273,7 @@ async fn handle_websocket(
         server_state.settings.nats_subject.clone(),
         connection_state.clone(),
     ));
+    let mut public_id_nats_task: Option<tokio::task::JoinHandle<()>> = None;
     // Handle incoming WebSocket messages
     loop {
         tokio::select! {
@@ -280,15 +287,28 @@ async fn handle_websocket(
                         if msg.is_text() {
                             // Handle JWT token
                             let token = msg.into_text().unwrap();
-                            // println!("token: {}", token);
+                            println!("token: {}", token);
                             match verify_token(&token) {
                                 Ok(claims) => {
                                     println!("Valid JWT received. Claims: {:?}", claims);
                                     // store the claims
                                     {
                                         let mut claims_lock = connection_state.claims_lock.write().unwrap();
-                                        *claims_lock = Some(claims);
+                                        *claims_lock = Some(claims.clone());
                                     }
+                                    // Extract publicID from claims and subscribe to `profile.<publicID>`
+                                    let public_id = claims.sub;
+                                    let subject = format!("profile.{}", public_id);
+                                    // Cancel any existing `publicID`-specific NATS task
+                                    if let Some(task) = public_id_nats_task.take() {
+                                        task.abort();
+                                    }
+                                    // Set up new NATS subscription for `profile.<publicID>`
+                                    public_id_nats_task = Some(tokio::spawn(handle_nats_subscription(
+                                        nats_connection.clone(),
+                                        subject,
+                                        connection_state.clone(),
+                                    )));
                                 }
                                 Err(e) => {
                                     println!("Invalid JWT: {}", e);
@@ -323,6 +343,9 @@ async fn handle_websocket(
     }
     // Cancel the NATS subscription when the WebSocket connection closes
     nats_task.abort();
+    if let Some(task) = public_id_nats_task {
+        task.abort();
+    }
 }
 
 async fn handle_connection(
@@ -378,6 +401,7 @@ async fn handle_connection(
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Claims {
     sub: String,
+    age: String,
 }
 fn verify_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     let mut validation = Validation::default();
@@ -419,7 +443,7 @@ async fn handle_binary_message(
             )
             .await
         } // internal
-        Some(MessageType::Event) => handle_event(server_state, payload).await,   // embedded
+        Some(MessageType::Event) => handle_event(server_state, payload, nats_connection).await, // embedded
         None => {
             // println!("Unknown message type: {:?}", message_type);
             None
@@ -489,38 +513,180 @@ async fn handle_rewrap(
     }
     // TDF contract
     let policy = header.get_policy();
-    let locator = policy.get_locator();
-    let locator = match locator {
-        Some(locator) => locator,
-        None => {
-            info!("Missing TDF locator");
-            return None;
+    // println!("policy: {:?}", policy);
+    let locator: Option<ResourceLocator>;
+    let policy_body: Option<&[u8]> = None;
+    let mut metadata: Option<Metadata> = None;
+
+    match policy.policy_type {
+        PolicyType::Remote => {
+            locator = policy.get_locator().clone();
         }
-    };
-    if locator.protocol_enum == ProtocolEnum::SharedResource {
-        // println!("contract {}", locator.body.clone());
-        if !locator.body.is_empty() {
-            let claims_result = match connection_state.claims_lock.read() {
-                Ok(read_lock) => match read_lock.clone() {
-                    Some(value) => Ok(value.sub),
-                    None => Err("Error: Clone cannot be performed"),
-                },
-                Err(_) => Err("Error: Read lock cannot be obtained"),
+        PolicyType::Embedded => {
+            // println!("embedded policy");
+            if let Some(body) = &policy.body {
+                metadata = match root_as_metadata(body) {
+                    Ok(metadata) => Some(metadata),
+                    Err(e) => {
+                        eprintln!("Failed to parse metadata: {}", e);
+                        return None;
+                    }
+                };
+                // TODO add contracts
+                // println!("metadata: {:#?}", metadata);
+            }
+            // add content rating contract
+            let rl = ResourceLocator {
+                protocol_enum: ProtocolEnum::SharedResource,
+                body: "5HKLo6CKbt1Z5dU4wZ3MiufeZzjM6JGwKUWUQ6a91fmuA6RB".to_string(),
             };
-            // execute contract
-            let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
-            if claims_result.is_ok()
-                && !contract.check_access(claims_result.unwrap(), locator.body.clone())
-            {
-                // binary response
-                let mut response_data = Vec::new();
-                response_data.push(MessageType::RewrappedKey as u8);
-                response_data.extend_from_slice(tdf_ephemeral_key_bytes);
-                // timing
-                let total_time = start_time.elapsed();
-                log_timing(settings, "Time to deny", total_time);
-                // DENY
-                return Some(Message::Binary(response_data));
+            locator = Some(rl);
+        }
+    }
+    if let Some(locator) = &locator {
+        if locator.protocol_enum == ProtocolEnum::SharedResource {
+            println!("contract {}", locator.body.clone());
+            if !locator.body.is_empty() {
+                //  "Verified 18+"
+                let claims_result = match connection_state.claims_lock.read() {
+                    Ok(read_lock) => match read_lock.clone() {
+                        Some(value) => Ok(value.sub),
+                        None => Err("Error: Clone cannot be performed"),
+                    },
+                    Err(_) => Err("Error: Read lock cannot be obtained"),
+                };
+                let verified_age_result = match connection_state
+                    .claims_lock
+                    .read()
+                    .expect("Error: Read lock cannot be obtained")
+                    .clone()
+                {
+                    Some(claims) => Ok(claims.age == "Verified 18+"),
+                    None => Err("Error: Claims data not available"),
+                };
+                // geo_fence_contract
+                if locator
+                    .body
+                    .contains("5H6sLwXKBv3cdm5VVRxrvA8p5cux2Rrni5CQ4GRyYKo4b9B4")
+                {
+                    println!("contract geofence");
+                    let contract = geo_fence_contract::geo_fence_contract::GeoFenceContract::new();
+                    // Parse the geofence data from the policy body
+                    if let Some(body) = policy_body {
+                        if body.len() >= 24 {
+                            // Ensure we have enough bytes for the geofence data
+                            let geofence = Geofence3D {
+                                min_latitude: 0.0,
+                                max_latitude: 0.00061, // Approximately 20 feet in latitude
+                                min_longitude: 0.0,
+                                max_longitude: 0.00061, // Approximately 20 feet in longitude
+                                min_altitude: 0.0,
+                                max_altitude: 6.1, // 20 feet in altitude
+                            };
+
+                            // Get from rewrap request, second payload will be NanoTDF location
+                            let coordinate = geo_fence_contract::geo_fence_contract::Coordinate3D {
+                                latitude: 0.0003,
+                                longitude: 0.0003,
+                                altitude: 3.0,
+                            };
+
+                            if claims_result.is_ok()
+                                && !contract.is_within_geofence(geofence, coordinate)
+                            {
+                                // binary response for DENY
+                                let mut response_data: Vec<u8> = Vec::new();
+                                response_data.push(MessageType::RewrappedKey as u8);
+                                response_data.extend_from_slice(tdf_ephemeral_key_bytes);
+                                // timing
+                                let total_time = start_time.elapsed();
+                                log_timing(settings, "Time to deny", total_time);
+                                // DENY
+                                return Some(Message::Binary(response_data));
+                            }
+                        }
+                    }
+                    // let geofence = geo_fence_contract::geo_fence_contract::Geofence3D {
+                    //     min_latitude: -10_000_000,
+                    //     max_latitude: 10_000_000,
+                    //     min_longitude: -20_000_000,
+                    //     max_longitude: 20_000_000,
+                    //     min_altitude: 0,
+                    //     max_altitude: 100_000_000,
+                    // };
+                    // let coordinate = geo_fence_contract::geo_fence_contract::Coordinate3D {
+                    //     latitude: 0,
+                    //     longitude: 0,
+                    //     altitude: 50_000_000,
+                    // };
+                    // if claims_result.is_ok()
+                    //     && !contract.is_within_geofence(geofence, coordinate)
+                    // {
+                    //     // binary response
+                    //     let mut response_data: Vec<u8> = Vec::new();
+                    //     response_data.push(MessageType::RewrappedKey as u8);
+                    //     response_data.extend_from_slice(tdf_ephemeral_key_bytes);
+                    //     // timing
+                    //     let total_time = start_time.elapsed();
+                    //     log_timing(settings, "Time to deny", total_time);
+                    //     // DENY
+                    //     return Some(Message::Binary(response_data));
+                    // }
+                }
+                // content_rating
+                else if locator
+                    .body
+                    .contains("5HKLo6CKbt1Z5dU4wZ3MiufeZzjM6JGwKUWUQ6a91fmuA6RB")
+                {
+                    println!("contract content rating");
+                    let contract = ContentRating::new();
+                    // Parse the content rating data from the policy body
+                    // get entitlements
+                    let age_level = if verified_age_result.unwrap_or(false) {
+                        AgeLevel::Adults
+                    } else {
+                        AgeLevel::Kids
+                    };
+                    if metadata.is_none() {
+                        println!("metadata is null");
+                        return None;
+                    }
+                    let rating_data = metadata.unwrap().rating()?;
+                    let rating = Rating {
+                        violent: convert_rating_level(rating_data.violent()),
+                        sexual: convert_rating_level(rating_data.sexual()),
+                        profane: convert_rating_level(rating_data.profane()),
+                        substance: convert_rating_level(rating_data.substance()),
+                        hate: convert_rating_level(rating_data.hate()),
+                        harm: convert_rating_level(rating_data.harm()),
+                        mature: convert_rating_level(rating_data.mature()),
+                        bully: convert_rating_level(rating_data.bully()),
+                    };
+                    if !contract.check_content(age_level, rating) {
+                        println!("content rating DENY");
+                        return None;
+                    }
+                }
+                // simple_abac
+                else if locator
+                    .body
+                    .contains("5Cqk3ERPToSMuY8UoKJtcmo4fs1iVyQpq6ndzWzpzWezAF1W")
+                {
+                    let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
+                    if claims_result.is_ok()
+                        && !contract.check_access(claims_result.unwrap(), locator.body.clone())
+                    {
+                        // binary response
+                        let mut response_data = Vec::new();
+                        response_data.push(MessageType::RewrappedKey as u8);
+                        response_data.extend_from_slice(tdf_ephemeral_key_bytes);
+                        // timing
+                        let total_time = start_time.elapsed();
+                        log_timing(settings, "Time to deny", total_time);
+                        // DENY
+                        return Some(Message::Binary(response_data));
+                    }
+                }
             }
         }
     }
@@ -674,7 +840,7 @@ async fn handle_nats_subscription(
                 Ok(mut subscription) => {
                     info!("Subscribed to NATS subject: {}", subject);
                     while let Some(msg) = subscription.next().await {
-                        if let Err(e) = handle_nats_message(msg, connection_state.clone()).await {
+                        if let Err(e) = handle_nats_event(msg, connection_state.clone()).await {
                             error!("Error handling NATS message: {}", e);
                         }
                     }
@@ -690,12 +856,12 @@ async fn handle_nats_subscription(
         tokio::time::sleep(NATS_RETRY_INTERVAL).await;
     }
 }
-async fn handle_nats_message(
+async fn handle_nats_event(
     msg: NatsMessage,
     connection_state: Arc<ConnectionState>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ws_message = Message::Binary(
-        vec![MessageType::Nats as u8]
+        vec![MessageType::Event as u8]
             .into_iter()
             .chain(msg.payload)
             .collect(),
@@ -703,8 +869,11 @@ async fn handle_nats_message(
     connection_state.outgoing_tx.send(ws_message)?;
     Ok(())
 }
-
-async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option<Message> {
+async fn handle_event(
+    server_state: &Arc<ServerState>,
+    payload: &[u8],
+    nats_connection: Arc<NatsConnection>,
+) -> Option<Message> {
     let start_time = Instant::now();
     let mut event_data: Option<Vec<u8>> = None;
     if let Ok(event) = root::<Event>(payload) {
@@ -750,6 +919,7 @@ async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option
                             return None;
                         }
                     };
+                    // TODO if cache miss then route to device
                 }
             }
             EventData::CacheEvent => {
@@ -804,11 +974,52 @@ async fn handle_event(server_state: &Arc<ServerState>, payload: &[u8]) -> Option
                     event_data = Some(cache_event.target_payload().unwrap().bytes().to_vec());
                 }
             }
+            EventData::RouteEvent => {
+                if let Some(route_event) = event.data_as_route_event() {
+                    if let Some(target_id) = route_event.target_id() {
+                        println!("Route Event:");
+                        println!("  Target ID: {:?}", target_id);
+                        let public_id = bs58::encode(target_id.bytes()).into_string();
+                        println!("  Public ID: {}", public_id);
+                        let subject = format!("profile.{}", public_id);
+                        println!("  subject: {}", subject);
+                        // Create NATS message
+                        // Create NATS message
+                        let nats_message = match NATSMessage::new(payload) {
+                            Ok(msg) => msg,
+                            Err(e) => {
+                                error!("Failed to create NATS message: {}", e);
+                                return None;
+                            }
+                        };
+                        // Get NATS client
+                        if let Some(nats_client) = nats_connection.get_client().await {
+                            // Send the event to NATS
+                            match nats_message.send_to_nats(&nats_client, subject).await {
+                                Ok(_) => {
+                                    println!("Successfully sent route event to NATS");
+                                    return None;
+                                }
+                                Err(e) => {
+                                    error!("Failed to send route event to NATS: {}", e);
+                                    return None;
+                                }
+                            }
+                        } else {
+                            error!("NATS client not available");
+                            return None;
+                        }
+                    } else {
+                        error!("Target ID is missing.");
+                        return None;
+                    }
+                }
+            }
             EventData::NONE => {
-                println!("No event data");
+                error!("No event data");
             }
             _ => {
-                println!("Unknown event data type: {:?}", event.data_type());
+                error!("Unknown event data type: {:?}", event.data_type());
             }
         }
     } else {
@@ -1167,5 +1378,16 @@ mod tests {
         C: CurveArithmetic,
     {
         pub scalar: NonZeroScalar<C>,
+    }
+}
+
+fn convert_rating_level(level: arkavo::RatingLevel) -> RatingLevel {
+    match level.0 {
+        x if x == arkavo::RatingLevel::unused.0 => RatingLevel::Unused,
+        x if x == arkavo::RatingLevel::none.0 => RatingLevel::None,
+        x if x == arkavo::RatingLevel::mild.0 => RatingLevel::Mild,
+        x if x == arkavo::RatingLevel::moderate.0 => RatingLevel::Moderate,
+        x if x == arkavo::RatingLevel::severe.0 => RatingLevel::Severe,
+        _ => RatingLevel::Unused, // Default to Unused for any invalid values
     }
 }

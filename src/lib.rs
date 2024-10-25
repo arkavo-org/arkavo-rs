@@ -18,13 +18,13 @@ struct NanoTDFHeader {
     ephemeral_key: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ResourceLocator {
     pub protocol_enum: ProtocolEnum,
     pub body: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub enum ProtocolEnum {
     Http = 0x00,
     Https = 0x01,
@@ -72,15 +72,15 @@ struct SymmetricAndPayloadConfig {
 }
 
 #[derive(Debug)]
-enum PolicyType {
+pub enum PolicyType {
     Remote,
     Embedded,
 }
 
 #[derive(Debug)]
 pub struct Policy {
-    policy_type: PolicyType,
-    body: Option<Vec<u8>>,
+    pub policy_type: PolicyType,
+    pub body: Option<Vec<u8>>,
     remote: Option<ResourceLocator>,
     // TODO change to PolicyBindingConfig
     binding: Option<Vec<u8>>,
@@ -134,7 +134,7 @@ struct Payload {
 
 pub struct BinaryParser<'a> {
     data: &'a [u8],
-    position: usize,
+    pub position: usize,
 }
 
 impl<'a> BinaryParser<'a> {
