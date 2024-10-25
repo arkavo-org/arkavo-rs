@@ -39,6 +39,8 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex};
 use tokio_native_tls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::Message;
+use crate::schemas::metadata_generated::arkavo;
+use crate::schemas::metadata_generated::arkavo::{root_as_metadata, Metadata};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct PublicKeyMessage {
@@ -508,23 +510,34 @@ async fn handle_rewrap(
     }
     // TDF contract
     let policy = header.get_policy();
-    let locator: Option<&ResourceLocator>;
-    let mut embedded_locator: Option<ResourceLocator> = None;
-    let mut policy_body: Option<&[u8]> = None;
+    // println!("policy: {:?}", policy);
+    let locator: Option<ResourceLocator>;
+    let policy_body: Option<&[u8]> = None;
+    let mut metadata:  Option<Metadata> = None;
 
     match policy.policy_type {
         PolicyType::Remote => {
-            locator = policy.get_locator().as_ref();
+            locator = policy.get_locator().clone();
         }
         PolicyType::Embedded => {
+            // println!("embedded policy");
             if let Some(body) = &policy.body {
-                let mut parser = BinaryParser::new(body);
-                if let Ok(parsed_locator) = parser.read_kas_field() {
-                    embedded_locator = Some(parsed_locator);
-                    policy_body = Some(&body[parser.position..]);
-                }
+                metadata = match root_as_metadata(body) {
+                    Ok(metadata) => Some(metadata),
+                    Err(e) => {
+                        eprintln!("Failed to parse metadata: {}", e);
+                        return None;
+                    }
+                };
+                // TODO add contracts
+                // println!("metadata: {:#?}", metadata);
             }
-            locator = embedded_locator.as_ref();
+            // add content rating contract
+            let rl = ResourceLocator{
+                protocol_enum: ProtocolEnum::SharedResource,
+                body: "5HKLo6CKbt1Z5dU4wZ3MiufeZzjM6JGwKUWUQ6a91fmuA6RB".to_string(),
+            };
+            locator = Some(rl);
         }
     }
     if let Some(locator) = &locator {
@@ -615,35 +628,34 @@ async fn handle_rewrap(
                     println!("contract content rating");
                     let contract = ContentRating::new();
                     // Parse the content rating data from the policy body
-                    if let Some(body) = policy_body {
-                        if body.len() >= 8 {
-                            let age_level = AgeLevel::Kids;
-                            let rating = Rating {
-                                violent: RatingLevel::Mild,
-                                sexual: RatingLevel::None,
-                                profane: RatingLevel::None,
-                                substance: RatingLevel::None,
-                                hate: RatingLevel::None,
-                                harm: RatingLevel::None,
-                                mature: RatingLevel::None,
-                                bully: RatingLevel::None,
-                            };
-                            if !contract.check_content(age_level, rating) {
-                                println!("content rating DENY");
-                                return None;
-                            }
-                        } else {
-                            println!("policy body DENY");
-                            return None;
-                        }
+                    // get entitlements
+                    let age_level = AgeLevel::Kids;
+                    if metadata == None {
+                        println!("metadata is null");
+                        return None;
                     }
-                }
-                // simple_abac
-                else if locator
-                    .body
-                    .contains("5Cqk3ERPToSMuY8UoKJtcmo4fs1iVyQpq6ndzWzpzWezAF1W")
-                {
-                    let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
+                    let rating_data = metadata.unwrap().rating()?;
+                    let rating = Rating {
+                        violent: convert_rating_level(rating_data.violent()),
+                        sexual: convert_rating_level(rating_data.sexual()),
+                        profane: convert_rating_level(rating_data.profane()),
+                        substance: convert_rating_level(rating_data.substance()),
+                        hate: convert_rating_level(rating_data.hate()),
+                        harm: convert_rating_level(rating_data.harm()),
+                        mature: convert_rating_level(rating_data.mature()),
+                        bully: convert_rating_level(rating_data.bully()),
+                    };
+                    if !contract.check_content(age_level, rating) {
+                        println!("content rating DENY");
+                        return None;
+                    }
+            }
+            // simple_abac
+            else if locator
+                .body
+                .contains("5Cqk3ERPToSMuY8UoKJtcmo4fs1iVyQpq6ndzWzpzWezAF1W")
+            {
+                let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
                     if claims_result.is_ok()
                         && !contract.check_access(claims_result.unwrap(), locator.body.clone())
                     {
@@ -1349,5 +1361,16 @@ mod tests {
         C: CurveArithmetic,
     {
         pub scalar: NonZeroScalar<C>,
+    }
+}
+
+fn convert_rating_level(level: arkavo::RatingLevel) -> RatingLevel {
+    match level.0 {
+        x if x == arkavo::RatingLevel::unused.0 => RatingLevel::Unused,
+        x if x == arkavo::RatingLevel::none.0 => RatingLevel::None,
+        x if x == arkavo::RatingLevel::mild.0 => RatingLevel::Mild,
+        x if x == arkavo::RatingLevel::moderate.0 => RatingLevel::Moderate,
+        x if x == arkavo::RatingLevel::severe.0 => RatingLevel::Severe,
+        _ => RatingLevel::Unused, // Default to Unused for any invalid values
     }
 }

@@ -18,13 +18,13 @@ struct NanoTDFHeader {
     ephemeral_key: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ResourceLocator {
     pub protocol_enum: ProtocolEnum,
     pub body: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub enum ProtocolEnum {
     Http = 0x00,
     Https = 0x01,

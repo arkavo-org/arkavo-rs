@@ -25,6 +25,8 @@ brew install nats-server redis flatbuffers
 
 ```shell
 flatc --binary --rust idl/event.fbs
+flatc --binary --rust idl/entity.fbs
+flatc --binary --rust idl/metadata.fbs
 ```
 
 ### Installation
