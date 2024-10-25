@@ -1,10 +1,14 @@
 mod contracts;
 mod schemas;
 
-use crate::contracts::content_rating::content_rating::{AgeLevel, ContentRating, Rating, RatingLevel};
+use crate::contracts::content_rating::content_rating::{
+    AgeLevel, ContentRating, Rating, RatingLevel,
+};
 use crate::contracts::geo_fence_contract::geo_fence_contract::Geofence3D;
 use crate::contracts::{contract_simple_abac, geo_fence_contract};
 use crate::schemas::event_generated::arkavo::{Event, EventData};
+use crate::schemas::metadata_generated::arkavo;
+use crate::schemas::metadata_generated::arkavo::{root_as_metadata, Metadata};
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::KeyInit;
 use aes_gcm::aead::{Aead, Key};
@@ -39,8 +43,6 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex};
 use tokio_native_tls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::Message;
-use crate::schemas::metadata_generated::arkavo;
-use crate::schemas::metadata_generated::arkavo::{root_as_metadata, Metadata};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct PublicKeyMessage {
@@ -399,6 +401,7 @@ async fn handle_connection(
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Claims {
     sub: String,
+    age: String,
 }
 fn verify_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     let mut validation = Validation::default();
@@ -513,7 +516,7 @@ async fn handle_rewrap(
     // println!("policy: {:?}", policy);
     let locator: Option<ResourceLocator>;
     let policy_body: Option<&[u8]> = None;
-    let mut metadata:  Option<Metadata> = None;
+    let mut metadata: Option<Metadata> = None;
 
     match policy.policy_type {
         PolicyType::Remote => {
@@ -533,7 +536,7 @@ async fn handle_rewrap(
                 // println!("metadata: {:#?}", metadata);
             }
             // add content rating contract
-            let rl = ResourceLocator{
+            let rl = ResourceLocator {
                 protocol_enum: ProtocolEnum::SharedResource,
                 body: "5HKLo6CKbt1Z5dU4wZ3MiufeZzjM6JGwKUWUQ6a91fmuA6RB".to_string(),
             };
@@ -544,12 +547,22 @@ async fn handle_rewrap(
         if locator.protocol_enum == ProtocolEnum::SharedResource {
             println!("contract {}", locator.body.clone());
             if !locator.body.is_empty() {
+                //  "Verified 18+"
                 let claims_result = match connection_state.claims_lock.read() {
                     Ok(read_lock) => match read_lock.clone() {
                         Some(value) => Ok(value.sub),
                         None => Err("Error: Clone cannot be performed"),
                     },
                     Err(_) => Err("Error: Read lock cannot be obtained"),
+                };
+                let verified_age_result = match connection_state
+                    .claims_lock
+                    .read()
+                    .expect("Error: Read lock cannot be obtained")
+                    .clone()
+                {
+                    Some(claims) => Ok(claims.age == "Verified 18+"),
+                    None => Err("Error: Claims data not available"),
                 };
                 // geo_fence_contract
                 if locator
@@ -629,8 +642,12 @@ async fn handle_rewrap(
                     let contract = ContentRating::new();
                     // Parse the content rating data from the policy body
                     // get entitlements
-                    let age_level = AgeLevel::Kids;
-                    if metadata == None {
+                    let age_level = if verified_age_result.unwrap_or(false) {
+                        AgeLevel::Adults
+                    } else {
+                        AgeLevel::Kids
+                    };
+                    if metadata.is_none() {
                         println!("metadata is null");
                         return None;
                     }
@@ -649,13 +666,13 @@ async fn handle_rewrap(
                         println!("content rating DENY");
                         return None;
                     }
-            }
-            // simple_abac
-            else if locator
-                .body
-                .contains("5Cqk3ERPToSMuY8UoKJtcmo4fs1iVyQpq6ndzWzpzWezAF1W")
-            {
-                let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
+                }
+                // simple_abac
+                else if locator
+                    .body
+                    .contains("5Cqk3ERPToSMuY8UoKJtcmo4fs1iVyQpq6ndzWzpzWezAF1W")
+                {
+                    let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
                     if claims_result.is_ok()
                         && !contract.check_access(claims_result.unwrap(), locator.body.clone())
                     {

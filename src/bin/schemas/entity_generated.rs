@@ -8,2058 +8,2536 @@ extern crate flatbuffers;
 #[allow(unused_imports, dead_code)]
 pub mod arkavo {
 
-  use core::mem;
-  use core::cmp::Ordering;
-
-  extern crate flatbuffers;
-  use self::flatbuffers::{EndianScalar, Follow};
-
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MIN_ACTIVITY_LEVEL: i8 = 0;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_ACTIVITY_LEVEL: i8 = 3;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_ACTIVITY_LEVEL: [ActivityLevel; 4] = [
-  ActivityLevel::unused,
-  ActivityLevel::low,
-  ActivityLevel::medium,
-  ActivityLevel::high,
-];
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[repr(transparent)]
-pub struct ActivityLevel(pub i8);
-#[allow(non_upper_case_globals)]
-impl ActivityLevel {
-  pub const unused: Self = Self(0);
-  pub const low: Self = Self(1);
-  pub const medium: Self = Self(2);
-  pub const high: Self = Self(3);
-
-  pub const ENUM_MIN: i8 = 0;
-  pub const ENUM_MAX: i8 = 3;
-  pub const ENUM_VALUES: &'static [Self] = &[
-    Self::unused,
-    Self::low,
-    Self::medium,
-    Self::high,
-  ];
-  /// Returns the variant's name or "" if unknown.
-  pub fn variant_name(self) -> Option<&'static str> {
-    match self {
-      Self::unused => Some("unused"),
-      Self::low => Some("low"),
-      Self::medium => Some("medium"),
-      Self::high => Some("high"),
-      _ => None,
-    }
-  }
-}
-impl core::fmt::Debug for ActivityLevel {
-  fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-    if let Some(name) = self.variant_name() {
-      f.write_str(name)
-    } else {
-      f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
-    }
-  }
-}
-impl<'a> flatbuffers::Follow<'a> for ActivityLevel {
-  type Inner = Self;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
-    Self(b)
-  }
-}
-
-impl flatbuffers::Push for ActivityLevel {
-    type Output = ActivityLevel;
-    #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-        flatbuffers::emplace_scalar::<i8>(dst, self.0);
-    }
-}
-
-impl flatbuffers::EndianScalar for ActivityLevel {
-  type Scalar = i8;
-  #[inline]
-  fn to_little_endian(self) -> i8 {
-    self.0.to_le()
-  }
-  #[inline]
-  #[allow(clippy::wrong_self_convention)]
-  fn from_little_endian(v: i8) -> Self {
-    let b = i8::from_le(v);
-    Self(b)
-  }
-}
-
-impl<'a> flatbuffers::Verifiable for ActivityLevel {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    i8::run_verifier(v, pos)
-  }
-}
-
-impl flatbuffers::SimpleToVerifyInSlice for ActivityLevel {}
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MIN_MEDIA_TYPE: i8 = 0;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_MEDIA_TYPE: i8 = 4;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_MEDIA_TYPE: [MediaType; 5] = [
-  MediaType::unused,
-  MediaType::text,
-  MediaType::image,
-  MediaType::video,
-  MediaType::audio,
-];
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[repr(transparent)]
-pub struct MediaType(pub i8);
-#[allow(non_upper_case_globals)]
-impl MediaType {
-  pub const unused: Self = Self(0);
-  pub const text: Self = Self(1);
-  pub const image: Self = Self(2);
-  pub const video: Self = Self(3);
-  pub const audio: Self = Self(4);
-
-  pub const ENUM_MIN: i8 = 0;
-  pub const ENUM_MAX: i8 = 4;
-  pub const ENUM_VALUES: &'static [Self] = &[
-    Self::unused,
-    Self::text,
-    Self::image,
-    Self::video,
-    Self::audio,
-  ];
-  /// Returns the variant's name or "" if unknown.
-  pub fn variant_name(self) -> Option<&'static str> {
-    match self {
-      Self::unused => Some("unused"),
-      Self::text => Some("text"),
-      Self::image => Some("image"),
-      Self::video => Some("video"),
-      Self::audio => Some("audio"),
-      _ => None,
-    }
-  }
-}
-impl core::fmt::Debug for MediaType {
-  fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-    if let Some(name) = self.variant_name() {
-      f.write_str(name)
-    } else {
-      f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
-    }
-  }
-}
-impl<'a> flatbuffers::Follow<'a> for MediaType {
-  type Inner = Self;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
-    Self(b)
-  }
-}
-
-impl flatbuffers::Push for MediaType {
-    type Output = MediaType;
-    #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-        flatbuffers::emplace_scalar::<i8>(dst, self.0);
-    }
-}
-
-impl flatbuffers::EndianScalar for MediaType {
-  type Scalar = i8;
-  #[inline]
-  fn to_little_endian(self) -> i8 {
-    self.0.to_le()
-  }
-  #[inline]
-  #[allow(clippy::wrong_self_convention)]
-  fn from_little_endian(v: i8) -> Self {
-    let b = i8::from_le(v);
-    Self(b)
-  }
-}
-
-impl<'a> flatbuffers::Verifiable for MediaType {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    i8::run_verifier(v, pos)
-  }
-}
-
-impl flatbuffers::SimpleToVerifyInSlice for MediaType {}
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MIN_LOCATION_LEVEL: i8 = 0;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_LOCATION_LEVEL: i8 = 3;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_LOCATION_LEVEL: [LocationLevel; 4] = [
-  LocationLevel::unused,
-  LocationLevel::wide,
-  LocationLevel::approximate,
-  LocationLevel::precise,
-];
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[repr(transparent)]
-pub struct LocationLevel(pub i8);
-#[allow(non_upper_case_globals)]
-impl LocationLevel {
-  pub const unused: Self = Self(0);
-  pub const wide: Self = Self(1);
-  pub const approximate: Self = Self(2);
-  pub const precise: Self = Self(3);
-
-  pub const ENUM_MIN: i8 = 0;
-  pub const ENUM_MAX: i8 = 3;
-  pub const ENUM_VALUES: &'static [Self] = &[
-    Self::unused,
-    Self::wide,
-    Self::approximate,
-    Self::precise,
-  ];
-  /// Returns the variant's name or "" if unknown.
-  pub fn variant_name(self) -> Option<&'static str> {
-    match self {
-      Self::unused => Some("unused"),
-      Self::wide => Some("wide"),
-      Self::approximate => Some("approximate"),
-      Self::precise => Some("precise"),
-      _ => None,
-    }
-  }
-}
-impl core::fmt::Debug for LocationLevel {
-  fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-    if let Some(name) = self.variant_name() {
-      f.write_str(name)
-    } else {
-      f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
-    }
-  }
-}
-impl<'a> flatbuffers::Follow<'a> for LocationLevel {
-  type Inner = Self;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
-    Self(b)
-  }
-}
-
-impl flatbuffers::Push for LocationLevel {
-    type Output = LocationLevel;
-    #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-        flatbuffers::emplace_scalar::<i8>(dst, self.0);
-    }
-}
-
-impl flatbuffers::EndianScalar for LocationLevel {
-  type Scalar = i8;
-  #[inline]
-  fn to_little_endian(self) -> i8 {
-    self.0.to_le()
-  }
-  #[inline]
-  #[allow(clippy::wrong_self_convention)]
-  fn from_little_endian(v: i8) -> Self {
-    let b = i8::from_le(v);
-    Self(b)
-  }
-}
-
-impl<'a> flatbuffers::Verifiable for LocationLevel {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    i8::run_verifier(v, pos)
-  }
-}
-
-impl flatbuffers::SimpleToVerifyInSlice for LocationLevel {}
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MIN_IDENTITY_ASSURANCE_LEVEL: i8 = 0;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_IDENTITY_ASSURANCE_LEVEL: i8 = 5;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_IDENTITY_ASSURANCE_LEVEL: [IdentityAssuranceLevel; 6] = [
-  IdentityAssuranceLevel::unused,
-  IdentityAssuranceLevel::ial0,
-  IdentityAssuranceLevel::ial1,
-  IdentityAssuranceLevel::ial2,
-  IdentityAssuranceLevel::ial25,
-  IdentityAssuranceLevel::ial3,
-];
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[repr(transparent)]
-pub struct IdentityAssuranceLevel(pub i8);
-#[allow(non_upper_case_globals)]
-impl IdentityAssuranceLevel {
-  pub const unused: Self = Self(0);
-  pub const ial0: Self = Self(1);
-  pub const ial1: Self = Self(2);
-  pub const ial2: Self = Self(3);
-  pub const ial25: Self = Self(4);
-  pub const ial3: Self = Self(5);
-
-  pub const ENUM_MIN: i8 = 0;
-  pub const ENUM_MAX: i8 = 5;
-  pub const ENUM_VALUES: &'static [Self] = &[
-    Self::unused,
-    Self::ial0,
-    Self::ial1,
-    Self::ial2,
-    Self::ial25,
-    Self::ial3,
-  ];
-  /// Returns the variant's name or "" if unknown.
-  pub fn variant_name(self) -> Option<&'static str> {
-    match self {
-      Self::unused => Some("unused"),
-      Self::ial0 => Some("ial0"),
-      Self::ial1 => Some("ial1"),
-      Self::ial2 => Some("ial2"),
-      Self::ial25 => Some("ial25"),
-      Self::ial3 => Some("ial3"),
-      _ => None,
-    }
-  }
-}
-impl core::fmt::Debug for IdentityAssuranceLevel {
-  fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-    if let Some(name) = self.variant_name() {
-      f.write_str(name)
-    } else {
-      f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
-    }
-  }
-}
-impl<'a> flatbuffers::Follow<'a> for IdentityAssuranceLevel {
-  type Inner = Self;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
-    Self(b)
-  }
-}
-
-impl flatbuffers::Push for IdentityAssuranceLevel {
-    type Output = IdentityAssuranceLevel;
-    #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-        flatbuffers::emplace_scalar::<i8>(dst, self.0);
-    }
-}
-
-impl flatbuffers::EndianScalar for IdentityAssuranceLevel {
-  type Scalar = i8;
-  #[inline]
-  fn to_little_endian(self) -> i8 {
-    self.0.to_le()
-  }
-  #[inline]
-  #[allow(clippy::wrong_self_convention)]
-  fn from_little_endian(v: i8) -> Self {
-    let b = i8::from_le(v);
-    Self(b)
-  }
-}
-
-impl<'a> flatbuffers::Verifiable for IdentityAssuranceLevel {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    i8::run_verifier(v, pos)
-  }
-}
-
-impl flatbuffers::SimpleToVerifyInSlice for IdentityAssuranceLevel {}
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MIN_ENCRYPTION_LEVEL: i8 = 0;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_ENCRYPTION_LEVEL: i8 = 3;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_ENCRYPTION_LEVEL: [EncryptionLevel; 4] = [
-  EncryptionLevel::unused,
-  EncryptionLevel::el0,
-  EncryptionLevel::el1,
-  EncryptionLevel::el2,
-];
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[repr(transparent)]
-pub struct EncryptionLevel(pub i8);
-#[allow(non_upper_case_globals)]
-impl EncryptionLevel {
-  pub const unused: Self = Self(0);
-  pub const el0: Self = Self(1);
-  pub const el1: Self = Self(2);
-  pub const el2: Self = Self(3);
-
-  pub const ENUM_MIN: i8 = 0;
-  pub const ENUM_MAX: i8 = 3;
-  pub const ENUM_VALUES: &'static [Self] = &[
-    Self::unused,
-    Self::el0,
-    Self::el1,
-    Self::el2,
-  ];
-  /// Returns the variant's name or "" if unknown.
-  pub fn variant_name(self) -> Option<&'static str> {
-    match self {
-      Self::unused => Some("unused"),
-      Self::el0 => Some("el0"),
-      Self::el1 => Some("el1"),
-      Self::el2 => Some("el2"),
-      _ => None,
-    }
-  }
-}
-impl core::fmt::Debug for EncryptionLevel {
-  fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-    if let Some(name) = self.variant_name() {
-      f.write_str(name)
-    } else {
-      f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
-    }
-  }
-}
-impl<'a> flatbuffers::Follow<'a> for EncryptionLevel {
-  type Inner = Self;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
-    Self(b)
-  }
-}
-
-impl flatbuffers::Push for EncryptionLevel {
-    type Output = EncryptionLevel;
-    #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-        flatbuffers::emplace_scalar::<i8>(dst, self.0);
-    }
-}
-
-impl flatbuffers::EndianScalar for EncryptionLevel {
-  type Scalar = i8;
-  #[inline]
-  fn to_little_endian(self) -> i8 {
-    self.0.to_le()
-  }
-  #[inline]
-  #[allow(clippy::wrong_self_convention)]
-  fn from_little_endian(v: i8) -> Self {
-    let b = i8::from_le(v);
-    Self(b)
-  }
-}
-
-impl<'a> flatbuffers::Verifiable for EncryptionLevel {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    i8::run_verifier(v, pos)
-  }
-}
-
-impl flatbuffers::SimpleToVerifyInSlice for EncryptionLevel {}
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MIN_STREAM_LEVEL: i8 = 0;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_STREAM_LEVEL: i8 = 3;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_STREAM_LEVEL: [StreamLevel; 4] = [
-  StreamLevel::unused,
-  StreamLevel::sl0,
-  StreamLevel::sl1,
-  StreamLevel::sl2,
-];
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[repr(transparent)]
-pub struct StreamLevel(pub i8);
-#[allow(non_upper_case_globals)]
-impl StreamLevel {
-  pub const unused: Self = Self(0);
-  pub const sl0: Self = Self(1);
-  pub const sl1: Self = Self(2);
-  pub const sl2: Self = Self(3);
-
-  pub const ENUM_MIN: i8 = 0;
-  pub const ENUM_MAX: i8 = 3;
-  pub const ENUM_VALUES: &'static [Self] = &[
-    Self::unused,
-    Self::sl0,
-    Self::sl1,
-    Self::sl2,
-  ];
-  /// Returns the variant's name or "" if unknown.
-  pub fn variant_name(self) -> Option<&'static str> {
-    match self {
-      Self::unused => Some("unused"),
-      Self::sl0 => Some("sl0"),
-      Self::sl1 => Some("sl1"),
-      Self::sl2 => Some("sl2"),
-      _ => None,
-    }
-  }
-}
-impl core::fmt::Debug for StreamLevel {
-  fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-    if let Some(name) = self.variant_name() {
-      f.write_str(name)
-    } else {
-      f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
-    }
-  }
-}
-impl<'a> flatbuffers::Follow<'a> for StreamLevel {
-  type Inner = Self;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
-    Self(b)
-  }
-}
-
-impl flatbuffers::Push for StreamLevel {
-    type Output = StreamLevel;
-    #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-        flatbuffers::emplace_scalar::<i8>(dst, self.0);
-    }
-}
-
-impl flatbuffers::EndianScalar for StreamLevel {
-  type Scalar = i8;
-  #[inline]
-  fn to_little_endian(self) -> i8 {
-    self.0.to_le()
-  }
-  #[inline]
-  #[allow(clippy::wrong_self_convention)]
-  fn from_little_endian(v: i8) -> Self {
-    let b = i8::from_le(v);
-    Self(b)
-  }
-}
-
-impl<'a> flatbuffers::Verifiable for StreamLevel {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    i8::run_verifier(v, pos)
-  }
-}
-
-impl flatbuffers::SimpleToVerifyInSlice for StreamLevel {}
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MIN_EXPERT_LEVEL: i8 = 0;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_EXPERT_LEVEL: i8 = 4;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_EXPERT_LEVEL: [ExpertLevel; 5] = [
-  ExpertLevel::unused,
-  ExpertLevel::novice,
-  ExpertLevel::intermediate,
-  ExpertLevel::expert,
-  ExpertLevel::master,
-];
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[repr(transparent)]
-pub struct ExpertLevel(pub i8);
-#[allow(non_upper_case_globals)]
-impl ExpertLevel {
-  pub const unused: Self = Self(0);
-  pub const novice: Self = Self(1);
-  pub const intermediate: Self = Self(2);
-  pub const expert: Self = Self(3);
-  pub const master: Self = Self(4);
-
-  pub const ENUM_MIN: i8 = 0;
-  pub const ENUM_MAX: i8 = 4;
-  pub const ENUM_VALUES: &'static [Self] = &[
-    Self::unused,
-    Self::novice,
-    Self::intermediate,
-    Self::expert,
-    Self::master,
-  ];
-  /// Returns the variant's name or "" if unknown.
-  pub fn variant_name(self) -> Option<&'static str> {
-    match self {
-      Self::unused => Some("unused"),
-      Self::novice => Some("novice"),
-      Self::intermediate => Some("intermediate"),
-      Self::expert => Some("expert"),
-      Self::master => Some("master"),
-      _ => None,
-    }
-  }
-}
-impl core::fmt::Debug for ExpertLevel {
-  fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-    if let Some(name) = self.variant_name() {
-      f.write_str(name)
-    } else {
-      f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
-    }
-  }
-}
-impl<'a> flatbuffers::Follow<'a> for ExpertLevel {
-  type Inner = Self;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
-    Self(b)
-  }
-}
-
-impl flatbuffers::Push for ExpertLevel {
-    type Output = ExpertLevel;
-    #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-        flatbuffers::emplace_scalar::<i8>(dst, self.0);
-    }
-}
-
-impl flatbuffers::EndianScalar for ExpertLevel {
-  type Scalar = i8;
-  #[inline]
-  fn to_little_endian(self) -> i8 {
-    self.0.to_le()
-  }
-  #[inline]
-  #[allow(clippy::wrong_self_convention)]
-  fn from_little_endian(v: i8) -> Self {
-    let b = i8::from_le(v);
-    Self(b)
-  }
-}
-
-impl<'a> flatbuffers::Verifiable for ExpertLevel {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    i8::run_verifier(v, pos)
-  }
-}
-
-impl flatbuffers::SimpleToVerifyInSlice for ExpertLevel {}
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MIN_TRUST_LEVEL: i8 = 0;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_TRUST_LEVEL: i8 = 5;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_TRUST_LEVEL: [TrustLevel; 6] = [
-  TrustLevel::unused,
-  TrustLevel::untrusted,
-  TrustLevel::low,
-  TrustLevel::medium,
-  TrustLevel::high,
-  TrustLevel::verified,
-];
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[repr(transparent)]
-pub struct TrustLevel(pub i8);
-#[allow(non_upper_case_globals)]
-impl TrustLevel {
-  pub const unused: Self = Self(0);
-  pub const untrusted: Self = Self(1);
-  pub const low: Self = Self(2);
-  pub const medium: Self = Self(3);
-  pub const high: Self = Self(4);
-  pub const verified: Self = Self(5);
-
-  pub const ENUM_MIN: i8 = 0;
-  pub const ENUM_MAX: i8 = 5;
-  pub const ENUM_VALUES: &'static [Self] = &[
-    Self::unused,
-    Self::untrusted,
-    Self::low,
-    Self::medium,
-    Self::high,
-    Self::verified,
-  ];
-  /// Returns the variant's name or "" if unknown.
-  pub fn variant_name(self) -> Option<&'static str> {
-    match self {
-      Self::unused => Some("unused"),
-      Self::untrusted => Some("untrusted"),
-      Self::low => Some("low"),
-      Self::medium => Some("medium"),
-      Self::high => Some("high"),
-      Self::verified => Some("verified"),
-      _ => None,
-    }
-  }
-}
-impl core::fmt::Debug for TrustLevel {
-  fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-    if let Some(name) = self.variant_name() {
-      f.write_str(name)
-    } else {
-      f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
-    }
-  }
-}
-impl<'a> flatbuffers::Follow<'a> for TrustLevel {
-  type Inner = Self;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
-    Self(b)
-  }
-}
-
-impl flatbuffers::Push for TrustLevel {
-    type Output = TrustLevel;
-    #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-        flatbuffers::emplace_scalar::<i8>(dst, self.0);
-    }
-}
-
-impl flatbuffers::EndianScalar for TrustLevel {
-  type Scalar = i8;
-  #[inline]
-  fn to_little_endian(self) -> i8 {
-    self.0.to_le()
-  }
-  #[inline]
-  #[allow(clippy::wrong_self_convention)]
-  fn from_little_endian(v: i8) -> Self {
-    let b = i8::from_le(v);
-    Self(b)
-  }
-}
-
-impl<'a> flatbuffers::Verifiable for TrustLevel {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    i8::run_verifier(v, pos)
-  }
-}
-
-impl flatbuffers::SimpleToVerifyInSlice for TrustLevel {}
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MIN_ENTITY: u8 = 0;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_ENTITY: u8 = 3;
-#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-#[allow(non_camel_case_types)]
-pub const ENUM_VALUES_ENTITY: [Entity; 4] = [
-  Entity::NONE,
-  Entity::Account,
-  Entity::Stream,
-  Entity::Thought,
-];
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[repr(transparent)]
-pub struct Entity(pub u8);
-#[allow(non_upper_case_globals)]
-impl Entity {
-  pub const NONE: Self = Self(0);
-  pub const Account: Self = Self(1);
-  pub const Stream: Self = Self(2);
-  pub const Thought: Self = Self(3);
-
-  pub const ENUM_MIN: u8 = 0;
-  pub const ENUM_MAX: u8 = 3;
-  pub const ENUM_VALUES: &'static [Self] = &[
-    Self::NONE,
-    Self::Account,
-    Self::Stream,
-    Self::Thought,
-  ];
-  /// Returns the variant's name or "" if unknown.
-  pub fn variant_name(self) -> Option<&'static str> {
-    match self {
-      Self::NONE => Some("NONE"),
-      Self::Account => Some("Account"),
-      Self::Stream => Some("Stream"),
-      Self::Thought => Some("Thought"),
-      _ => None,
-    }
-  }
-}
-impl core::fmt::Debug for Entity {
-  fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-    if let Some(name) = self.variant_name() {
-      f.write_str(name)
-    } else {
-      f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
-    }
-  }
-}
-impl<'a> flatbuffers::Follow<'a> for Entity {
-  type Inner = Self;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
-    Self(b)
-  }
-}
-
-impl flatbuffers::Push for Entity {
-    type Output = Entity;
-    #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-        flatbuffers::emplace_scalar::<u8>(dst, self.0);
-    }
-}
-
-impl flatbuffers::EndianScalar for Entity {
-  type Scalar = u8;
-  #[inline]
-  fn to_little_endian(self) -> u8 {
-    self.0.to_le()
-  }
-  #[inline]
-  #[allow(clippy::wrong_self_convention)]
-  fn from_little_endian(v: u8) -> Self {
-    let b = u8::from_le(v);
-    Self(b)
-  }
-}
-
-impl<'a> flatbuffers::Verifiable for Entity {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    u8::run_verifier(v, pos)
-  }
-}
-
-impl flatbuffers::SimpleToVerifyInSlice for Entity {}
-pub struct EntityUnionTableOffset {}
-
-pub enum PublicIdOffset {}
-#[derive(Copy, Clone, PartialEq)]
-
-pub struct PublicId<'a> {
-  pub _tab: flatbuffers::Table<'a>,
-}
-
-impl<'a> flatbuffers::Follow<'a> for PublicId<'a> {
-  type Inner = PublicId<'a>;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table::new(buf, loc) }
-  }
-}
-
-impl<'a> PublicId<'a> {
-  pub const VT_ID: flatbuffers::VOffsetT = 4;
-
-  #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
-    PublicId { _tab: table }
-  }
-  #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
-    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args PublicIdArgs<'args>
-  ) -> flatbuffers::WIPOffset<PublicId<'bldr>> {
-    let mut builder = PublicIdBuilder::new(_fbb);
-    if let Some(x) = args.id { builder.add_id(x); }
-    builder.finish()
-  }
-
-
-  #[inline]
-  pub fn id(&self) -> Option<flatbuffers::Vector<'a, u8>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(PublicId::VT_ID, None)}
-  }
-}
-
-impl flatbuffers::Verifiable for PublicId<'_> {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    v.visit_table(pos)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("id", Self::VT_ID, false)?
-     .finish();
-    Ok(())
-  }
-}
-pub struct PublicIdArgs<'a> {
-    pub id: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
-}
-impl<'a> Default for PublicIdArgs<'a> {
-  #[inline]
-  fn default() -> Self {
-    PublicIdArgs {
-      id: None,
-    }
-  }
-}
-
-pub struct PublicIdBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
-  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
-}
-impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> PublicIdBuilder<'a, 'b, A> {
-  #[inline]
-  pub fn add_id(&mut self, id: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(PublicId::VT_ID, id);
-  }
-  #[inline]
-  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> PublicIdBuilder<'a, 'b, A> {
-    let start = _fbb.start_table();
-    PublicIdBuilder {
-      fbb_: _fbb,
-      start_: start,
-    }
-  }
-  #[inline]
-  pub fn finish(self) -> flatbuffers::WIPOffset<PublicId<'a>> {
-    let o = self.fbb_.end_table(self.start_);
-    flatbuffers::WIPOffset::new(o.value())
-  }
-}
-
-impl core::fmt::Debug for PublicId<'_> {
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    let mut ds = f.debug_struct("PublicId");
-      ds.field("id", &self.id());
-      ds.finish()
-  }
-}
-pub enum AccountOffset {}
-#[derive(Copy, Clone, PartialEq)]
-
-pub struct Account<'a> {
-  pub _tab: flatbuffers::Table<'a>,
-}
-
-impl<'a> flatbuffers::Follow<'a> for Account<'a> {
-  type Inner = Account<'a>;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table::new(buf, loc) }
-  }
-}
-
-impl<'a> Account<'a> {
-  pub const VT_PUBLIC_ID: flatbuffers::VOffsetT = 4;
-  pub const VT_PROFILE: flatbuffers::VOffsetT = 6;
-  pub const VT_ACTIVITY: flatbuffers::VOffsetT = 8;
-
-  #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
-    Account { _tab: table }
-  }
-  #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
-    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args AccountArgs<'args>
-  ) -> flatbuffers::WIPOffset<Account<'bldr>> {
-    let mut builder = AccountBuilder::new(_fbb);
-    if let Some(x) = args.activity { builder.add_activity(x); }
-    if let Some(x) = args.profile { builder.add_profile(x); }
-    if let Some(x) = args.public_id { builder.add_public_id(x); }
-    builder.finish()
-  }
-
-
-  #[inline]
-  pub fn public_id(&self) -> Option<PublicId<'a>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<PublicId>>(Account::VT_PUBLIC_ID, None)}
-  }
-  #[inline]
-  pub fn profile(&self) -> Option<Profile<'a>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<Profile>>(Account::VT_PROFILE, None)}
-  }
-  #[inline]
-  pub fn activity(&self) -> Option<Activity<'a>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<Activity>>(Account::VT_ACTIVITY, None)}
-  }
-}
-
-impl flatbuffers::Verifiable for Account<'_> {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    v.visit_table(pos)?
-     .visit_field::<flatbuffers::ForwardsUOffset<PublicId>>("public_id", Self::VT_PUBLIC_ID, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<Profile>>("profile", Self::VT_PROFILE, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<Activity>>("activity", Self::VT_ACTIVITY, false)?
-     .finish();
-    Ok(())
-  }
-}
-pub struct AccountArgs<'a> {
-    pub public_id: Option<flatbuffers::WIPOffset<PublicId<'a>>>,
-    pub profile: Option<flatbuffers::WIPOffset<Profile<'a>>>,
-    pub activity: Option<flatbuffers::WIPOffset<Activity<'a>>>,
-}
-impl<'a> Default for AccountArgs<'a> {
-  #[inline]
-  fn default() -> Self {
-    AccountArgs {
-      public_id: None,
-      profile: None,
-      activity: None,
-    }
-  }
-}
-
-pub struct AccountBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
-  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
-}
-impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> AccountBuilder<'a, 'b, A> {
-  #[inline]
-  pub fn add_public_id(&mut self, public_id: flatbuffers::WIPOffset<PublicId<'b >>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<PublicId>>(Account::VT_PUBLIC_ID, public_id);
-  }
-  #[inline]
-  pub fn add_profile(&mut self, profile: flatbuffers::WIPOffset<Profile<'b >>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<Profile>>(Account::VT_PROFILE, profile);
-  }
-  #[inline]
-  pub fn add_activity(&mut self, activity: flatbuffers::WIPOffset<Activity<'b >>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<Activity>>(Account::VT_ACTIVITY, activity);
-  }
-  #[inline]
-  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> AccountBuilder<'a, 'b, A> {
-    let start = _fbb.start_table();
-    AccountBuilder {
-      fbb_: _fbb,
-      start_: start,
-    }
-  }
-  #[inline]
-  pub fn finish(self) -> flatbuffers::WIPOffset<Account<'a>> {
-    let o = self.fbb_.end_table(self.start_);
-    flatbuffers::WIPOffset::new(o.value())
-  }
-}
-
-impl core::fmt::Debug for Account<'_> {
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    let mut ds = f.debug_struct("Account");
-      ds.field("public_id", &self.public_id());
-      ds.field("profile", &self.profile());
-      ds.field("activity", &self.activity());
-      ds.finish()
-  }
-}
-pub enum StreamOffset {}
-#[derive(Copy, Clone, PartialEq)]
-
-pub struct Stream<'a> {
-  pub _tab: flatbuffers::Table<'a>,
-}
-
-impl<'a> flatbuffers::Follow<'a> for Stream<'a> {
-  type Inner = Stream<'a>;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table::new(buf, loc) }
-  }
-}
-
-impl<'a> Stream<'a> {
-  pub const VT_PUBLIC_ID: flatbuffers::VOffsetT = 4;
-  pub const VT_PROFILE: flatbuffers::VOffsetT = 6;
-  pub const VT_ACTIVITY: flatbuffers::VOffsetT = 8;
-  pub const VT_CREATOR_PUBLIC_ID: flatbuffers::VOffsetT = 10;
-  pub const VT_MEMBERS_PUBLIC_ID: flatbuffers::VOffsetT = 12;
-  pub const VT_STREAM_LEVEL: flatbuffers::VOffsetT = 14;
-
-  #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
-    Stream { _tab: table }
-  }
-  #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
-    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args StreamArgs<'args>
-  ) -> flatbuffers::WIPOffset<Stream<'bldr>> {
-    let mut builder = StreamBuilder::new(_fbb);
-    if let Some(x) = args.members_public_id { builder.add_members_public_id(x); }
-    if let Some(x) = args.creator_public_id { builder.add_creator_public_id(x); }
-    if let Some(x) = args.activity { builder.add_activity(x); }
-    if let Some(x) = args.profile { builder.add_profile(x); }
-    if let Some(x) = args.public_id { builder.add_public_id(x); }
-    builder.add_stream_level(args.stream_level);
-    builder.finish()
-  }
-
-
-  #[inline]
-  pub fn public_id(&self) -> Option<PublicId<'a>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<PublicId>>(Stream::VT_PUBLIC_ID, None)}
-  }
-  #[inline]
-  pub fn profile(&self) -> Option<Profile<'a>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<Profile>>(Stream::VT_PROFILE, None)}
-  }
-  #[inline]
-  pub fn activity(&self) -> Option<Activity<'a>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<Activity>>(Stream::VT_ACTIVITY, None)}
-  }
-  #[inline]
-  pub fn creator_public_id(&self) -> Option<PublicId<'a>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<PublicId>>(Stream::VT_CREATOR_PUBLIC_ID, None)}
-  }
-  #[inline]
-  pub fn members_public_id(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<PublicId<'a>>>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<PublicId>>>>(Stream::VT_MEMBERS_PUBLIC_ID, None)}
-  }
-  #[inline]
-  pub fn stream_level(&self) -> StreamLevel {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<StreamLevel>(Stream::VT_STREAM_LEVEL, Some(StreamLevel::unused)).unwrap()}
-  }
-}
-
-impl flatbuffers::Verifiable for Stream<'_> {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    v.visit_table(pos)?
-     .visit_field::<flatbuffers::ForwardsUOffset<PublicId>>("public_id", Self::VT_PUBLIC_ID, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<Profile>>("profile", Self::VT_PROFILE, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<Activity>>("activity", Self::VT_ACTIVITY, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<PublicId>>("creator_public_id", Self::VT_CREATOR_PUBLIC_ID, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<PublicId>>>>("members_public_id", Self::VT_MEMBERS_PUBLIC_ID, false)?
-     .visit_field::<StreamLevel>("stream_level", Self::VT_STREAM_LEVEL, false)?
-     .finish();
-    Ok(())
-  }
-}
-pub struct StreamArgs<'a> {
-    pub public_id: Option<flatbuffers::WIPOffset<PublicId<'a>>>,
-    pub profile: Option<flatbuffers::WIPOffset<Profile<'a>>>,
-    pub activity: Option<flatbuffers::WIPOffset<Activity<'a>>>,
-    pub creator_public_id: Option<flatbuffers::WIPOffset<PublicId<'a>>>,
-    pub members_public_id: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<PublicId<'a>>>>>,
-    pub stream_level: StreamLevel,
-}
-impl<'a> Default for StreamArgs<'a> {
-  #[inline]
-  fn default() -> Self {
-    StreamArgs {
-      public_id: None,
-      profile: None,
-      activity: None,
-      creator_public_id: None,
-      members_public_id: None,
-      stream_level: StreamLevel::unused,
-    }
-  }
-}
-
-pub struct StreamBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
-  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
-}
-impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> StreamBuilder<'a, 'b, A> {
-  #[inline]
-  pub fn add_public_id(&mut self, public_id: flatbuffers::WIPOffset<PublicId<'b >>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<PublicId>>(Stream::VT_PUBLIC_ID, public_id);
-  }
-  #[inline]
-  pub fn add_profile(&mut self, profile: flatbuffers::WIPOffset<Profile<'b >>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<Profile>>(Stream::VT_PROFILE, profile);
-  }
-  #[inline]
-  pub fn add_activity(&mut self, activity: flatbuffers::WIPOffset<Activity<'b >>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<Activity>>(Stream::VT_ACTIVITY, activity);
-  }
-  #[inline]
-  pub fn add_creator_public_id(&mut self, creator_public_id: flatbuffers::WIPOffset<PublicId<'b >>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<PublicId>>(Stream::VT_CREATOR_PUBLIC_ID, creator_public_id);
-  }
-  #[inline]
-  pub fn add_members_public_id(&mut self, members_public_id: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<PublicId<'b >>>>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Stream::VT_MEMBERS_PUBLIC_ID, members_public_id);
-  }
-  #[inline]
-  pub fn add_stream_level(&mut self, stream_level: StreamLevel) {
-    self.fbb_.push_slot::<StreamLevel>(Stream::VT_STREAM_LEVEL, stream_level, StreamLevel::unused);
-  }
-  #[inline]
-  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> StreamBuilder<'a, 'b, A> {
-    let start = _fbb.start_table();
-    StreamBuilder {
-      fbb_: _fbb,
-      start_: start,
-    }
-  }
-  #[inline]
-  pub fn finish(self) -> flatbuffers::WIPOffset<Stream<'a>> {
-    let o = self.fbb_.end_table(self.start_);
-    flatbuffers::WIPOffset::new(o.value())
-  }
-}
-
-impl core::fmt::Debug for Stream<'_> {
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    let mut ds = f.debug_struct("Stream");
-      ds.field("public_id", &self.public_id());
-      ds.field("profile", &self.profile());
-      ds.field("activity", &self.activity());
-      ds.field("creator_public_id", &self.creator_public_id());
-      ds.field("members_public_id", &self.members_public_id());
-      ds.field("stream_level", &self.stream_level());
-      ds.finish()
-  }
-}
-pub enum ThoughtOffset {}
-#[derive(Copy, Clone, PartialEq)]
-
-pub struct Thought<'a> {
-  pub _tab: flatbuffers::Table<'a>,
-}
-
-impl<'a> flatbuffers::Follow<'a> for Thought<'a> {
-  type Inner = Thought<'a>;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table::new(buf, loc) }
-  }
-}
-
-impl<'a> Thought<'a> {
-  pub const VT_PUBLIC_ID: flatbuffers::VOffsetT = 4;
-  pub const VT_CREATOR_PUBLIC_ID: flatbuffers::VOffsetT = 6;
-  pub const VT_STREAM_PUBLIC_ID: flatbuffers::VOffsetT = 8;
-  pub const VT_CONTENT: flatbuffers::VOffsetT = 10;
-  pub const VT_MEDIA_TYPE: flatbuffers::VOffsetT = 12;
-
-  #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
-    Thought { _tab: table }
-  }
-  #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
-    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args ThoughtArgs<'args>
-  ) -> flatbuffers::WIPOffset<Thought<'bldr>> {
-    let mut builder = ThoughtBuilder::new(_fbb);
-    if let Some(x) = args.content { builder.add_content(x); }
-    if let Some(x) = args.stream_public_id { builder.add_stream_public_id(x); }
-    if let Some(x) = args.creator_public_id { builder.add_creator_public_id(x); }
-    if let Some(x) = args.public_id { builder.add_public_id(x); }
-    builder.add_media_type(args.media_type);
-    builder.finish()
-  }
-
-
-  #[inline]
-  pub fn public_id(&self) -> Option<PublicId<'a>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<PublicId>>(Thought::VT_PUBLIC_ID, None)}
-  }
-  #[inline]
-  pub fn creator_public_id(&self) -> Option<PublicId<'a>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<PublicId>>(Thought::VT_CREATOR_PUBLIC_ID, None)}
-  }
-  #[inline]
-  pub fn stream_public_id(&self) -> Option<PublicId<'a>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<PublicId>>(Thought::VT_STREAM_PUBLIC_ID, None)}
-  }
-  #[inline]
-  pub fn content(&self) -> Option<flatbuffers::Vector<'a, u8>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(Thought::VT_CONTENT, None)}
-  }
-  #[inline]
-  pub fn media_type(&self) -> MediaType {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<MediaType>(Thought::VT_MEDIA_TYPE, Some(MediaType::unused)).unwrap()}
-  }
-}
-
-impl flatbuffers::Verifiable for Thought<'_> {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    v.visit_table(pos)?
-     .visit_field::<flatbuffers::ForwardsUOffset<PublicId>>("public_id", Self::VT_PUBLIC_ID, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<PublicId>>("creator_public_id", Self::VT_CREATOR_PUBLIC_ID, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<PublicId>>("stream_public_id", Self::VT_STREAM_PUBLIC_ID, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("content", Self::VT_CONTENT, false)?
-     .visit_field::<MediaType>("media_type", Self::VT_MEDIA_TYPE, false)?
-     .finish();
-    Ok(())
-  }
-}
-pub struct ThoughtArgs<'a> {
-    pub public_id: Option<flatbuffers::WIPOffset<PublicId<'a>>>,
-    pub creator_public_id: Option<flatbuffers::WIPOffset<PublicId<'a>>>,
-    pub stream_public_id: Option<flatbuffers::WIPOffset<PublicId<'a>>>,
-    pub content: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
-    pub media_type: MediaType,
-}
-impl<'a> Default for ThoughtArgs<'a> {
-  #[inline]
-  fn default() -> Self {
-    ThoughtArgs {
-      public_id: None,
-      creator_public_id: None,
-      stream_public_id: None,
-      content: None,
-      media_type: MediaType::unused,
-    }
-  }
-}
-
-pub struct ThoughtBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
-  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
-}
-impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ThoughtBuilder<'a, 'b, A> {
-  #[inline]
-  pub fn add_public_id(&mut self, public_id: flatbuffers::WIPOffset<PublicId<'b >>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<PublicId>>(Thought::VT_PUBLIC_ID, public_id);
-  }
-  #[inline]
-  pub fn add_creator_public_id(&mut self, creator_public_id: flatbuffers::WIPOffset<PublicId<'b >>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<PublicId>>(Thought::VT_CREATOR_PUBLIC_ID, creator_public_id);
-  }
-  #[inline]
-  pub fn add_stream_public_id(&mut self, stream_public_id: flatbuffers::WIPOffset<PublicId<'b >>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<PublicId>>(Thought::VT_STREAM_PUBLIC_ID, stream_public_id);
-  }
-  #[inline]
-  pub fn add_content(&mut self, content: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Thought::VT_CONTENT, content);
-  }
-  #[inline]
-  pub fn add_media_type(&mut self, media_type: MediaType) {
-    self.fbb_.push_slot::<MediaType>(Thought::VT_MEDIA_TYPE, media_type, MediaType::unused);
-  }
-  #[inline]
-  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ThoughtBuilder<'a, 'b, A> {
-    let start = _fbb.start_table();
-    ThoughtBuilder {
-      fbb_: _fbb,
-      start_: start,
-    }
-  }
-  #[inline]
-  pub fn finish(self) -> flatbuffers::WIPOffset<Thought<'a>> {
-    let o = self.fbb_.end_table(self.start_);
-    flatbuffers::WIPOffset::new(o.value())
-  }
-}
-
-impl core::fmt::Debug for Thought<'_> {
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    let mut ds = f.debug_struct("Thought");
-      ds.field("public_id", &self.public_id());
-      ds.field("creator_public_id", &self.creator_public_id());
-      ds.field("stream_public_id", &self.stream_public_id());
-      ds.field("content", &self.content());
-      ds.field("media_type", &self.media_type());
-      ds.finish()
-  }
-}
-pub enum ProfileOffset {}
-#[derive(Copy, Clone, PartialEq)]
-
-pub struct Profile<'a> {
-  pub _tab: flatbuffers::Table<'a>,
-}
-
-impl<'a> flatbuffers::Follow<'a> for Profile<'a> {
-  type Inner = Profile<'a>;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table::new(buf, loc) }
-  }
-}
-
-impl<'a> Profile<'a> {
-  pub const VT_NAME: flatbuffers::VOffsetT = 4;
-  pub const VT_BLURB: flatbuffers::VOffsetT = 6;
-  pub const VT_INTERESTS: flatbuffers::VOffsetT = 8;
-  pub const VT_LOCATION: flatbuffers::VOffsetT = 10;
-  pub const VT_LOCATION_LEVEL: flatbuffers::VOffsetT = 12;
-  pub const VT_IDENTITY_ASSURANCE_LEVEL: flatbuffers::VOffsetT = 14;
-  pub const VT_ENCRYPTION_LEVEL: flatbuffers::VOffsetT = 16;
-
-  #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
-    Profile { _tab: table }
-  }
-  #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
-    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args ProfileArgs<'args>
-  ) -> flatbuffers::WIPOffset<Profile<'bldr>> {
-    let mut builder = ProfileBuilder::new(_fbb);
-    if let Some(x) = args.location { builder.add_location(x); }
-    if let Some(x) = args.interests { builder.add_interests(x); }
-    if let Some(x) = args.blurb { builder.add_blurb(x); }
-    if let Some(x) = args.name { builder.add_name(x); }
-    builder.add_encryption_level(args.encryption_level);
-    builder.add_identity_assurance_level(args.identity_assurance_level);
-    builder.add_location_level(args.location_level);
-    builder.finish()
-  }
-
-
-  #[inline]
-  pub fn name(&self) -> Option<&'a str> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(Profile::VT_NAME, None)}
-  }
-  #[inline]
-  pub fn blurb(&self) -> Option<&'a str> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(Profile::VT_BLURB, None)}
-  }
-  #[inline]
-  pub fn interests(&self) -> Option<&'a str> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(Profile::VT_INTERESTS, None)}
-  }
-  #[inline]
-  pub fn location(&self) -> Option<&'a str> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(Profile::VT_LOCATION, None)}
-  }
-  #[inline]
-  pub fn location_level(&self) -> LocationLevel {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<LocationLevel>(Profile::VT_LOCATION_LEVEL, Some(LocationLevel::unused)).unwrap()}
-  }
-  #[inline]
-  pub fn identity_assurance_level(&self) -> IdentityAssuranceLevel {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<IdentityAssuranceLevel>(Profile::VT_IDENTITY_ASSURANCE_LEVEL, Some(IdentityAssuranceLevel::unused)).unwrap()}
-  }
-  #[inline]
-  pub fn encryption_level(&self) -> EncryptionLevel {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<EncryptionLevel>(Profile::VT_ENCRYPTION_LEVEL, Some(EncryptionLevel::unused)).unwrap()}
-  }
-}
-
-impl flatbuffers::Verifiable for Profile<'_> {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    v.visit_table(pos)?
-     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("name", Self::VT_NAME, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("blurb", Self::VT_BLURB, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("interests", Self::VT_INTERESTS, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("location", Self::VT_LOCATION, false)?
-     .visit_field::<LocationLevel>("location_level", Self::VT_LOCATION_LEVEL, false)?
-     .visit_field::<IdentityAssuranceLevel>("identity_assurance_level", Self::VT_IDENTITY_ASSURANCE_LEVEL, false)?
-     .visit_field::<EncryptionLevel>("encryption_level", Self::VT_ENCRYPTION_LEVEL, false)?
-     .finish();
-    Ok(())
-  }
-}
-pub struct ProfileArgs<'a> {
-    pub name: Option<flatbuffers::WIPOffset<&'a str>>,
-    pub blurb: Option<flatbuffers::WIPOffset<&'a str>>,
-    pub interests: Option<flatbuffers::WIPOffset<&'a str>>,
-    pub location: Option<flatbuffers::WIPOffset<&'a str>>,
-    pub location_level: LocationLevel,
-    pub identity_assurance_level: IdentityAssuranceLevel,
-    pub encryption_level: EncryptionLevel,
-}
-impl<'a> Default for ProfileArgs<'a> {
-  #[inline]
-  fn default() -> Self {
-    ProfileArgs {
-      name: None,
-      blurb: None,
-      interests: None,
-      location: None,
-      location_level: LocationLevel::unused,
-      identity_assurance_level: IdentityAssuranceLevel::unused,
-      encryption_level: EncryptionLevel::unused,
-    }
-  }
-}
-
-pub struct ProfileBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
-  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
-}
-impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ProfileBuilder<'a, 'b, A> {
-  #[inline]
-  pub fn add_name(&mut self, name: flatbuffers::WIPOffset<&'b  str>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Profile::VT_NAME, name);
-  }
-  #[inline]
-  pub fn add_blurb(&mut self, blurb: flatbuffers::WIPOffset<&'b  str>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Profile::VT_BLURB, blurb);
-  }
-  #[inline]
-  pub fn add_interests(&mut self, interests: flatbuffers::WIPOffset<&'b  str>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Profile::VT_INTERESTS, interests);
-  }
-  #[inline]
-  pub fn add_location(&mut self, location: flatbuffers::WIPOffset<&'b  str>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Profile::VT_LOCATION, location);
-  }
-  #[inline]
-  pub fn add_location_level(&mut self, location_level: LocationLevel) {
-    self.fbb_.push_slot::<LocationLevel>(Profile::VT_LOCATION_LEVEL, location_level, LocationLevel::unused);
-  }
-  #[inline]
-  pub fn add_identity_assurance_level(&mut self, identity_assurance_level: IdentityAssuranceLevel) {
-    self.fbb_.push_slot::<IdentityAssuranceLevel>(Profile::VT_IDENTITY_ASSURANCE_LEVEL, identity_assurance_level, IdentityAssuranceLevel::unused);
-  }
-  #[inline]
-  pub fn add_encryption_level(&mut self, encryption_level: EncryptionLevel) {
-    self.fbb_.push_slot::<EncryptionLevel>(Profile::VT_ENCRYPTION_LEVEL, encryption_level, EncryptionLevel::unused);
-  }
-  #[inline]
-  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ProfileBuilder<'a, 'b, A> {
-    let start = _fbb.start_table();
-    ProfileBuilder {
-      fbb_: _fbb,
-      start_: start,
-    }
-  }
-  #[inline]
-  pub fn finish(self) -> flatbuffers::WIPOffset<Profile<'a>> {
-    let o = self.fbb_.end_table(self.start_);
-    flatbuffers::WIPOffset::new(o.value())
-  }
-}
-
-impl core::fmt::Debug for Profile<'_> {
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    let mut ds = f.debug_struct("Profile");
-      ds.field("name", &self.name());
-      ds.field("blurb", &self.blurb());
-      ds.field("interests", &self.interests());
-      ds.field("location", &self.location());
-      ds.field("location_level", &self.location_level());
-      ds.field("identity_assurance_level", &self.identity_assurance_level());
-      ds.field("encryption_level", &self.encryption_level());
-      ds.finish()
-  }
-}
-pub enum ActivityOffset {}
-#[derive(Copy, Clone, PartialEq)]
-
-pub struct Activity<'a> {
-  pub _tab: flatbuffers::Table<'a>,
-}
-
-impl<'a> flatbuffers::Follow<'a> for Activity<'a> {
-  type Inner = Activity<'a>;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table::new(buf, loc) }
-  }
-}
-
-impl<'a> Activity<'a> {
-  pub const VT_DATE_CREATED: flatbuffers::VOffsetT = 4;
-  pub const VT_EXPERT_LEVEL: flatbuffers::VOffsetT = 6;
-  pub const VT_ACTIVITY_LEVEL: flatbuffers::VOffsetT = 8;
-  pub const VT_TRUST_LEVEL: flatbuffers::VOffsetT = 10;
-
-  #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
-    Activity { _tab: table }
-  }
-  #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
-    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args ActivityArgs
-  ) -> flatbuffers::WIPOffset<Activity<'bldr>> {
-    let mut builder = ActivityBuilder::new(_fbb);
-    builder.add_date_created(args.date_created);
-    builder.add_trust_level(args.trust_level);
-    builder.add_activity_level(args.activity_level);
-    builder.add_expert_level(args.expert_level);
-    builder.finish()
-  }
-
-
-  #[inline]
-  pub fn date_created(&self) -> i64 {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<i64>(Activity::VT_DATE_CREATED, Some(0)).unwrap()}
-  }
-  #[inline]
-  pub fn expert_level(&self) -> ExpertLevel {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<ExpertLevel>(Activity::VT_EXPERT_LEVEL, Some(ExpertLevel::unused)).unwrap()}
-  }
-  #[inline]
-  pub fn activity_level(&self) -> ActivityLevel {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<ActivityLevel>(Activity::VT_ACTIVITY_LEVEL, Some(ActivityLevel::unused)).unwrap()}
-  }
-  #[inline]
-  pub fn trust_level(&self) -> TrustLevel {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<TrustLevel>(Activity::VT_TRUST_LEVEL, Some(TrustLevel::unused)).unwrap()}
-  }
-}
-
-impl flatbuffers::Verifiable for Activity<'_> {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    v.visit_table(pos)?
-     .visit_field::<i64>("date_created", Self::VT_DATE_CREATED, false)?
-     .visit_field::<ExpertLevel>("expert_level", Self::VT_EXPERT_LEVEL, false)?
-     .visit_field::<ActivityLevel>("activity_level", Self::VT_ACTIVITY_LEVEL, false)?
-     .visit_field::<TrustLevel>("trust_level", Self::VT_TRUST_LEVEL, false)?
-     .finish();
-    Ok(())
-  }
-}
-pub struct ActivityArgs {
-    pub date_created: i64,
-    pub expert_level: ExpertLevel,
-    pub activity_level: ActivityLevel,
-    pub trust_level: TrustLevel,
-}
-impl<'a> Default for ActivityArgs {
-  #[inline]
-  fn default() -> Self {
-    ActivityArgs {
-      date_created: 0,
-      expert_level: ExpertLevel::unused,
-      activity_level: ActivityLevel::unused,
-      trust_level: TrustLevel::unused,
-    }
-  }
-}
-
-pub struct ActivityBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
-  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
-}
-impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ActivityBuilder<'a, 'b, A> {
-  #[inline]
-  pub fn add_date_created(&mut self, date_created: i64) {
-    self.fbb_.push_slot::<i64>(Activity::VT_DATE_CREATED, date_created, 0);
-  }
-  #[inline]
-  pub fn add_expert_level(&mut self, expert_level: ExpertLevel) {
-    self.fbb_.push_slot::<ExpertLevel>(Activity::VT_EXPERT_LEVEL, expert_level, ExpertLevel::unused);
-  }
-  #[inline]
-  pub fn add_activity_level(&mut self, activity_level: ActivityLevel) {
-    self.fbb_.push_slot::<ActivityLevel>(Activity::VT_ACTIVITY_LEVEL, activity_level, ActivityLevel::unused);
-  }
-  #[inline]
-  pub fn add_trust_level(&mut self, trust_level: TrustLevel) {
-    self.fbb_.push_slot::<TrustLevel>(Activity::VT_TRUST_LEVEL, trust_level, TrustLevel::unused);
-  }
-  #[inline]
-  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ActivityBuilder<'a, 'b, A> {
-    let start = _fbb.start_table();
-    ActivityBuilder {
-      fbb_: _fbb,
-      start_: start,
-    }
-  }
-  #[inline]
-  pub fn finish(self) -> flatbuffers::WIPOffset<Activity<'a>> {
-    let o = self.fbb_.end_table(self.start_);
-    flatbuffers::WIPOffset::new(o.value())
-  }
-}
-
-impl core::fmt::Debug for Activity<'_> {
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    let mut ds = f.debug_struct("Activity");
-      ds.field("date_created", &self.date_created());
-      ds.field("expert_level", &self.expert_level());
-      ds.field("activity_level", &self.activity_level());
-      ds.field("trust_level", &self.trust_level());
-      ds.finish()
-  }
-}
-pub enum EntityRootOffset {}
-#[derive(Copy, Clone, PartialEq)]
-
-pub struct EntityRoot<'a> {
-  pub _tab: flatbuffers::Table<'a>,
-}
-
-impl<'a> flatbuffers::Follow<'a> for EntityRoot<'a> {
-  type Inner = EntityRoot<'a>;
-  #[inline]
-  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-    Self { _tab: flatbuffers::Table::new(buf, loc) }
-  }
-}
-
-impl<'a> EntityRoot<'a> {
-  pub const VT_ENTITY_TYPE: flatbuffers::VOffsetT = 4;
-  pub const VT_ENTITY: flatbuffers::VOffsetT = 6;
-
-  #[inline]
-  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
-    EntityRoot { _tab: table }
-  }
-  #[allow(unused_mut)]
-  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
-    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args EntityRootArgs
-  ) -> flatbuffers::WIPOffset<EntityRoot<'bldr>> {
-    let mut builder = EntityRootBuilder::new(_fbb);
-    if let Some(x) = args.entity { builder.add_entity(x); }
-    builder.add_entity_type(args.entity_type);
-    builder.finish()
-  }
-
-
-  #[inline]
-  pub fn entity_type(&self) -> Entity {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<Entity>(EntityRoot::VT_ENTITY_TYPE, Some(Entity::NONE)).unwrap()}
-  }
-  #[inline]
-  pub fn entity(&self) -> Option<flatbuffers::Table<'a>> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Table<'a>>>(EntityRoot::VT_ENTITY, None)}
-  }
-  #[inline]
-  #[allow(non_snake_case)]
-  pub fn entity_as_account(&self) -> Option<Account<'a>> {
-    if self.entity_type() == Entity::Account {
-      self.entity().map(|t| {
-       // Safety:
-       // Created from a valid Table for this object
-       // Which contains a valid union in this slot
-       unsafe { Account::init_from_table(t) }
-     })
-    } else {
-      None
-    }
-  }
-
-  #[inline]
-  #[allow(non_snake_case)]
-  pub fn entity_as_stream(&self) -> Option<Stream<'a>> {
-    if self.entity_type() == Entity::Stream {
-      self.entity().map(|t| {
-       // Safety:
-       // Created from a valid Table for this object
-       // Which contains a valid union in this slot
-       unsafe { Stream::init_from_table(t) }
-     })
-    } else {
-      None
-    }
-  }
-
-  #[inline]
-  #[allow(non_snake_case)]
-  pub fn entity_as_thought(&self) -> Option<Thought<'a>> {
-    if self.entity_type() == Entity::Thought {
-      self.entity().map(|t| {
-       // Safety:
-       // Created from a valid Table for this object
-       // Which contains a valid union in this slot
-       unsafe { Thought::init_from_table(t) }
-     })
-    } else {
-      None
-    }
-  }
-
-}
-
-impl flatbuffers::Verifiable for EntityRoot<'_> {
-  #[inline]
-  fn run_verifier(
-    v: &mut flatbuffers::Verifier, pos: usize
-  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-    use self::flatbuffers::Verifiable;
-    v.visit_table(pos)?
-     .visit_union::<Entity, _>("entity_type", Self::VT_ENTITY_TYPE, "entity", Self::VT_ENTITY, false, |key, v, pos| {
-        match key {
-          Entity::Account => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Account>>("Entity::Account", pos),
-          Entity::Stream => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Stream>>("Entity::Stream", pos),
-          Entity::Thought => v.verify_union_variant::<flatbuffers::ForwardsUOffset<Thought>>("Entity::Thought", pos),
-          _ => Ok(()),
+    use core::cmp::Ordering;
+    use core::mem;
+
+    extern crate flatbuffers;
+    use self::flatbuffers::{EndianScalar, Follow};
+
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MIN_ACTIVITY_LEVEL: i8 = 0;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MAX_ACTIVITY_LEVEL: i8 = 3;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    #[allow(non_camel_case_types)]
+    pub const ENUM_VALUES_ACTIVITY_LEVEL: [ActivityLevel; 4] = [
+        ActivityLevel::unused,
+        ActivityLevel::low,
+        ActivityLevel::medium,
+        ActivityLevel::high,
+    ];
+
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    #[repr(transparent)]
+    pub struct ActivityLevel(pub i8);
+    #[allow(non_upper_case_globals)]
+    impl ActivityLevel {
+        pub const unused: Self = Self(0);
+        pub const low: Self = Self(1);
+        pub const medium: Self = Self(2);
+        pub const high: Self = Self(3);
+
+        pub const ENUM_MIN: i8 = 0;
+        pub const ENUM_MAX: i8 = 3;
+        pub const ENUM_VALUES: &'static [Self] =
+            &[Self::unused, Self::low, Self::medium, Self::high];
+        /// Returns the variant's name or "" if unknown.
+        pub fn variant_name(self) -> Option<&'static str> {
+            match self {
+                Self::unused => Some("unused"),
+                Self::low => Some("low"),
+                Self::medium => Some("medium"),
+                Self::high => Some("high"),
+                _ => None,
+            }
         }
-     })?
-     .finish();
-    Ok(())
-  }
-}
-pub struct EntityRootArgs {
-    pub entity_type: Entity,
-    pub entity: Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
-}
-impl<'a> Default for EntityRootArgs {
-  #[inline]
-  fn default() -> Self {
-    EntityRootArgs {
-      entity_type: Entity::NONE,
-      entity: None,
     }
-  }
-}
-
-pub struct EntityRootBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
-  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
-}
-impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> EntityRootBuilder<'a, 'b, A> {
-  #[inline]
-  pub fn add_entity_type(&mut self, entity_type: Entity) {
-    self.fbb_.push_slot::<Entity>(EntityRoot::VT_ENTITY_TYPE, entity_type, Entity::NONE);
-  }
-  #[inline]
-  pub fn add_entity(&mut self, entity: flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(EntityRoot::VT_ENTITY, entity);
-  }
-  #[inline]
-  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> EntityRootBuilder<'a, 'b, A> {
-    let start = _fbb.start_table();
-    EntityRootBuilder {
-      fbb_: _fbb,
-      start_: start,
+    impl core::fmt::Debug for ActivityLevel {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            if let Some(name) = self.variant_name() {
+                f.write_str(name)
+            } else {
+                f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+            }
+        }
     }
-  }
-  #[inline]
-  pub fn finish(self) -> flatbuffers::WIPOffset<EntityRoot<'a>> {
-    let o = self.fbb_.end_table(self.start_);
-    flatbuffers::WIPOffset::new(o.value())
-  }
-}
+    impl<'a> flatbuffers::Follow<'a> for ActivityLevel {
+        type Inner = Self;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
+            Self(b)
+        }
+    }
 
-impl core::fmt::Debug for EntityRoot<'_> {
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    let mut ds = f.debug_struct("EntityRoot");
-      ds.field("entity_type", &self.entity_type());
-      match self.entity_type() {
-        Entity::Account => {
-          if let Some(x) = self.entity_as_account() {
-            ds.field("entity", &x)
-          } else {
-            ds.field("entity", &"InvalidFlatbuffer: Union discriminant does not match value.")
-          }
-        },
-        Entity::Stream => {
-          if let Some(x) = self.entity_as_stream() {
-            ds.field("entity", &x)
-          } else {
-            ds.field("entity", &"InvalidFlatbuffer: Union discriminant does not match value.")
-          }
-        },
-        Entity::Thought => {
-          if let Some(x) = self.entity_as_thought() {
-            ds.field("entity", &x)
-          } else {
-            ds.field("entity", &"InvalidFlatbuffer: Union discriminant does not match value.")
-          }
-        },
-        _ => {
-          let x: Option<()> = None;
-          ds.field("entity", &x)
-        },
-      };
-      ds.finish()
-  }
-}
-#[inline]
-/// Verifies that a buffer of bytes contains a `EntityRoot`
-/// and returns it.
-/// Note that verification is still experimental and may not
-/// catch every error, or be maximally performant. For the
-/// previous, unchecked, behavior use
-/// `root_as_entity_root_unchecked`.
-pub fn root_as_entity_root(buf: &[u8]) -> Result<EntityRoot, flatbuffers::InvalidFlatbuffer> {
-  flatbuffers::root::<EntityRoot>(buf)
-}
-#[inline]
-/// Verifies that a buffer of bytes contains a size prefixed
-/// `EntityRoot` and returns it.
-/// Note that verification is still experimental and may not
-/// catch every error, or be maximally performant. For the
-/// previous, unchecked, behavior use
-/// `size_prefixed_root_as_entity_root_unchecked`.
-pub fn size_prefixed_root_as_entity_root(buf: &[u8]) -> Result<EntityRoot, flatbuffers::InvalidFlatbuffer> {
-  flatbuffers::size_prefixed_root::<EntityRoot>(buf)
-}
-#[inline]
-/// Verifies, with the given options, that a buffer of bytes
-/// contains a `EntityRoot` and returns it.
-/// Note that verification is still experimental and may not
-/// catch every error, or be maximally performant. For the
-/// previous, unchecked, behavior use
-/// `root_as_entity_root_unchecked`.
-pub fn root_as_entity_root_with_opts<'b, 'o>(
-  opts: &'o flatbuffers::VerifierOptions,
-  buf: &'b [u8],
-) -> Result<EntityRoot<'b>, flatbuffers::InvalidFlatbuffer> {
-  flatbuffers::root_with_opts::<EntityRoot<'b>>(opts, buf)
-}
-#[inline]
-/// Verifies, with the given verifier options, that a buffer of
-/// bytes contains a size prefixed `EntityRoot` and returns
-/// it. Note that verification is still experimental and may not
-/// catch every error, or be maximally performant. For the
-/// previous, unchecked, behavior use
-/// `root_as_entity_root_unchecked`.
-pub fn size_prefixed_root_as_entity_root_with_opts<'b, 'o>(
-  opts: &'o flatbuffers::VerifierOptions,
-  buf: &'b [u8],
-) -> Result<EntityRoot<'b>, flatbuffers::InvalidFlatbuffer> {
-  flatbuffers::size_prefixed_root_with_opts::<EntityRoot<'b>>(opts, buf)
-}
-#[inline]
-/// Assumes, without verification, that a buffer of bytes contains a EntityRoot and returns it.
-/// # Safety
-/// Callers must trust the given bytes do indeed contain a valid `EntityRoot`.
-pub unsafe fn root_as_entity_root_unchecked(buf: &[u8]) -> EntityRoot {
-  flatbuffers::root_unchecked::<EntityRoot>(buf)
-}
-#[inline]
-/// Assumes, without verification, that a buffer of bytes contains a size prefixed EntityRoot and returns it.
-/// # Safety
-/// Callers must trust the given bytes do indeed contain a valid size prefixed `EntityRoot`.
-pub unsafe fn size_prefixed_root_as_entity_root_unchecked(buf: &[u8]) -> EntityRoot {
-  flatbuffers::size_prefixed_root_unchecked::<EntityRoot>(buf)
-}
-#[inline]
-pub fn finish_entity_root_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(
-    fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-    root: flatbuffers::WIPOffset<EntityRoot<'a>>) {
-  fbb.finish(root, None);
-}
+    impl flatbuffers::Push for ActivityLevel {
+        type Output = ActivityLevel;
+        #[inline]
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            flatbuffers::emplace_scalar::<i8>(dst, self.0);
+        }
+    }
 
-#[inline]
-pub fn finish_size_prefixed_entity_root_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>, root: flatbuffers::WIPOffset<EntityRoot<'a>>) {
-  fbb.finish_size_prefixed(root, None);
-}
-}  // pub mod Arkavo
+    impl flatbuffers::EndianScalar for ActivityLevel {
+        type Scalar = i8;
+        #[inline]
+        fn to_little_endian(self) -> i8 {
+            self.0.to_le()
+        }
+        #[inline]
+        #[allow(clippy::wrong_self_convention)]
+        fn from_little_endian(v: i8) -> Self {
+            let b = i8::from_le(v);
+            Self(b)
+        }
+    }
 
+    impl<'a> flatbuffers::Verifiable for ActivityLevel {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            i8::run_verifier(v, pos)
+        }
+    }
+
+    impl flatbuffers::SimpleToVerifyInSlice for ActivityLevel {}
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MIN_MEDIA_TYPE: i8 = 0;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MAX_MEDIA_TYPE: i8 = 4;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    #[allow(non_camel_case_types)]
+    pub const ENUM_VALUES_MEDIA_TYPE: [MediaType; 5] = [
+        MediaType::unused,
+        MediaType::text,
+        MediaType::image,
+        MediaType::video,
+        MediaType::audio,
+    ];
+
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    #[repr(transparent)]
+    pub struct MediaType(pub i8);
+    #[allow(non_upper_case_globals)]
+    impl MediaType {
+        pub const unused: Self = Self(0);
+        pub const text: Self = Self(1);
+        pub const image: Self = Self(2);
+        pub const video: Self = Self(3);
+        pub const audio: Self = Self(4);
+
+        pub const ENUM_MIN: i8 = 0;
+        pub const ENUM_MAX: i8 = 4;
+        pub const ENUM_VALUES: &'static [Self] = &[
+            Self::unused,
+            Self::text,
+            Self::image,
+            Self::video,
+            Self::audio,
+        ];
+        /// Returns the variant's name or "" if unknown.
+        pub fn variant_name(self) -> Option<&'static str> {
+            match self {
+                Self::unused => Some("unused"),
+                Self::text => Some("text"),
+                Self::image => Some("image"),
+                Self::video => Some("video"),
+                Self::audio => Some("audio"),
+                _ => None,
+            }
+        }
+    }
+    impl core::fmt::Debug for MediaType {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            if let Some(name) = self.variant_name() {
+                f.write_str(name)
+            } else {
+                f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+            }
+        }
+    }
+    impl<'a> flatbuffers::Follow<'a> for MediaType {
+        type Inner = Self;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
+            Self(b)
+        }
+    }
+
+    impl flatbuffers::Push for MediaType {
+        type Output = MediaType;
+        #[inline]
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            flatbuffers::emplace_scalar::<i8>(dst, self.0);
+        }
+    }
+
+    impl flatbuffers::EndianScalar for MediaType {
+        type Scalar = i8;
+        #[inline]
+        fn to_little_endian(self) -> i8 {
+            self.0.to_le()
+        }
+        #[inline]
+        #[allow(clippy::wrong_self_convention)]
+        fn from_little_endian(v: i8) -> Self {
+            let b = i8::from_le(v);
+            Self(b)
+        }
+    }
+
+    impl<'a> flatbuffers::Verifiable for MediaType {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            i8::run_verifier(v, pos)
+        }
+    }
+
+    impl flatbuffers::SimpleToVerifyInSlice for MediaType {}
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MIN_LOCATION_LEVEL: i8 = 0;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MAX_LOCATION_LEVEL: i8 = 3;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    #[allow(non_camel_case_types)]
+    pub const ENUM_VALUES_LOCATION_LEVEL: [LocationLevel; 4] = [
+        LocationLevel::unused,
+        LocationLevel::wide,
+        LocationLevel::approximate,
+        LocationLevel::precise,
+    ];
+
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    #[repr(transparent)]
+    pub struct LocationLevel(pub i8);
+    #[allow(non_upper_case_globals)]
+    impl LocationLevel {
+        pub const unused: Self = Self(0);
+        pub const wide: Self = Self(1);
+        pub const approximate: Self = Self(2);
+        pub const precise: Self = Self(3);
+
+        pub const ENUM_MIN: i8 = 0;
+        pub const ENUM_MAX: i8 = 3;
+        pub const ENUM_VALUES: &'static [Self] =
+            &[Self::unused, Self::wide, Self::approximate, Self::precise];
+        /// Returns the variant's name or "" if unknown.
+        pub fn variant_name(self) -> Option<&'static str> {
+            match self {
+                Self::unused => Some("unused"),
+                Self::wide => Some("wide"),
+                Self::approximate => Some("approximate"),
+                Self::precise => Some("precise"),
+                _ => None,
+            }
+        }
+    }
+    impl core::fmt::Debug for LocationLevel {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            if let Some(name) = self.variant_name() {
+                f.write_str(name)
+            } else {
+                f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+            }
+        }
+    }
+    impl<'a> flatbuffers::Follow<'a> for LocationLevel {
+        type Inner = Self;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
+            Self(b)
+        }
+    }
+
+    impl flatbuffers::Push for LocationLevel {
+        type Output = LocationLevel;
+        #[inline]
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            flatbuffers::emplace_scalar::<i8>(dst, self.0);
+        }
+    }
+
+    impl flatbuffers::EndianScalar for LocationLevel {
+        type Scalar = i8;
+        #[inline]
+        fn to_little_endian(self) -> i8 {
+            self.0.to_le()
+        }
+        #[inline]
+        #[allow(clippy::wrong_self_convention)]
+        fn from_little_endian(v: i8) -> Self {
+            let b = i8::from_le(v);
+            Self(b)
+        }
+    }
+
+    impl<'a> flatbuffers::Verifiable for LocationLevel {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            i8::run_verifier(v, pos)
+        }
+    }
+
+    impl flatbuffers::SimpleToVerifyInSlice for LocationLevel {}
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MIN_IDENTITY_ASSURANCE_LEVEL: i8 = 0;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MAX_IDENTITY_ASSURANCE_LEVEL: i8 = 5;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    #[allow(non_camel_case_types)]
+    pub const ENUM_VALUES_IDENTITY_ASSURANCE_LEVEL: [IdentityAssuranceLevel; 6] = [
+        IdentityAssuranceLevel::unused,
+        IdentityAssuranceLevel::ial0,
+        IdentityAssuranceLevel::ial1,
+        IdentityAssuranceLevel::ial2,
+        IdentityAssuranceLevel::ial25,
+        IdentityAssuranceLevel::ial3,
+    ];
+
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    #[repr(transparent)]
+    pub struct IdentityAssuranceLevel(pub i8);
+    #[allow(non_upper_case_globals)]
+    impl IdentityAssuranceLevel {
+        pub const unused: Self = Self(0);
+        pub const ial0: Self = Self(1);
+        pub const ial1: Self = Self(2);
+        pub const ial2: Self = Self(3);
+        pub const ial25: Self = Self(4);
+        pub const ial3: Self = Self(5);
+
+        pub const ENUM_MIN: i8 = 0;
+        pub const ENUM_MAX: i8 = 5;
+        pub const ENUM_VALUES: &'static [Self] = &[
+            Self::unused,
+            Self::ial0,
+            Self::ial1,
+            Self::ial2,
+            Self::ial25,
+            Self::ial3,
+        ];
+        /// Returns the variant's name or "" if unknown.
+        pub fn variant_name(self) -> Option<&'static str> {
+            match self {
+                Self::unused => Some("unused"),
+                Self::ial0 => Some("ial0"),
+                Self::ial1 => Some("ial1"),
+                Self::ial2 => Some("ial2"),
+                Self::ial25 => Some("ial25"),
+                Self::ial3 => Some("ial3"),
+                _ => None,
+            }
+        }
+    }
+    impl core::fmt::Debug for IdentityAssuranceLevel {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            if let Some(name) = self.variant_name() {
+                f.write_str(name)
+            } else {
+                f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+            }
+        }
+    }
+    impl<'a> flatbuffers::Follow<'a> for IdentityAssuranceLevel {
+        type Inner = Self;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
+            Self(b)
+        }
+    }
+
+    impl flatbuffers::Push for IdentityAssuranceLevel {
+        type Output = IdentityAssuranceLevel;
+        #[inline]
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            flatbuffers::emplace_scalar::<i8>(dst, self.0);
+        }
+    }
+
+    impl flatbuffers::EndianScalar for IdentityAssuranceLevel {
+        type Scalar = i8;
+        #[inline]
+        fn to_little_endian(self) -> i8 {
+            self.0.to_le()
+        }
+        #[inline]
+        #[allow(clippy::wrong_self_convention)]
+        fn from_little_endian(v: i8) -> Self {
+            let b = i8::from_le(v);
+            Self(b)
+        }
+    }
+
+    impl<'a> flatbuffers::Verifiable for IdentityAssuranceLevel {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            i8::run_verifier(v, pos)
+        }
+    }
+
+    impl flatbuffers::SimpleToVerifyInSlice for IdentityAssuranceLevel {}
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MIN_ENCRYPTION_LEVEL: i8 = 0;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MAX_ENCRYPTION_LEVEL: i8 = 3;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    #[allow(non_camel_case_types)]
+    pub const ENUM_VALUES_ENCRYPTION_LEVEL: [EncryptionLevel; 4] = [
+        EncryptionLevel::unused,
+        EncryptionLevel::el0,
+        EncryptionLevel::el1,
+        EncryptionLevel::el2,
+    ];
+
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    #[repr(transparent)]
+    pub struct EncryptionLevel(pub i8);
+    #[allow(non_upper_case_globals)]
+    impl EncryptionLevel {
+        pub const unused: Self = Self(0);
+        pub const el0: Self = Self(1);
+        pub const el1: Self = Self(2);
+        pub const el2: Self = Self(3);
+
+        pub const ENUM_MIN: i8 = 0;
+        pub const ENUM_MAX: i8 = 3;
+        pub const ENUM_VALUES: &'static [Self] = &[Self::unused, Self::el0, Self::el1, Self::el2];
+        /// Returns the variant's name or "" if unknown.
+        pub fn variant_name(self) -> Option<&'static str> {
+            match self {
+                Self::unused => Some("unused"),
+                Self::el0 => Some("el0"),
+                Self::el1 => Some("el1"),
+                Self::el2 => Some("el2"),
+                _ => None,
+            }
+        }
+    }
+    impl core::fmt::Debug for EncryptionLevel {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            if let Some(name) = self.variant_name() {
+                f.write_str(name)
+            } else {
+                f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+            }
+        }
+    }
+    impl<'a> flatbuffers::Follow<'a> for EncryptionLevel {
+        type Inner = Self;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
+            Self(b)
+        }
+    }
+
+    impl flatbuffers::Push for EncryptionLevel {
+        type Output = EncryptionLevel;
+        #[inline]
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            flatbuffers::emplace_scalar::<i8>(dst, self.0);
+        }
+    }
+
+    impl flatbuffers::EndianScalar for EncryptionLevel {
+        type Scalar = i8;
+        #[inline]
+        fn to_little_endian(self) -> i8 {
+            self.0.to_le()
+        }
+        #[inline]
+        #[allow(clippy::wrong_self_convention)]
+        fn from_little_endian(v: i8) -> Self {
+            let b = i8::from_le(v);
+            Self(b)
+        }
+    }
+
+    impl<'a> flatbuffers::Verifiable for EncryptionLevel {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            i8::run_verifier(v, pos)
+        }
+    }
+
+    impl flatbuffers::SimpleToVerifyInSlice for EncryptionLevel {}
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MIN_STREAM_LEVEL: i8 = 0;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MAX_STREAM_LEVEL: i8 = 3;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    #[allow(non_camel_case_types)]
+    pub const ENUM_VALUES_STREAM_LEVEL: [StreamLevel; 4] = [
+        StreamLevel::unused,
+        StreamLevel::sl0,
+        StreamLevel::sl1,
+        StreamLevel::sl2,
+    ];
+
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    #[repr(transparent)]
+    pub struct StreamLevel(pub i8);
+    #[allow(non_upper_case_globals)]
+    impl StreamLevel {
+        pub const unused: Self = Self(0);
+        pub const sl0: Self = Self(1);
+        pub const sl1: Self = Self(2);
+        pub const sl2: Self = Self(3);
+
+        pub const ENUM_MIN: i8 = 0;
+        pub const ENUM_MAX: i8 = 3;
+        pub const ENUM_VALUES: &'static [Self] = &[Self::unused, Self::sl0, Self::sl1, Self::sl2];
+        /// Returns the variant's name or "" if unknown.
+        pub fn variant_name(self) -> Option<&'static str> {
+            match self {
+                Self::unused => Some("unused"),
+                Self::sl0 => Some("sl0"),
+                Self::sl1 => Some("sl1"),
+                Self::sl2 => Some("sl2"),
+                _ => None,
+            }
+        }
+    }
+    impl core::fmt::Debug for StreamLevel {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            if let Some(name) = self.variant_name() {
+                f.write_str(name)
+            } else {
+                f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+            }
+        }
+    }
+    impl<'a> flatbuffers::Follow<'a> for StreamLevel {
+        type Inner = Self;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
+            Self(b)
+        }
+    }
+
+    impl flatbuffers::Push for StreamLevel {
+        type Output = StreamLevel;
+        #[inline]
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            flatbuffers::emplace_scalar::<i8>(dst, self.0);
+        }
+    }
+
+    impl flatbuffers::EndianScalar for StreamLevel {
+        type Scalar = i8;
+        #[inline]
+        fn to_little_endian(self) -> i8 {
+            self.0.to_le()
+        }
+        #[inline]
+        #[allow(clippy::wrong_self_convention)]
+        fn from_little_endian(v: i8) -> Self {
+            let b = i8::from_le(v);
+            Self(b)
+        }
+    }
+
+    impl<'a> flatbuffers::Verifiable for StreamLevel {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            i8::run_verifier(v, pos)
+        }
+    }
+
+    impl flatbuffers::SimpleToVerifyInSlice for StreamLevel {}
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MIN_EXPERT_LEVEL: i8 = 0;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MAX_EXPERT_LEVEL: i8 = 4;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    #[allow(non_camel_case_types)]
+    pub const ENUM_VALUES_EXPERT_LEVEL: [ExpertLevel; 5] = [
+        ExpertLevel::unused,
+        ExpertLevel::novice,
+        ExpertLevel::intermediate,
+        ExpertLevel::expert,
+        ExpertLevel::master,
+    ];
+
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    #[repr(transparent)]
+    pub struct ExpertLevel(pub i8);
+    #[allow(non_upper_case_globals)]
+    impl ExpertLevel {
+        pub const unused: Self = Self(0);
+        pub const novice: Self = Self(1);
+        pub const intermediate: Self = Self(2);
+        pub const expert: Self = Self(3);
+        pub const master: Self = Self(4);
+
+        pub const ENUM_MIN: i8 = 0;
+        pub const ENUM_MAX: i8 = 4;
+        pub const ENUM_VALUES: &'static [Self] = &[
+            Self::unused,
+            Self::novice,
+            Self::intermediate,
+            Self::expert,
+            Self::master,
+        ];
+        /// Returns the variant's name or "" if unknown.
+        pub fn variant_name(self) -> Option<&'static str> {
+            match self {
+                Self::unused => Some("unused"),
+                Self::novice => Some("novice"),
+                Self::intermediate => Some("intermediate"),
+                Self::expert => Some("expert"),
+                Self::master => Some("master"),
+                _ => None,
+            }
+        }
+    }
+    impl core::fmt::Debug for ExpertLevel {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            if let Some(name) = self.variant_name() {
+                f.write_str(name)
+            } else {
+                f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+            }
+        }
+    }
+    impl<'a> flatbuffers::Follow<'a> for ExpertLevel {
+        type Inner = Self;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
+            Self(b)
+        }
+    }
+
+    impl flatbuffers::Push for ExpertLevel {
+        type Output = ExpertLevel;
+        #[inline]
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            flatbuffers::emplace_scalar::<i8>(dst, self.0);
+        }
+    }
+
+    impl flatbuffers::EndianScalar for ExpertLevel {
+        type Scalar = i8;
+        #[inline]
+        fn to_little_endian(self) -> i8 {
+            self.0.to_le()
+        }
+        #[inline]
+        #[allow(clippy::wrong_self_convention)]
+        fn from_little_endian(v: i8) -> Self {
+            let b = i8::from_le(v);
+            Self(b)
+        }
+    }
+
+    impl<'a> flatbuffers::Verifiable for ExpertLevel {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            i8::run_verifier(v, pos)
+        }
+    }
+
+    impl flatbuffers::SimpleToVerifyInSlice for ExpertLevel {}
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MIN_TRUST_LEVEL: i8 = 0;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MAX_TRUST_LEVEL: i8 = 5;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    #[allow(non_camel_case_types)]
+    pub const ENUM_VALUES_TRUST_LEVEL: [TrustLevel; 6] = [
+        TrustLevel::unused,
+        TrustLevel::untrusted,
+        TrustLevel::low,
+        TrustLevel::medium,
+        TrustLevel::high,
+        TrustLevel::verified,
+    ];
+
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    #[repr(transparent)]
+    pub struct TrustLevel(pub i8);
+    #[allow(non_upper_case_globals)]
+    impl TrustLevel {
+        pub const unused: Self = Self(0);
+        pub const untrusted: Self = Self(1);
+        pub const low: Self = Self(2);
+        pub const medium: Self = Self(3);
+        pub const high: Self = Self(4);
+        pub const verified: Self = Self(5);
+
+        pub const ENUM_MIN: i8 = 0;
+        pub const ENUM_MAX: i8 = 5;
+        pub const ENUM_VALUES: &'static [Self] = &[
+            Self::unused,
+            Self::untrusted,
+            Self::low,
+            Self::medium,
+            Self::high,
+            Self::verified,
+        ];
+        /// Returns the variant's name or "" if unknown.
+        pub fn variant_name(self) -> Option<&'static str> {
+            match self {
+                Self::unused => Some("unused"),
+                Self::untrusted => Some("untrusted"),
+                Self::low => Some("low"),
+                Self::medium => Some("medium"),
+                Self::high => Some("high"),
+                Self::verified => Some("verified"),
+                _ => None,
+            }
+        }
+    }
+    impl core::fmt::Debug for TrustLevel {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            if let Some(name) = self.variant_name() {
+                f.write_str(name)
+            } else {
+                f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+            }
+        }
+    }
+    impl<'a> flatbuffers::Follow<'a> for TrustLevel {
+        type Inner = Self;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
+            Self(b)
+        }
+    }
+
+    impl flatbuffers::Push for TrustLevel {
+        type Output = TrustLevel;
+        #[inline]
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            flatbuffers::emplace_scalar::<i8>(dst, self.0);
+        }
+    }
+
+    impl flatbuffers::EndianScalar for TrustLevel {
+        type Scalar = i8;
+        #[inline]
+        fn to_little_endian(self) -> i8 {
+            self.0.to_le()
+        }
+        #[inline]
+        #[allow(clippy::wrong_self_convention)]
+        fn from_little_endian(v: i8) -> Self {
+            let b = i8::from_le(v);
+            Self(b)
+        }
+    }
+
+    impl<'a> flatbuffers::Verifiable for TrustLevel {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            i8::run_verifier(v, pos)
+        }
+    }
+
+    impl flatbuffers::SimpleToVerifyInSlice for TrustLevel {}
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MIN_ENTITY: u8 = 0;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MAX_ENTITY: u8 = 3;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    #[allow(non_camel_case_types)]
+    pub const ENUM_VALUES_ENTITY: [Entity; 4] = [
+        Entity::NONE,
+        Entity::Account,
+        Entity::Stream,
+        Entity::Thought,
+    ];
+
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    #[repr(transparent)]
+    pub struct Entity(pub u8);
+    #[allow(non_upper_case_globals)]
+    impl Entity {
+        pub const NONE: Self = Self(0);
+        pub const Account: Self = Self(1);
+        pub const Stream: Self = Self(2);
+        pub const Thought: Self = Self(3);
+
+        pub const ENUM_MIN: u8 = 0;
+        pub const ENUM_MAX: u8 = 3;
+        pub const ENUM_VALUES: &'static [Self] =
+            &[Self::NONE, Self::Account, Self::Stream, Self::Thought];
+        /// Returns the variant's name or "" if unknown.
+        pub fn variant_name(self) -> Option<&'static str> {
+            match self {
+                Self::NONE => Some("NONE"),
+                Self::Account => Some("Account"),
+                Self::Stream => Some("Stream"),
+                Self::Thought => Some("Thought"),
+                _ => None,
+            }
+        }
+    }
+    impl core::fmt::Debug for Entity {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            if let Some(name) = self.variant_name() {
+                f.write_str(name)
+            } else {
+                f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+            }
+        }
+    }
+    impl<'a> flatbuffers::Follow<'a> for Entity {
+        type Inner = Self;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
+            Self(b)
+        }
+    }
+
+    impl flatbuffers::Push for Entity {
+        type Output = Entity;
+        #[inline]
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            flatbuffers::emplace_scalar::<u8>(dst, self.0);
+        }
+    }
+
+    impl flatbuffers::EndianScalar for Entity {
+        type Scalar = u8;
+        #[inline]
+        fn to_little_endian(self) -> u8 {
+            self.0.to_le()
+        }
+        #[inline]
+        #[allow(clippy::wrong_self_convention)]
+        fn from_little_endian(v: u8) -> Self {
+            let b = u8::from_le(v);
+            Self(b)
+        }
+    }
+
+    impl<'a> flatbuffers::Verifiable for Entity {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            u8::run_verifier(v, pos)
+        }
+    }
+
+    impl flatbuffers::SimpleToVerifyInSlice for Entity {}
+    pub struct EntityUnionTableOffset {}
+
+    pub enum PublicIdOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct PublicId<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for PublicId<'a> {
+        type Inner = PublicId<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
+        }
+    }
+
+    impl<'a> PublicId<'a> {
+        pub const VT_ID: flatbuffers::VOffsetT = 4;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            PublicId { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args PublicIdArgs<'args>,
+        ) -> flatbuffers::WIPOffset<PublicId<'bldr>> {
+            let mut builder = PublicIdBuilder::new(_fbb);
+            if let Some(x) = args.id {
+                builder.add_id(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn id(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        PublicId::VT_ID,
+                        None,
+                    )
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for PublicId<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "id",
+                    Self::VT_ID,
+                    false,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct PublicIdArgs<'a> {
+        pub id: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+    }
+    impl<'a> Default for PublicIdArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            PublicIdArgs { id: None }
+        }
+    }
+
+    pub struct PublicIdBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> PublicIdBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_id(&mut self, id: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(PublicId::VT_ID, id);
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> PublicIdBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            PublicIdBuilder {
+                fbb_: _fbb,
+                start_: start,
+            }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<PublicId<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for PublicId<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("PublicId");
+            ds.field("id", &self.id());
+            ds.finish()
+        }
+    }
+    pub enum AccountOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct Account<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for Account<'a> {
+        type Inner = Account<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
+        }
+    }
+
+    impl<'a> Account<'a> {
+        pub const VT_PUBLIC_ID: flatbuffers::VOffsetT = 4;
+        pub const VT_PROFILE: flatbuffers::VOffsetT = 6;
+        pub const VT_ACTIVITY: flatbuffers::VOffsetT = 8;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            Account { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args AccountArgs<'args>,
+        ) -> flatbuffers::WIPOffset<Account<'bldr>> {
+            let mut builder = AccountBuilder::new(_fbb);
+            if let Some(x) = args.activity {
+                builder.add_activity(x);
+            }
+            if let Some(x) = args.profile {
+                builder.add_profile(x);
+            }
+            if let Some(x) = args.public_id {
+                builder.add_public_id(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn public_id(&self) -> Option<PublicId<'a>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<PublicId>>(Account::VT_PUBLIC_ID, None)
+            }
+        }
+        #[inline]
+        pub fn profile(&self) -> Option<Profile<'a>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<Profile>>(Account::VT_PROFILE, None)
+            }
+        }
+        #[inline]
+        pub fn activity(&self) -> Option<Activity<'a>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<Activity>>(Account::VT_ACTIVITY, None)
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for Account<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<PublicId>>(
+                    "public_id",
+                    Self::VT_PUBLIC_ID,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<Profile>>(
+                    "profile",
+                    Self::VT_PROFILE,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<Activity>>(
+                    "activity",
+                    Self::VT_ACTIVITY,
+                    false,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct AccountArgs<'a> {
+        pub public_id: Option<flatbuffers::WIPOffset<PublicId<'a>>>,
+        pub profile: Option<flatbuffers::WIPOffset<Profile<'a>>>,
+        pub activity: Option<flatbuffers::WIPOffset<Activity<'a>>>,
+    }
+    impl<'a> Default for AccountArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            AccountArgs {
+                public_id: None,
+                profile: None,
+                activity: None,
+            }
+        }
+    }
+
+    pub struct AccountBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> AccountBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_public_id(&mut self, public_id: flatbuffers::WIPOffset<PublicId<'b>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<PublicId>>(
+                    Account::VT_PUBLIC_ID,
+                    public_id,
+                );
+        }
+        #[inline]
+        pub fn add_profile(&mut self, profile: flatbuffers::WIPOffset<Profile<'b>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<Profile>>(Account::VT_PROFILE, profile);
+        }
+        #[inline]
+        pub fn add_activity(&mut self, activity: flatbuffers::WIPOffset<Activity<'b>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<Activity>>(
+                    Account::VT_ACTIVITY,
+                    activity,
+                );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> AccountBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            AccountBuilder {
+                fbb_: _fbb,
+                start_: start,
+            }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<Account<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for Account<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("Account");
+            ds.field("public_id", &self.public_id());
+            ds.field("profile", &self.profile());
+            ds.field("activity", &self.activity());
+            ds.finish()
+        }
+    }
+    pub enum StreamOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct Stream<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for Stream<'a> {
+        type Inner = Stream<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
+        }
+    }
+
+    impl<'a> Stream<'a> {
+        pub const VT_PUBLIC_ID: flatbuffers::VOffsetT = 4;
+        pub const VT_PROFILE: flatbuffers::VOffsetT = 6;
+        pub const VT_ACTIVITY: flatbuffers::VOffsetT = 8;
+        pub const VT_CREATOR_PUBLIC_ID: flatbuffers::VOffsetT = 10;
+        pub const VT_MEMBERS_PUBLIC_ID: flatbuffers::VOffsetT = 12;
+        pub const VT_STREAM_LEVEL: flatbuffers::VOffsetT = 14;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            Stream { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args StreamArgs<'args>,
+        ) -> flatbuffers::WIPOffset<Stream<'bldr>> {
+            let mut builder = StreamBuilder::new(_fbb);
+            if let Some(x) = args.members_public_id {
+                builder.add_members_public_id(x);
+            }
+            if let Some(x) = args.creator_public_id {
+                builder.add_creator_public_id(x);
+            }
+            if let Some(x) = args.activity {
+                builder.add_activity(x);
+            }
+            if let Some(x) = args.profile {
+                builder.add_profile(x);
+            }
+            if let Some(x) = args.public_id {
+                builder.add_public_id(x);
+            }
+            builder.add_stream_level(args.stream_level);
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn public_id(&self) -> Option<PublicId<'a>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<PublicId>>(Stream::VT_PUBLIC_ID, None)
+            }
+        }
+        #[inline]
+        pub fn profile(&self) -> Option<Profile<'a>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<Profile>>(Stream::VT_PROFILE, None)
+            }
+        }
+        #[inline]
+        pub fn activity(&self) -> Option<Activity<'a>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<Activity>>(Stream::VT_ACTIVITY, None)
+            }
+        }
+        #[inline]
+        pub fn creator_public_id(&self) -> Option<PublicId<'a>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<flatbuffers::ForwardsUOffset<PublicId>>(
+                    Stream::VT_CREATOR_PUBLIC_ID,
+                    None,
+                )
+            }
+        }
+        #[inline]
+        pub fn members_public_id(
+            &self,
+        ) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<PublicId<'a>>>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<PublicId>>,
+                >>(Stream::VT_MEMBERS_PUBLIC_ID, None)
+            }
+        }
+        #[inline]
+        pub fn stream_level(&self) -> StreamLevel {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<StreamLevel>(Stream::VT_STREAM_LEVEL, Some(StreamLevel::unused))
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for Stream<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<PublicId>>(
+                    "public_id",
+                    Self::VT_PUBLIC_ID,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<Profile>>(
+                    "profile",
+                    Self::VT_PROFILE,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<Activity>>(
+                    "activity",
+                    Self::VT_ACTIVITY,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<PublicId>>(
+                    "creator_public_id",
+                    Self::VT_CREATOR_PUBLIC_ID,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<PublicId>>,
+                >>("members_public_id", Self::VT_MEMBERS_PUBLIC_ID, false)?
+                .visit_field::<StreamLevel>("stream_level", Self::VT_STREAM_LEVEL, false)?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct StreamArgs<'a> {
+        pub public_id: Option<flatbuffers::WIPOffset<PublicId<'a>>>,
+        pub profile: Option<flatbuffers::WIPOffset<Profile<'a>>>,
+        pub activity: Option<flatbuffers::WIPOffset<Activity<'a>>>,
+        pub creator_public_id: Option<flatbuffers::WIPOffset<PublicId<'a>>>,
+        pub members_public_id: Option<
+            flatbuffers::WIPOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<PublicId<'a>>>,
+            >,
+        >,
+        pub stream_level: StreamLevel,
+    }
+    impl<'a> Default for StreamArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            StreamArgs {
+                public_id: None,
+                profile: None,
+                activity: None,
+                creator_public_id: None,
+                members_public_id: None,
+                stream_level: StreamLevel::unused,
+            }
+        }
+    }
+
+    pub struct StreamBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> StreamBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_public_id(&mut self, public_id: flatbuffers::WIPOffset<PublicId<'b>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<PublicId>>(
+                    Stream::VT_PUBLIC_ID,
+                    public_id,
+                );
+        }
+        #[inline]
+        pub fn add_profile(&mut self, profile: flatbuffers::WIPOffset<Profile<'b>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<Profile>>(Stream::VT_PROFILE, profile);
+        }
+        #[inline]
+        pub fn add_activity(&mut self, activity: flatbuffers::WIPOffset<Activity<'b>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<Activity>>(
+                    Stream::VT_ACTIVITY,
+                    activity,
+                );
+        }
+        #[inline]
+        pub fn add_creator_public_id(
+            &mut self,
+            creator_public_id: flatbuffers::WIPOffset<PublicId<'b>>,
+        ) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<PublicId>>(
+                    Stream::VT_CREATOR_PUBLIC_ID,
+                    creator_public_id,
+                );
+        }
+        #[inline]
+        pub fn add_members_public_id(
+            &mut self,
+            members_public_id: flatbuffers::WIPOffset<
+                flatbuffers::Vector<'b, flatbuffers::ForwardsUOffset<PublicId<'b>>>,
+            >,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                Stream::VT_MEMBERS_PUBLIC_ID,
+                members_public_id,
+            );
+        }
+        #[inline]
+        pub fn add_stream_level(&mut self, stream_level: StreamLevel) {
+            self.fbb_.push_slot::<StreamLevel>(
+                Stream::VT_STREAM_LEVEL,
+                stream_level,
+                StreamLevel::unused,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> StreamBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            StreamBuilder {
+                fbb_: _fbb,
+                start_: start,
+            }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<Stream<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for Stream<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("Stream");
+            ds.field("public_id", &self.public_id());
+            ds.field("profile", &self.profile());
+            ds.field("activity", &self.activity());
+            ds.field("creator_public_id", &self.creator_public_id());
+            ds.field("members_public_id", &self.members_public_id());
+            ds.field("stream_level", &self.stream_level());
+            ds.finish()
+        }
+    }
+    pub enum ThoughtOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct Thought<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for Thought<'a> {
+        type Inner = Thought<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
+        }
+    }
+
+    impl<'a> Thought<'a> {
+        pub const VT_PUBLIC_ID: flatbuffers::VOffsetT = 4;
+        pub const VT_CREATOR_PUBLIC_ID: flatbuffers::VOffsetT = 6;
+        pub const VT_STREAM_PUBLIC_ID: flatbuffers::VOffsetT = 8;
+        pub const VT_CONTENT: flatbuffers::VOffsetT = 10;
+        pub const VT_MEDIA_TYPE: flatbuffers::VOffsetT = 12;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            Thought { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args ThoughtArgs<'args>,
+        ) -> flatbuffers::WIPOffset<Thought<'bldr>> {
+            let mut builder = ThoughtBuilder::new(_fbb);
+            if let Some(x) = args.content {
+                builder.add_content(x);
+            }
+            if let Some(x) = args.stream_public_id {
+                builder.add_stream_public_id(x);
+            }
+            if let Some(x) = args.creator_public_id {
+                builder.add_creator_public_id(x);
+            }
+            if let Some(x) = args.public_id {
+                builder.add_public_id(x);
+            }
+            builder.add_media_type(args.media_type);
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn public_id(&self) -> Option<PublicId<'a>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<PublicId>>(Thought::VT_PUBLIC_ID, None)
+            }
+        }
+        #[inline]
+        pub fn creator_public_id(&self) -> Option<PublicId<'a>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<flatbuffers::ForwardsUOffset<PublicId>>(
+                    Thought::VT_CREATOR_PUBLIC_ID,
+                    None,
+                )
+            }
+        }
+        #[inline]
+        pub fn stream_public_id(&self) -> Option<PublicId<'a>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<flatbuffers::ForwardsUOffset<PublicId>>(
+                    Thought::VT_STREAM_PUBLIC_ID,
+                    None,
+                )
+            }
+        }
+        #[inline]
+        pub fn content(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        Thought::VT_CONTENT,
+                        None,
+                    )
+            }
+        }
+        #[inline]
+        pub fn media_type(&self) -> MediaType {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<MediaType>(Thought::VT_MEDIA_TYPE, Some(MediaType::unused))
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for Thought<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<PublicId>>(
+                    "public_id",
+                    Self::VT_PUBLIC_ID,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<PublicId>>(
+                    "creator_public_id",
+                    Self::VT_CREATOR_PUBLIC_ID,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<PublicId>>(
+                    "stream_public_id",
+                    Self::VT_STREAM_PUBLIC_ID,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "content",
+                    Self::VT_CONTENT,
+                    false,
+                )?
+                .visit_field::<MediaType>("media_type", Self::VT_MEDIA_TYPE, false)?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct ThoughtArgs<'a> {
+        pub public_id: Option<flatbuffers::WIPOffset<PublicId<'a>>>,
+        pub creator_public_id: Option<flatbuffers::WIPOffset<PublicId<'a>>>,
+        pub stream_public_id: Option<flatbuffers::WIPOffset<PublicId<'a>>>,
+        pub content: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+        pub media_type: MediaType,
+    }
+    impl<'a> Default for ThoughtArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            ThoughtArgs {
+                public_id: None,
+                creator_public_id: None,
+                stream_public_id: None,
+                content: None,
+                media_type: MediaType::unused,
+            }
+        }
+    }
+
+    pub struct ThoughtBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ThoughtBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_public_id(&mut self, public_id: flatbuffers::WIPOffset<PublicId<'b>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<PublicId>>(
+                    Thought::VT_PUBLIC_ID,
+                    public_id,
+                );
+        }
+        #[inline]
+        pub fn add_creator_public_id(
+            &mut self,
+            creator_public_id: flatbuffers::WIPOffset<PublicId<'b>>,
+        ) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<PublicId>>(
+                    Thought::VT_CREATOR_PUBLIC_ID,
+                    creator_public_id,
+                );
+        }
+        #[inline]
+        pub fn add_stream_public_id(
+            &mut self,
+            stream_public_id: flatbuffers::WIPOffset<PublicId<'b>>,
+        ) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<PublicId>>(
+                    Thought::VT_STREAM_PUBLIC_ID,
+                    stream_public_id,
+                );
+        }
+        #[inline]
+        pub fn add_content(
+            &mut self,
+            content: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(Thought::VT_CONTENT, content);
+        }
+        #[inline]
+        pub fn add_media_type(&mut self, media_type: MediaType) {
+            self.fbb_
+                .push_slot::<MediaType>(Thought::VT_MEDIA_TYPE, media_type, MediaType::unused);
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> ThoughtBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            ThoughtBuilder {
+                fbb_: _fbb,
+                start_: start,
+            }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<Thought<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for Thought<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("Thought");
+            ds.field("public_id", &self.public_id());
+            ds.field("creator_public_id", &self.creator_public_id());
+            ds.field("stream_public_id", &self.stream_public_id());
+            ds.field("content", &self.content());
+            ds.field("media_type", &self.media_type());
+            ds.finish()
+        }
+    }
+    pub enum ProfileOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct Profile<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for Profile<'a> {
+        type Inner = Profile<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
+        }
+    }
+
+    impl<'a> Profile<'a> {
+        pub const VT_NAME: flatbuffers::VOffsetT = 4;
+        pub const VT_BLURB: flatbuffers::VOffsetT = 6;
+        pub const VT_INTERESTS: flatbuffers::VOffsetT = 8;
+        pub const VT_LOCATION: flatbuffers::VOffsetT = 10;
+        pub const VT_LOCATION_LEVEL: flatbuffers::VOffsetT = 12;
+        pub const VT_IDENTITY_ASSURANCE_LEVEL: flatbuffers::VOffsetT = 14;
+        pub const VT_ENCRYPTION_LEVEL: flatbuffers::VOffsetT = 16;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            Profile { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args ProfileArgs<'args>,
+        ) -> flatbuffers::WIPOffset<Profile<'bldr>> {
+            let mut builder = ProfileBuilder::new(_fbb);
+            if let Some(x) = args.location {
+                builder.add_location(x);
+            }
+            if let Some(x) = args.interests {
+                builder.add_interests(x);
+            }
+            if let Some(x) = args.blurb {
+                builder.add_blurb(x);
+            }
+            if let Some(x) = args.name {
+                builder.add_name(x);
+            }
+            builder.add_encryption_level(args.encryption_level);
+            builder.add_identity_assurance_level(args.identity_assurance_level);
+            builder.add_location_level(args.location_level);
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn name(&self) -> Option<&'a str> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(Profile::VT_NAME, None)
+            }
+        }
+        #[inline]
+        pub fn blurb(&self) -> Option<&'a str> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(Profile::VT_BLURB, None)
+            }
+        }
+        #[inline]
+        pub fn interests(&self) -> Option<&'a str> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(Profile::VT_INTERESTS, None)
+            }
+        }
+        #[inline]
+        pub fn location(&self) -> Option<&'a str> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(Profile::VT_LOCATION, None)
+            }
+        }
+        #[inline]
+        pub fn location_level(&self) -> LocationLevel {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<LocationLevel>(Profile::VT_LOCATION_LEVEL, Some(LocationLevel::unused))
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn identity_assurance_level(&self) -> IdentityAssuranceLevel {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<IdentityAssuranceLevel>(
+                        Profile::VT_IDENTITY_ASSURANCE_LEVEL,
+                        Some(IdentityAssuranceLevel::unused),
+                    )
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn encryption_level(&self) -> EncryptionLevel {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<EncryptionLevel>(
+                        Profile::VT_ENCRYPTION_LEVEL,
+                        Some(EncryptionLevel::unused),
+                    )
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for Profile<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>("name", Self::VT_NAME, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>("blurb", Self::VT_BLURB, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "interests",
+                    Self::VT_INTERESTS,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "location",
+                    Self::VT_LOCATION,
+                    false,
+                )?
+                .visit_field::<LocationLevel>("location_level", Self::VT_LOCATION_LEVEL, false)?
+                .visit_field::<IdentityAssuranceLevel>(
+                    "identity_assurance_level",
+                    Self::VT_IDENTITY_ASSURANCE_LEVEL,
+                    false,
+                )?
+                .visit_field::<EncryptionLevel>(
+                    "encryption_level",
+                    Self::VT_ENCRYPTION_LEVEL,
+                    false,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct ProfileArgs<'a> {
+        pub name: Option<flatbuffers::WIPOffset<&'a str>>,
+        pub blurb: Option<flatbuffers::WIPOffset<&'a str>>,
+        pub interests: Option<flatbuffers::WIPOffset<&'a str>>,
+        pub location: Option<flatbuffers::WIPOffset<&'a str>>,
+        pub location_level: LocationLevel,
+        pub identity_assurance_level: IdentityAssuranceLevel,
+        pub encryption_level: EncryptionLevel,
+    }
+    impl<'a> Default for ProfileArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            ProfileArgs {
+                name: None,
+                blurb: None,
+                interests: None,
+                location: None,
+                location_level: LocationLevel::unused,
+                identity_assurance_level: IdentityAssuranceLevel::unused,
+                encryption_level: EncryptionLevel::unused,
+            }
+        }
+    }
+
+    pub struct ProfileBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ProfileBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_name(&mut self, name: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(Profile::VT_NAME, name);
+        }
+        #[inline]
+        pub fn add_blurb(&mut self, blurb: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(Profile::VT_BLURB, blurb);
+        }
+        #[inline]
+        pub fn add_interests(&mut self, interests: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(Profile::VT_INTERESTS, interests);
+        }
+        #[inline]
+        pub fn add_location(&mut self, location: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(Profile::VT_LOCATION, location);
+        }
+        #[inline]
+        pub fn add_location_level(&mut self, location_level: LocationLevel) {
+            self.fbb_.push_slot::<LocationLevel>(
+                Profile::VT_LOCATION_LEVEL,
+                location_level,
+                LocationLevel::unused,
+            );
+        }
+        #[inline]
+        pub fn add_identity_assurance_level(
+            &mut self,
+            identity_assurance_level: IdentityAssuranceLevel,
+        ) {
+            self.fbb_.push_slot::<IdentityAssuranceLevel>(
+                Profile::VT_IDENTITY_ASSURANCE_LEVEL,
+                identity_assurance_level,
+                IdentityAssuranceLevel::unused,
+            );
+        }
+        #[inline]
+        pub fn add_encryption_level(&mut self, encryption_level: EncryptionLevel) {
+            self.fbb_.push_slot::<EncryptionLevel>(
+                Profile::VT_ENCRYPTION_LEVEL,
+                encryption_level,
+                EncryptionLevel::unused,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> ProfileBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            ProfileBuilder {
+                fbb_: _fbb,
+                start_: start,
+            }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<Profile<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for Profile<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("Profile");
+            ds.field("name", &self.name());
+            ds.field("blurb", &self.blurb());
+            ds.field("interests", &self.interests());
+            ds.field("location", &self.location());
+            ds.field("location_level", &self.location_level());
+            ds.field("identity_assurance_level", &self.identity_assurance_level());
+            ds.field("encryption_level", &self.encryption_level());
+            ds.finish()
+        }
+    }
+    pub enum ActivityOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct Activity<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for Activity<'a> {
+        type Inner = Activity<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
+        }
+    }
+
+    impl<'a> Activity<'a> {
+        pub const VT_DATE_CREATED: flatbuffers::VOffsetT = 4;
+        pub const VT_EXPERT_LEVEL: flatbuffers::VOffsetT = 6;
+        pub const VT_ACTIVITY_LEVEL: flatbuffers::VOffsetT = 8;
+        pub const VT_TRUST_LEVEL: flatbuffers::VOffsetT = 10;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            Activity { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args ActivityArgs,
+        ) -> flatbuffers::WIPOffset<Activity<'bldr>> {
+            let mut builder = ActivityBuilder::new(_fbb);
+            builder.add_date_created(args.date_created);
+            builder.add_trust_level(args.trust_level);
+            builder.add_activity_level(args.activity_level);
+            builder.add_expert_level(args.expert_level);
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn date_created(&self) -> i64 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<i64>(Activity::VT_DATE_CREATED, Some(0))
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn expert_level(&self) -> ExpertLevel {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<ExpertLevel>(Activity::VT_EXPERT_LEVEL, Some(ExpertLevel::unused))
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn activity_level(&self) -> ActivityLevel {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<ActivityLevel>(Activity::VT_ACTIVITY_LEVEL, Some(ActivityLevel::unused))
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn trust_level(&self) -> TrustLevel {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<TrustLevel>(Activity::VT_TRUST_LEVEL, Some(TrustLevel::unused))
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for Activity<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<i64>("date_created", Self::VT_DATE_CREATED, false)?
+                .visit_field::<ExpertLevel>("expert_level", Self::VT_EXPERT_LEVEL, false)?
+                .visit_field::<ActivityLevel>("activity_level", Self::VT_ACTIVITY_LEVEL, false)?
+                .visit_field::<TrustLevel>("trust_level", Self::VT_TRUST_LEVEL, false)?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct ActivityArgs {
+        pub date_created: i64,
+        pub expert_level: ExpertLevel,
+        pub activity_level: ActivityLevel,
+        pub trust_level: TrustLevel,
+    }
+    impl<'a> Default for ActivityArgs {
+        #[inline]
+        fn default() -> Self {
+            ActivityArgs {
+                date_created: 0,
+                expert_level: ExpertLevel::unused,
+                activity_level: ActivityLevel::unused,
+                trust_level: TrustLevel::unused,
+            }
+        }
+    }
+
+    pub struct ActivityBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ActivityBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_date_created(&mut self, date_created: i64) {
+            self.fbb_
+                .push_slot::<i64>(Activity::VT_DATE_CREATED, date_created, 0);
+        }
+        #[inline]
+        pub fn add_expert_level(&mut self, expert_level: ExpertLevel) {
+            self.fbb_.push_slot::<ExpertLevel>(
+                Activity::VT_EXPERT_LEVEL,
+                expert_level,
+                ExpertLevel::unused,
+            );
+        }
+        #[inline]
+        pub fn add_activity_level(&mut self, activity_level: ActivityLevel) {
+            self.fbb_.push_slot::<ActivityLevel>(
+                Activity::VT_ACTIVITY_LEVEL,
+                activity_level,
+                ActivityLevel::unused,
+            );
+        }
+        #[inline]
+        pub fn add_trust_level(&mut self, trust_level: TrustLevel) {
+            self.fbb_.push_slot::<TrustLevel>(
+                Activity::VT_TRUST_LEVEL,
+                trust_level,
+                TrustLevel::unused,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> ActivityBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            ActivityBuilder {
+                fbb_: _fbb,
+                start_: start,
+            }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<Activity<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for Activity<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("Activity");
+            ds.field("date_created", &self.date_created());
+            ds.field("expert_level", &self.expert_level());
+            ds.field("activity_level", &self.activity_level());
+            ds.field("trust_level", &self.trust_level());
+            ds.finish()
+        }
+    }
+    pub enum EntityRootOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct EntityRoot<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for EntityRoot<'a> {
+        type Inner = EntityRoot<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
+        }
+    }
+
+    impl<'a> EntityRoot<'a> {
+        pub const VT_ENTITY_TYPE: flatbuffers::VOffsetT = 4;
+        pub const VT_ENTITY: flatbuffers::VOffsetT = 6;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            EntityRoot { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args EntityRootArgs,
+        ) -> flatbuffers::WIPOffset<EntityRoot<'bldr>> {
+            let mut builder = EntityRootBuilder::new(_fbb);
+            if let Some(x) = args.entity {
+                builder.add_entity(x);
+            }
+            builder.add_entity_type(args.entity_type);
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn entity_type(&self) -> Entity {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<Entity>(EntityRoot::VT_ENTITY_TYPE, Some(Entity::NONE))
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn entity(&self) -> Option<flatbuffers::Table<'a>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Table<'a>>>(
+                        EntityRoot::VT_ENTITY,
+                        None,
+                    )
+            }
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn entity_as_account(&self) -> Option<Account<'a>> {
+            if self.entity_type() == Entity::Account {
+                self.entity().map(|t| {
+                    // Safety:
+                    // Created from a valid Table for this object
+                    // Which contains a valid union in this slot
+                    unsafe { Account::init_from_table(t) }
+                })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn entity_as_stream(&self) -> Option<Stream<'a>> {
+            if self.entity_type() == Entity::Stream {
+                self.entity().map(|t| {
+                    // Safety:
+                    // Created from a valid Table for this object
+                    // Which contains a valid union in this slot
+                    unsafe { Stream::init_from_table(t) }
+                })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn entity_as_thought(&self) -> Option<Thought<'a>> {
+            if self.entity_type() == Entity::Thought {
+                self.entity().map(|t| {
+                    // Safety:
+                    // Created from a valid Table for this object
+                    // Which contains a valid union in this slot
+                    unsafe { Thought::init_from_table(t) }
+                })
+            } else {
+                None
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for EntityRoot<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_union::<Entity, _>(
+                    "entity_type",
+                    Self::VT_ENTITY_TYPE,
+                    "entity",
+                    Self::VT_ENTITY,
+                    false,
+                    |key, v, pos| match key {
+                        Entity::Account => v
+                            .verify_union_variant::<flatbuffers::ForwardsUOffset<Account>>(
+                                "Entity::Account",
+                                pos,
+                            ),
+                        Entity::Stream => v
+                            .verify_union_variant::<flatbuffers::ForwardsUOffset<Stream>>(
+                                "Entity::Stream",
+                                pos,
+                            ),
+                        Entity::Thought => v
+                            .verify_union_variant::<flatbuffers::ForwardsUOffset<Thought>>(
+                                "Entity::Thought",
+                                pos,
+                            ),
+                        _ => Ok(()),
+                    },
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct EntityRootArgs {
+        pub entity_type: Entity,
+        pub entity: Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
+    }
+    impl<'a> Default for EntityRootArgs {
+        #[inline]
+        fn default() -> Self {
+            EntityRootArgs {
+                entity_type: Entity::NONE,
+                entity: None,
+            }
+        }
+    }
+
+    pub struct EntityRootBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> EntityRootBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_entity_type(&mut self, entity_type: Entity) {
+            self.fbb_
+                .push_slot::<Entity>(EntityRoot::VT_ENTITY_TYPE, entity_type, Entity::NONE);
+        }
+        #[inline]
+        pub fn add_entity(&mut self, entity: flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(EntityRoot::VT_ENTITY, entity);
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> EntityRootBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            EntityRootBuilder {
+                fbb_: _fbb,
+                start_: start,
+            }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<EntityRoot<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for EntityRoot<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("EntityRoot");
+            ds.field("entity_type", &self.entity_type());
+            match self.entity_type() {
+                Entity::Account => {
+                    if let Some(x) = self.entity_as_account() {
+                        ds.field("entity", &x)
+                    } else {
+                        ds.field(
+                            "entity",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
+                    }
+                }
+                Entity::Stream => {
+                    if let Some(x) = self.entity_as_stream() {
+                        ds.field("entity", &x)
+                    } else {
+                        ds.field(
+                            "entity",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
+                    }
+                }
+                Entity::Thought => {
+                    if let Some(x) = self.entity_as_thought() {
+                        ds.field("entity", &x)
+                    } else {
+                        ds.field(
+                            "entity",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
+                    }
+                }
+                _ => {
+                    let x: Option<()> = None;
+                    ds.field("entity", &x)
+                }
+            };
+            ds.finish()
+        }
+    }
+    #[inline]
+    /// Verifies that a buffer of bytes contains a `EntityRoot`
+    /// and returns it.
+    /// Note that verification is still experimental and may not
+    /// catch every error, or be maximally performant. For the
+    /// previous, unchecked, behavior use
+    /// `root_as_entity_root_unchecked`.
+    pub fn root_as_entity_root(buf: &[u8]) -> Result<EntityRoot, flatbuffers::InvalidFlatbuffer> {
+        flatbuffers::root::<EntityRoot>(buf)
+    }
+    #[inline]
+    /// Verifies that a buffer of bytes contains a size prefixed
+    /// `EntityRoot` and returns it.
+    /// Note that verification is still experimental and may not
+    /// catch every error, or be maximally performant. For the
+    /// previous, unchecked, behavior use
+    /// `size_prefixed_root_as_entity_root_unchecked`.
+    pub fn size_prefixed_root_as_entity_root(
+        buf: &[u8],
+    ) -> Result<EntityRoot, flatbuffers::InvalidFlatbuffer> {
+        flatbuffers::size_prefixed_root::<EntityRoot>(buf)
+    }
+    #[inline]
+    /// Verifies, with the given options, that a buffer of bytes
+    /// contains a `EntityRoot` and returns it.
+    /// Note that verification is still experimental and may not
+    /// catch every error, or be maximally performant. For the
+    /// previous, unchecked, behavior use
+    /// `root_as_entity_root_unchecked`.
+    pub fn root_as_entity_root_with_opts<'b, 'o>(
+        opts: &'o flatbuffers::VerifierOptions,
+        buf: &'b [u8],
+    ) -> Result<EntityRoot<'b>, flatbuffers::InvalidFlatbuffer> {
+        flatbuffers::root_with_opts::<EntityRoot<'b>>(opts, buf)
+    }
+    #[inline]
+    /// Verifies, with the given verifier options, that a buffer of
+    /// bytes contains a size prefixed `EntityRoot` and returns
+    /// it. Note that verification is still experimental and may not
+    /// catch every error, or be maximally performant. For the
+    /// previous, unchecked, behavior use
+    /// `root_as_entity_root_unchecked`.
+    pub fn size_prefixed_root_as_entity_root_with_opts<'b, 'o>(
+        opts: &'o flatbuffers::VerifierOptions,
+        buf: &'b [u8],
+    ) -> Result<EntityRoot<'b>, flatbuffers::InvalidFlatbuffer> {
+        flatbuffers::size_prefixed_root_with_opts::<EntityRoot<'b>>(opts, buf)
+    }
+    #[inline]
+    /// Assumes, without verification, that a buffer of bytes contains a EntityRoot and returns it.
+    /// # Safety
+    /// Callers must trust the given bytes do indeed contain a valid `EntityRoot`.
+    pub unsafe fn root_as_entity_root_unchecked(buf: &[u8]) -> EntityRoot {
+        flatbuffers::root_unchecked::<EntityRoot>(buf)
+    }
+    #[inline]
+    /// Assumes, without verification, that a buffer of bytes contains a size prefixed EntityRoot and returns it.
+    /// # Safety
+    /// Callers must trust the given bytes do indeed contain a valid size prefixed `EntityRoot`.
+    pub unsafe fn size_prefixed_root_as_entity_root_unchecked(buf: &[u8]) -> EntityRoot {
+        flatbuffers::size_prefixed_root_unchecked::<EntityRoot>(buf)
+    }
+    #[inline]
+    pub fn finish_entity_root_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(
+        fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        root: flatbuffers::WIPOffset<EntityRoot<'a>>,
+    ) {
+        fbb.finish(root, None);
+    }
+
+    #[inline]
+    pub fn finish_size_prefixed_entity_root_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(
+        fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        root: flatbuffers::WIPOffset<EntityRoot<'a>>,
+    ) {
+        fbb.finish_size_prefixed(root, None);
+    }
+} // pub mod Arkavo

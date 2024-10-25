@@ -27,9 +27,9 @@ pub mod content_rating {
     #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub enum AgeLevel {
-        Kids,    // Under 13
-        Teens,   // 13 to 17
-        Adults,  // 18 and above
+        Kids,   // Under 13
+        Teens,  // 13 to 17
+        Adults, // 18 and above
     }
 
     #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
@@ -46,6 +46,7 @@ pub mod content_rating {
     }
 
     #[ink(storage)]
+    #[derive(Default)]
     pub struct ContentRating {
         // Contract storage (empty for this case)
     }
