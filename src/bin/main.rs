@@ -1162,21 +1162,21 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
         tls_enabled: env::var("TLS_CERT_PATH").is_ok(),
         tls_cert_path: env::var("TLS_CERT_PATH").unwrap_or_else(|_| {
             current_dir
-                .join("../../fullchain.pem")
+                .join("fullchain.pem")
                 .to_str()
                 .unwrap()
                 .to_string()
         }),
         tls_key_path: env::var("TLS_KEY_PATH").unwrap_or_else(|_| {
             current_dir
-                .join("../../privkey.pem")
+                .join("privkey.pem")
                 .to_str()
                 .unwrap()
                 .to_string()
         }),
         kas_key_path: env::var("KAS_KEY_PATH").unwrap_or_else(|_| {
             current_dir
-                .join("../../recipient_private_key.pem")
+                .join("recipient_private_key.pem")
                 .to_str()
                 .unwrap()
                 .to_string()
