@@ -875,6 +875,21 @@ async fn handle_event(
     nats_connection: Arc<NatsConnection>,
 ) -> Option<Message> {
     let start_time = Instant::now();
+    println!(
+        "Payload (first 20 bytes in hex, space-delimited): {}",
+        payload
+            .iter()
+            .take(20)
+            .map(|byte| format!("{:02x}", byte))
+            .collect::<Vec<String>>()
+            .join(" ")
+    );
+    // Size validation for type 0x06
+    const MAX_EVENT_SIZE: usize = 2000; // Adjust this value as needed
+    if payload.len() > MAX_EVENT_SIZE {
+        error!("Event payload exceeds maximum allowed size of {} bytes", MAX_EVENT_SIZE);
+        return None;
+    }
     let mut event_data: Option<Vec<u8>> = None;
     if let Ok(event) = root::<Event>(payload) {
         println!("Event Action: {:?}", event.action());
@@ -920,6 +935,9 @@ async fn handle_event(
                         }
                     };
                     // TODO if cache miss then route to device
+                } else {
+                    error!("Failed to parse user event from payload");
+                    return None;
                 }
             }
             EventData::CacheEvent => {
