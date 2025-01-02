@@ -856,12 +856,22 @@ async fn handle_nats_subscription(
         tokio::time::sleep(NATS_RETRY_INTERVAL).await;
     }
 }
+
 async fn handle_nats_event(
     msg: NatsMessage,
     connection_state: Arc<ConnectionState>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // workaround, not sure why video is switching to 0x06
+    // may need to check the policy
+    const MAX_EVENT_SIZE: usize = 2000;
+    let message_type = if msg.payload.len() > MAX_EVENT_SIZE {
+        MessageType::Nats // 0x05 for large messages
+    } else {
+        MessageType::Event // 0x06 for small messages
+    };
+
     let ws_message = Message::Binary(
-        vec![MessageType::Event as u8]
+        vec![message_type as u8]
             .into_iter()
             .chain(msg.payload)
             .collect(),
@@ -869,6 +879,7 @@ async fn handle_nats_event(
     connection_state.outgoing_tx.send(ws_message)?;
     Ok(())
 }
+
 async fn handle_event(
     server_state: &Arc<ServerState>,
     payload: &[u8],
