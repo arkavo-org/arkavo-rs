@@ -840,7 +840,7 @@ async fn handle_nats_subscription(
                 Ok(mut subscription) => {
                     info!("Subscribed to NATS subject: {}", subject);
                     while let Some(msg) = subscription.next().await {
-                        if let Err(e) = handle_nats_event(msg, connection_state.clone()).await {
+                        if let Err(e) = handle_nats(msg, connection_state.clone()).await {
                             error!("Error handling NATS message: {}", e);
                         }
                     }
@@ -857,17 +857,15 @@ async fn handle_nats_subscription(
     }
 }
 
-async fn handle_nats_event(
+async fn handle_nats(
     msg: NatsMessage,
     connection_state: Arc<ConnectionState>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // workaround, not sure why video is switching to 0x06
-    // may need to check the policy
-    const MAX_EVENT_SIZE: usize = 2000;
-    let message_type = if msg.payload.len() > MAX_EVENT_SIZE {
-        MessageType::Nats // 0x05 for large messages
+    // it nanotdf, then do a message, otherwise it is a Flatbuffers event
+    let message_type = if msg.payload[0..3].iter().eq(&[0x4C, 0x31, 0x4C]) {
+        MessageType::Nats
     } else {
-        MessageType::Event // 0x06 for small messages
+        MessageType::Event
     };
 
     let ws_message = Message::Binary(
