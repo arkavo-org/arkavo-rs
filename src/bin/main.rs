@@ -154,7 +154,7 @@ static KAS_KEYS: OnceCell<Arc<KasKeys>> = OnceCell::new();
 trait AsyncStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T> AsyncStream for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
 
-#[tokio::main(flavor = "multi_thread")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     env_logger::init();
@@ -523,8 +523,10 @@ async fn handle_rewrap(
             locator = policy.get_locator().clone();
         }
         PolicyType::Embedded => {
-            // println!("embedded policy");
+            println!("embedded policy");
             if let Some(body) = &policy.body {
+                println!("Metadata buffer size: {}", body.len());
+                println!("Metadata buffer contents: {:?}", body);
                 metadata = match root_as_metadata(body) {
                     Ok(metadata) => Some(metadata),
                     Err(e) => {
@@ -533,7 +535,7 @@ async fn handle_rewrap(
                     }
                 };
                 // TODO add contracts
-                // println!("metadata: {:#?}", metadata);
+                println!("metadata: {:#?}", metadata);
             }
             // add content rating contract
             let rl = ResourceLocator {
@@ -840,7 +842,7 @@ async fn handle_nats_subscription(
                 Ok(mut subscription) => {
                     info!("Subscribed to NATS subject: {}", subject);
                     while let Some(msg) = subscription.next().await {
-                        if let Err(e) = handle_nats_event(msg, connection_state.clone()).await {
+                        if let Err(e) = handle_nats(msg, connection_state.clone()).await {
                             error!("Error handling NATS message: {}", e);
                         }
                     }
@@ -856,12 +858,20 @@ async fn handle_nats_subscription(
         tokio::time::sleep(NATS_RETRY_INTERVAL).await;
     }
 }
-async fn handle_nats_event(
+
+async fn handle_nats(
     msg: NatsMessage,
     connection_state: Arc<ConnectionState>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // it nanotdf, then do a message, otherwise it is a Flatbuffers event
+    let message_type = if msg.payload[0..3].iter().eq(&[0x4C, 0x31, 0x4C]) {
+        MessageType::Nats
+    } else {
+        MessageType::Event
+    };
+
     let ws_message = Message::Binary(
-        vec![MessageType::Event as u8]
+        vec![message_type as u8]
             .into_iter()
             .chain(msg.payload)
             .collect(),
@@ -869,12 +879,31 @@ async fn handle_nats_event(
     connection_state.outgoing_tx.send(ws_message)?;
     Ok(())
 }
+
 async fn handle_event(
     server_state: &Arc<ServerState>,
     payload: &[u8],
     nats_connection: Arc<NatsConnection>,
 ) -> Option<Message> {
     let start_time = Instant::now();
+    println!(
+        "Payload (first 20 bytes in hex, space-delimited): {}",
+        payload
+            .iter()
+            .take(20)
+            .map(|byte| format!("{:02x}", byte))
+            .collect::<Vec<String>>()
+            .join(" ")
+    );
+    // Size validation for type 0x06
+    const MAX_EVENT_SIZE: usize = 2000; // Adjust this value as needed
+    if payload.len() > MAX_EVENT_SIZE {
+        error!(
+            "Event payload exceeds maximum allowed size of {} bytes",
+            MAX_EVENT_SIZE
+        );
+        return None;
+    }
     let mut event_data: Option<Vec<u8>> = None;
     if let Ok(event) = root::<Event>(payload) {
         println!("Event Action: {:?}", event.action());
@@ -920,6 +949,9 @@ async fn handle_event(
                         }
                     };
                     // TODO if cache miss then route to device
+                } else {
+                    error!("Failed to parse user event from payload");
+                    return None;
                 }
             }
             EventData::CacheEvent => {
@@ -1162,21 +1194,21 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
         tls_enabled: env::var("TLS_CERT_PATH").is_ok(),
         tls_cert_path: env::var("TLS_CERT_PATH").unwrap_or_else(|_| {
             current_dir
-                .join("../../fullchain.pem")
+                .join("fullchain.pem")
                 .to_str()
                 .unwrap()
                 .to_string()
         }),
         tls_key_path: env::var("TLS_KEY_PATH").unwrap_or_else(|_| {
             current_dir
-                .join("../../privkey.pem")
+                .join("privkey.pem")
                 .to_str()
                 .unwrap()
                 .to_string()
         }),
         kas_key_path: env::var("KAS_KEY_PATH").unwrap_or_else(|_| {
             current_dir
-                .join("../../recipient_private_key.pem")
+                .join("recipient_private_key.pem")
                 .to_str()
                 .unwrap()
                 .to_string()

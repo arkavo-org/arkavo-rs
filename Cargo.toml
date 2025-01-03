@@ -2,7 +2,7 @@
 name = "arkavo-rs"
 version = "0.9.1"
 edition = "2021"
-rust-version = "1.80.0"
+rust-version = "1.83.0"
 
 [lib]
 name = "nanotdf"
@@ -15,7 +15,7 @@ path = "src/bin/main.rs"
 [profile.release]
 opt-level = 3
 lto = true
-codegen-units = 1
+codegen-units = 16
 
 [profile.bench]
 lto = true
@@ -32,7 +32,6 @@ aes-gcm = "0.10.3"
 p256 = { version = "=0.13.2", features = ["ecdh"] }
 once_cell = "1.19.0"
 rand_core = "0.6.4"
-zeroize = "1.8.1"
 sha2 = "0.10.8"
 hkdf = "0.12.4"
 tokio-native-tls = "0.3.1"
@@ -41,10 +40,9 @@ env_logger = "0.11.5"
 log = "0.4.22"
 ink = "5.0.0"
 jsonwebtoken = "9.3.0"
-async-nats = "0.36.0"
-serde_json = "1.0.128"
+async-nats = "0.38.0"
 redis = { version = "0.27.2", features = ["tokio-comp"] }
-flatbuffers = "24.3.25"
+flatbuffers = "24.12.23"
 scale = { package = "parity-scale-codec", version = "3.6.12", default-features = false, features = ["derive"] }
 scale-info = { version = "2.11.3", default-features = false, features = ["derive"], optional = true }
 bs58 = "0.5.1"
