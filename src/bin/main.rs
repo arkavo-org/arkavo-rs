@@ -154,7 +154,7 @@ static KAS_KEYS: OnceCell<Arc<KasKeys>> = OnceCell::new();
 trait AsyncStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T> AsyncStream for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
 
-#[tokio::main(flavor = "multi_thread")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     env_logger::init();
@@ -896,7 +896,10 @@ async fn handle_event(
     // Size validation for type 0x06
     const MAX_EVENT_SIZE: usize = 2000; // Adjust this value as needed
     if payload.len() > MAX_EVENT_SIZE {
-        error!("Event payload exceeds maximum allowed size of {} bytes", MAX_EVENT_SIZE);
+        error!(
+            "Event payload exceeds maximum allowed size of {} bytes",
+            MAX_EVENT_SIZE
+        );
         return None;
     }
     let mut event_data: Option<Vec<u8>> = None;
