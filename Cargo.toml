@@ -15,7 +15,7 @@ path = "src/bin/main.rs"
 [profile.release]
 opt-level = 3
 lto = true
-codegen-units = 1
+codegen-units = 16
 
 [profile.bench]
 lto = true
@@ -42,7 +42,7 @@ ink = "5.0.0"
 jsonwebtoken = "9.3.0"
 async-nats = "0.38.0"
 redis = { version = "0.27.2", features = ["tokio-comp"] }
-flatbuffers = "24.3.25"
+flatbuffers = "24.12.23"
 scale = { package = "parity-scale-codec", version = "3.6.12", default-features = false, features = ["derive"] }
 scale-info = { version = "2.11.3", default-features = false, features = ["derive"], optional = true }
 bs58 = "0.5.1"
