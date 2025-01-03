@@ -523,8 +523,10 @@ async fn handle_rewrap(
             locator = policy.get_locator().clone();
         }
         PolicyType::Embedded => {
-            // println!("embedded policy");
+            println!("embedded policy");
             if let Some(body) = &policy.body {
+                println!("Metadata buffer size: {}", body.len());
+                println!("Metadata buffer contents: {:?}", body);
                 metadata = match root_as_metadata(body) {
                     Ok(metadata) => Some(metadata),
                     Err(e) => {
@@ -533,7 +535,7 @@ async fn handle_rewrap(
                     }
                 };
                 // TODO add contracts
-                // println!("metadata: {:#?}", metadata);
+                println!("metadata: {:#?}", metadata);
             }
             // add content rating contract
             let rl = ResourceLocator {
