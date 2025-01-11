@@ -8,7 +8,7 @@ pub mod arkavo {
     use crate::schemas::entity_generated::arkavo::MediaType;
 
     extern crate flatbuffers;
-    use self::flatbuffers::Follow;
+    use self::flatbuffers::{EndianScalar, Follow};
 
     #[deprecated(
         since = "2.0.0",
@@ -623,6 +623,7 @@ pub mod arkavo {
             v: &mut flatbuffers::Verifier,
             pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
                 .visit_field::<RatingLevel>("violent", Self::VT_VIOLENT, false)?
                 .visit_field::<RatingLevel>("sexual", Self::VT_SEXUAL, false)?
@@ -899,6 +900,7 @@ pub mod arkavo {
             v: &mut flatbuffers::Verifier,
             pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
                 .visit_field::<f32>("educational", Self::VT_EDUCATIONAL, false)?
                 .visit_field::<f32>("entertainment", Self::VT_ENTERTAINMENT, false)?
@@ -1108,6 +1110,7 @@ pub mod arkavo {
             v: &mut flatbuffers::Verifier,
             pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
                 .visit_field::<FormatType>("type_", Self::VT_TYPE_, false)?
                 .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
@@ -1272,6 +1275,7 @@ pub mod arkavo {
             v: &mut flatbuffers::Verifier,
             pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
                 .visit_field::<ArchiveType>("type_", Self::VT_TYPE_, false)?
                 .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
@@ -1438,6 +1442,7 @@ pub mod arkavo {
             v: &mut flatbuffers::Verifier,
             pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
                 .visit_field::<MediaType>("media_type", Self::VT_MEDIA_TYPE, false)?
                 .visit_field::<DataEncoding>("data_encoding", Self::VT_DATA_ENCODING, false)?
@@ -1542,11 +1547,12 @@ pub mod arkavo {
         pub const VT_CREATED: flatbuffers::VOffsetT = 4;
         pub const VT_ID: flatbuffers::VOffsetT = 6;
         pub const VT_RELATED: flatbuffers::VOffsetT = 8;
-        pub const VT_RATING: flatbuffers::VOffsetT = 10;
-        pub const VT_PURPOSE: flatbuffers::VOffsetT = 12;
-        pub const VT_TOPICS: flatbuffers::VOffsetT = 14;
-        pub const VT_ARCHIVE: flatbuffers::VOffsetT = 16;
-        pub const VT_CONTENT: flatbuffers::VOffsetT = 18;
+        pub const VT_CREATOR: flatbuffers::VOffsetT = 10;
+        pub const VT_RATING: flatbuffers::VOffsetT = 12;
+        pub const VT_PURPOSE: flatbuffers::VOffsetT = 14;
+        pub const VT_TOPICS: flatbuffers::VOffsetT = 16;
+        pub const VT_ARCHIVE: flatbuffers::VOffsetT = 18;
+        pub const VT_CONTENT: flatbuffers::VOffsetT = 20;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -1578,6 +1584,9 @@ pub mod arkavo {
             }
             if let Some(x) = args.rating {
                 builder.add_rating(x);
+            }
+            if let Some(x) = args.creator {
+                builder.add_creator(x);
             }
             if let Some(x) = args.related {
                 builder.add_related(x);
@@ -1617,6 +1626,19 @@ pub mod arkavo {
                 self._tab
                     .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
                         Metadata::VT_RELATED,
+                        None,
+                    )
+            }
+        }
+        #[inline]
+        pub fn creator(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        Metadata::VT_CREATOR,
                         None,
                     )
             }
@@ -1682,6 +1704,7 @@ pub mod arkavo {
             v: &mut flatbuffers::Verifier,
             pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
                 .visit_field::<i64>("created", Self::VT_CREATED, false)?
                 .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
@@ -1692,6 +1715,11 @@ pub mod arkavo {
                 .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
                     "related",
                     Self::VT_RELATED,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "creator",
+                    Self::VT_CREATOR,
                     false,
                 )?
                 .visit_field::<flatbuffers::ForwardsUOffset<Rating>>(
@@ -1727,6 +1755,7 @@ pub mod arkavo {
         pub created: i64,
         pub id: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
         pub related: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+        pub creator: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
         pub rating: Option<flatbuffers::WIPOffset<Rating<'a>>>,
         pub purpose: Option<flatbuffers::WIPOffset<Purpose<'a>>>,
         pub topics: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u32>>>,
@@ -1740,6 +1769,7 @@ pub mod arkavo {
                 created: 0,
                 id: None,
                 related: None,
+                creator: None,
                 rating: None,
                 purpose: None,
                 topics: None,
@@ -1770,6 +1800,14 @@ pub mod arkavo {
         ) {
             self.fbb_
                 .push_slot_always::<flatbuffers::WIPOffset<_>>(Metadata::VT_RELATED, related);
+        }
+        #[inline]
+        pub fn add_creator(
+            &mut self,
+            creator: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(Metadata::VT_CREATOR, creator);
         }
         #[inline]
         pub fn add_rating(&mut self, rating: flatbuffers::WIPOffset<Rating<'b>>) {
@@ -1825,6 +1863,7 @@ pub mod arkavo {
             ds.field("created", &self.created());
             ds.field("id", &self.id());
             ds.field("related", &self.related());
+            ds.field("creator", &self.creator());
             ds.field("rating", &self.rating());
             ds.field("purpose", &self.purpose());
             ds.field("topics", &self.topics());
