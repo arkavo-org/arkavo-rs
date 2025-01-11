@@ -10,11 +10,20 @@ pub mod arkavo {
     extern crate flatbuffers;
     use self::flatbuffers::{EndianScalar, Follow};
 
-    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
     pub const ENUM_MIN_RATING_LEVEL: i8 = 0;
-    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
     pub const ENUM_MAX_RATING_LEVEL: i8 = 4;
-    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
     #[allow(non_camel_case_types)]
     pub const ENUM_VALUES_RATING_LEVEL: [RatingLevel; 5] = [
         RatingLevel::unused,
@@ -99,7 +108,8 @@ pub mod arkavo {
     impl<'a> flatbuffers::Verifiable for RatingLevel {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier, pos: usize
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             i8::run_verifier(v, pos)
@@ -107,11 +117,20 @@ pub mod arkavo {
     }
 
     impl flatbuffers::SimpleToVerifyInSlice for RatingLevel {}
-    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
     pub const ENUM_MIN_FORMAT_TYPE: i8 = 0;
-    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
     pub const ENUM_MAX_FORMAT_TYPE: i8 = 30;
-    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
     #[allow(non_camel_case_types)]
     pub const ENUM_VALUES_FORMAT_TYPE: [FormatType; 10] = [
         FormatType::plain,
@@ -216,7 +235,8 @@ pub mod arkavo {
     impl<'a> flatbuffers::Verifiable for FormatType {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier, pos: usize
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             i8::run_verifier(v, pos)
@@ -224,11 +244,20 @@ pub mod arkavo {
     }
 
     impl flatbuffers::SimpleToVerifyInSlice for FormatType {}
-    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
     pub const ENUM_MIN_DATA_ENCODING: i8 = 0;
-    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
     pub const ENUM_MAX_DATA_ENCODING: i8 = 5;
-    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
     #[allow(non_camel_case_types)]
     pub const ENUM_VALUES_DATA_ENCODING: [DataEncoding; 6] = [
         DataEncoding::binary,
@@ -317,7 +346,8 @@ pub mod arkavo {
     impl<'a> flatbuffers::Verifiable for DataEncoding {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier, pos: usize
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             i8::run_verifier(v, pos)
@@ -325,11 +355,20 @@ pub mod arkavo {
     }
 
     impl flatbuffers::SimpleToVerifyInSlice for DataEncoding {}
-    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
     pub const ENUM_MIN_ARCHIVE_TYPE: i8 = 0;
-    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
     pub const ENUM_MAX_ARCHIVE_TYPE: i8 = 7;
-    #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
     #[allow(non_camel_case_types)]
     pub const ENUM_VALUES_ARCHIVE_TYPE: [ArchiveType; 8] = [
         ArchiveType::none,
@@ -426,7 +465,8 @@ pub mod arkavo {
     impl<'a> flatbuffers::Verifiable for ArchiveType {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier, pos: usize
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             i8::run_verifier(v, pos)
@@ -445,7 +485,9 @@ pub mod arkavo {
         type Inner = Rating<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
     }
 
@@ -464,9 +506,14 @@ pub mod arkavo {
             Rating { _tab: table }
         }
         #[allow(unused_mut)]
-        pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
             _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-            args: &'args RatingArgs
+            args: &'args RatingArgs,
         ) -> flatbuffers::WIPOffset<Rating<'bldr>> {
             let mut builder = RatingBuilder::new(_fbb);
             builder.add_bully(args.bully);
@@ -480,69 +527,101 @@ pub mod arkavo {
             builder.finish()
         }
 
-
         #[inline]
         pub fn violent(&self) -> RatingLevel {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<RatingLevel>(Rating::VT_VIOLENT, Some(RatingLevel::unused)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<RatingLevel>(Rating::VT_VIOLENT, Some(RatingLevel::unused))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn sexual(&self) -> RatingLevel {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<RatingLevel>(Rating::VT_SEXUAL, Some(RatingLevel::unused)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<RatingLevel>(Rating::VT_SEXUAL, Some(RatingLevel::unused))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn profane(&self) -> RatingLevel {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<RatingLevel>(Rating::VT_PROFANE, Some(RatingLevel::unused)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<RatingLevel>(Rating::VT_PROFANE, Some(RatingLevel::unused))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn substance(&self) -> RatingLevel {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<RatingLevel>(Rating::VT_SUBSTANCE, Some(RatingLevel::unused)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<RatingLevel>(Rating::VT_SUBSTANCE, Some(RatingLevel::unused))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn hate(&self) -> RatingLevel {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<RatingLevel>(Rating::VT_HATE, Some(RatingLevel::unused)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<RatingLevel>(Rating::VT_HATE, Some(RatingLevel::unused))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn harm(&self) -> RatingLevel {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<RatingLevel>(Rating::VT_HARM, Some(RatingLevel::unused)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<RatingLevel>(Rating::VT_HARM, Some(RatingLevel::unused))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn mature(&self) -> RatingLevel {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<RatingLevel>(Rating::VT_MATURE, Some(RatingLevel::unused)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<RatingLevel>(Rating::VT_MATURE, Some(RatingLevel::unused))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn bully(&self) -> RatingLevel {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<RatingLevel>(Rating::VT_BULLY, Some(RatingLevel::unused)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<RatingLevel>(Rating::VT_BULLY, Some(RatingLevel::unused))
+                    .unwrap()
+            }
         }
     }
 
     impl flatbuffers::Verifiable for Rating<'_> {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier, pos: usize
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
@@ -591,38 +670,51 @@ pub mod arkavo {
     impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> RatingBuilder<'a, 'b, A> {
         #[inline]
         pub fn add_violent(&mut self, violent: RatingLevel) {
-            self.fbb_.push_slot::<RatingLevel>(Rating::VT_VIOLENT, violent, RatingLevel::unused);
+            self.fbb_
+                .push_slot::<RatingLevel>(Rating::VT_VIOLENT, violent, RatingLevel::unused);
         }
         #[inline]
         pub fn add_sexual(&mut self, sexual: RatingLevel) {
-            self.fbb_.push_slot::<RatingLevel>(Rating::VT_SEXUAL, sexual, RatingLevel::unused);
+            self.fbb_
+                .push_slot::<RatingLevel>(Rating::VT_SEXUAL, sexual, RatingLevel::unused);
         }
         #[inline]
         pub fn add_profane(&mut self, profane: RatingLevel) {
-            self.fbb_.push_slot::<RatingLevel>(Rating::VT_PROFANE, profane, RatingLevel::unused);
+            self.fbb_
+                .push_slot::<RatingLevel>(Rating::VT_PROFANE, profane, RatingLevel::unused);
         }
         #[inline]
         pub fn add_substance(&mut self, substance: RatingLevel) {
-            self.fbb_.push_slot::<RatingLevel>(Rating::VT_SUBSTANCE, substance, RatingLevel::unused);
+            self.fbb_.push_slot::<RatingLevel>(
+                Rating::VT_SUBSTANCE,
+                substance,
+                RatingLevel::unused,
+            );
         }
         #[inline]
         pub fn add_hate(&mut self, hate: RatingLevel) {
-            self.fbb_.push_slot::<RatingLevel>(Rating::VT_HATE, hate, RatingLevel::unused);
+            self.fbb_
+                .push_slot::<RatingLevel>(Rating::VT_HATE, hate, RatingLevel::unused);
         }
         #[inline]
         pub fn add_harm(&mut self, harm: RatingLevel) {
-            self.fbb_.push_slot::<RatingLevel>(Rating::VT_HARM, harm, RatingLevel::unused);
+            self.fbb_
+                .push_slot::<RatingLevel>(Rating::VT_HARM, harm, RatingLevel::unused);
         }
         #[inline]
         pub fn add_mature(&mut self, mature: RatingLevel) {
-            self.fbb_.push_slot::<RatingLevel>(Rating::VT_MATURE, mature, RatingLevel::unused);
+            self.fbb_
+                .push_slot::<RatingLevel>(Rating::VT_MATURE, mature, RatingLevel::unused);
         }
         #[inline]
         pub fn add_bully(&mut self, bully: RatingLevel) {
-            self.fbb_.push_slot::<RatingLevel>(Rating::VT_BULLY, bully, RatingLevel::unused);
+            self.fbb_
+                .push_slot::<RatingLevel>(Rating::VT_BULLY, bully, RatingLevel::unused);
         }
         #[inline]
-        pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> RatingBuilder<'a, 'b, A> {
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> RatingBuilder<'a, 'b, A> {
             let start = _fbb.start_table();
             RatingBuilder {
                 fbb_: _fbb,
@@ -661,7 +753,9 @@ pub mod arkavo {
         type Inner = Purpose<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
     }
 
@@ -681,9 +775,14 @@ pub mod arkavo {
             Purpose { _tab: table }
         }
         #[allow(unused_mut)]
-        pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
             _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-            args: &'args PurposeArgs
+            args: &'args PurposeArgs,
         ) -> flatbuffers::WIPOffset<Purpose<'bldr>> {
             let mut builder = PurposeBuilder::new(_fbb);
             builder.add_confidence(args.confidence);
@@ -698,76 +797,108 @@ pub mod arkavo {
             builder.finish()
         }
 
-
         #[inline]
         pub fn educational(&self) -> f32 {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<f32>(Purpose::VT_EDUCATIONAL, Some(0.0)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<f32>(Purpose::VT_EDUCATIONAL, Some(0.0))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn entertainment(&self) -> f32 {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<f32>(Purpose::VT_ENTERTAINMENT, Some(0.0)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<f32>(Purpose::VT_ENTERTAINMENT, Some(0.0))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn news(&self) -> f32 {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<f32>(Purpose::VT_NEWS, Some(0.0)).unwrap()}
+            unsafe { self._tab.get::<f32>(Purpose::VT_NEWS, Some(0.0)).unwrap() }
         }
         #[inline]
         pub fn promotional(&self) -> f32 {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<f32>(Purpose::VT_PROMOTIONAL, Some(0.0)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<f32>(Purpose::VT_PROMOTIONAL, Some(0.0))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn personal(&self) -> f32 {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<f32>(Purpose::VT_PERSONAL, Some(0.0)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<f32>(Purpose::VT_PERSONAL, Some(0.0))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn opinion(&self) -> f32 {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<f32>(Purpose::VT_OPINION, Some(0.0)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<f32>(Purpose::VT_OPINION, Some(0.0))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn transactional(&self) -> f32 {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<f32>(Purpose::VT_TRANSACTIONAL, Some(0.0)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<f32>(Purpose::VT_TRANSACTIONAL, Some(0.0))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn harmful(&self) -> f32 {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<f32>(Purpose::VT_HARMFUL, Some(0.0)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<f32>(Purpose::VT_HARMFUL, Some(0.0))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn confidence(&self) -> f32 {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<f32>(Purpose::VT_CONFIDENCE, Some(0.0)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<f32>(Purpose::VT_CONFIDENCE, Some(0.0))
+                    .unwrap()
+            }
         }
     }
 
     impl flatbuffers::Verifiable for Purpose<'_> {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier, pos: usize
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
@@ -819,11 +950,13 @@ pub mod arkavo {
     impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> PurposeBuilder<'a, 'b, A> {
         #[inline]
         pub fn add_educational(&mut self, educational: f32) {
-            self.fbb_.push_slot::<f32>(Purpose::VT_EDUCATIONAL, educational, 0.0);
+            self.fbb_
+                .push_slot::<f32>(Purpose::VT_EDUCATIONAL, educational, 0.0);
         }
         #[inline]
         pub fn add_entertainment(&mut self, entertainment: f32) {
-            self.fbb_.push_slot::<f32>(Purpose::VT_ENTERTAINMENT, entertainment, 0.0);
+            self.fbb_
+                .push_slot::<f32>(Purpose::VT_ENTERTAINMENT, entertainment, 0.0);
         }
         #[inline]
         pub fn add_news(&mut self, news: f32) {
@@ -831,30 +964,38 @@ pub mod arkavo {
         }
         #[inline]
         pub fn add_promotional(&mut self, promotional: f32) {
-            self.fbb_.push_slot::<f32>(Purpose::VT_PROMOTIONAL, promotional, 0.0);
+            self.fbb_
+                .push_slot::<f32>(Purpose::VT_PROMOTIONAL, promotional, 0.0);
         }
         #[inline]
         pub fn add_personal(&mut self, personal: f32) {
-            self.fbb_.push_slot::<f32>(Purpose::VT_PERSONAL, personal, 0.0);
+            self.fbb_
+                .push_slot::<f32>(Purpose::VT_PERSONAL, personal, 0.0);
         }
         #[inline]
         pub fn add_opinion(&mut self, opinion: f32) {
-            self.fbb_.push_slot::<f32>(Purpose::VT_OPINION, opinion, 0.0);
+            self.fbb_
+                .push_slot::<f32>(Purpose::VT_OPINION, opinion, 0.0);
         }
         #[inline]
         pub fn add_transactional(&mut self, transactional: f32) {
-            self.fbb_.push_slot::<f32>(Purpose::VT_TRANSACTIONAL, transactional, 0.0);
+            self.fbb_
+                .push_slot::<f32>(Purpose::VT_TRANSACTIONAL, transactional, 0.0);
         }
         #[inline]
         pub fn add_harmful(&mut self, harmful: f32) {
-            self.fbb_.push_slot::<f32>(Purpose::VT_HARMFUL, harmful, 0.0);
+            self.fbb_
+                .push_slot::<f32>(Purpose::VT_HARMFUL, harmful, 0.0);
         }
         #[inline]
         pub fn add_confidence(&mut self, confidence: f32) {
-            self.fbb_.push_slot::<f32>(Purpose::VT_CONFIDENCE, confidence, 0.0);
+            self.fbb_
+                .push_slot::<f32>(Purpose::VT_CONFIDENCE, confidence, 0.0);
         }
         #[inline]
-        pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> PurposeBuilder<'a, 'b, A> {
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> PurposeBuilder<'a, 'b, A> {
             let start = _fbb.start_table();
             PurposeBuilder {
                 fbb_: _fbb,
@@ -894,7 +1035,9 @@ pub mod arkavo {
         type Inner = FormatInfo<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
     }
 
@@ -908,51 +1051,78 @@ pub mod arkavo {
             FormatInfo { _tab: table }
         }
         #[allow(unused_mut)]
-        pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
             _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-            args: &'args FormatInfoArgs<'args>
+            args: &'args FormatInfoArgs<'args>,
         ) -> flatbuffers::WIPOffset<FormatInfo<'bldr>> {
             let mut builder = FormatInfoBuilder::new(_fbb);
-            if let Some(x) = args.profile { builder.add_profile(x); }
-            if let Some(x) = args.version { builder.add_version(x); }
+            if let Some(x) = args.profile {
+                builder.add_profile(x);
+            }
+            if let Some(x) = args.version {
+                builder.add_version(x);
+            }
             builder.add_type_(args.type_);
             builder.finish()
         }
-
 
         #[inline]
         pub fn type_(&self) -> FormatType {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<FormatType>(FormatInfo::VT_TYPE_, Some(FormatType::plain)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<FormatType>(FormatInfo::VT_TYPE_, Some(FormatType::plain))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn version(&self) -> Option<&'a str> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(FormatInfo::VT_VERSION, None)}
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(FormatInfo::VT_VERSION, None)
+            }
         }
         #[inline]
         pub fn profile(&self) -> Option<&'a str> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(FormatInfo::VT_PROFILE, None)}
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(FormatInfo::VT_PROFILE, None)
+            }
         }
     }
 
     impl flatbuffers::Verifiable for FormatInfo<'_> {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier, pos: usize
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
                 .visit_field::<FormatType>("type_", Self::VT_TYPE_, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<&str>>("version", Self::VT_VERSION, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<&str>>("profile", Self::VT_PROFILE, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "version",
+                    Self::VT_VERSION,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "profile",
+                    Self::VT_PROFILE,
+                    false,
+                )?
                 .finish();
             Ok(())
         }
@@ -980,18 +1150,23 @@ pub mod arkavo {
     impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> FormatInfoBuilder<'a, 'b, A> {
         #[inline]
         pub fn add_type_(&mut self, type_: FormatType) {
-            self.fbb_.push_slot::<FormatType>(FormatInfo::VT_TYPE_, type_, FormatType::plain);
+            self.fbb_
+                .push_slot::<FormatType>(FormatInfo::VT_TYPE_, type_, FormatType::plain);
         }
         #[inline]
-        pub fn add_version(&mut self, version: flatbuffers::WIPOffset<&'b  str>) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(FormatInfo::VT_VERSION, version);
+        pub fn add_version(&mut self, version: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(FormatInfo::VT_VERSION, version);
         }
         #[inline]
-        pub fn add_profile(&mut self, profile: flatbuffers::WIPOffset<&'b  str>) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(FormatInfo::VT_PROFILE, profile);
+        pub fn add_profile(&mut self, profile: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(FormatInfo::VT_PROFILE, profile);
         }
         #[inline]
-        pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> FormatInfoBuilder<'a, 'b, A> {
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> FormatInfoBuilder<'a, 'b, A> {
             let start = _fbb.start_table();
             FormatInfoBuilder {
                 fbb_: _fbb,
@@ -1025,7 +1200,9 @@ pub mod arkavo {
         type Inner = ArchiveInfo<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
     }
 
@@ -1039,51 +1216,78 @@ pub mod arkavo {
             ArchiveInfo { _tab: table }
         }
         #[allow(unused_mut)]
-        pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
             _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-            args: &'args ArchiveInfoArgs<'args>
+            args: &'args ArchiveInfoArgs<'args>,
         ) -> flatbuffers::WIPOffset<ArchiveInfo<'bldr>> {
             let mut builder = ArchiveInfoBuilder::new(_fbb);
-            if let Some(x) = args.profile { builder.add_profile(x); }
-            if let Some(x) = args.version { builder.add_version(x); }
+            if let Some(x) = args.profile {
+                builder.add_profile(x);
+            }
+            if let Some(x) = args.version {
+                builder.add_version(x);
+            }
             builder.add_type_(args.type_);
             builder.finish()
         }
-
 
         #[inline]
         pub fn type_(&self) -> ArchiveType {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<ArchiveType>(ArchiveInfo::VT_TYPE_, Some(ArchiveType::none)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<ArchiveType>(ArchiveInfo::VT_TYPE_, Some(ArchiveType::none))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn version(&self) -> Option<&'a str> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ArchiveInfo::VT_VERSION, None)}
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(ArchiveInfo::VT_VERSION, None)
+            }
         }
         #[inline]
         pub fn profile(&self) -> Option<&'a str> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ArchiveInfo::VT_PROFILE, None)}
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(ArchiveInfo::VT_PROFILE, None)
+            }
         }
     }
 
     impl flatbuffers::Verifiable for ArchiveInfo<'_> {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier, pos: usize
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
                 .visit_field::<ArchiveType>("type_", Self::VT_TYPE_, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<&str>>("version", Self::VT_VERSION, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<&str>>("profile", Self::VT_PROFILE, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "version",
+                    Self::VT_VERSION,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "profile",
+                    Self::VT_PROFILE,
+                    false,
+                )?
                 .finish();
             Ok(())
         }
@@ -1111,18 +1315,23 @@ pub mod arkavo {
     impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ArchiveInfoBuilder<'a, 'b, A> {
         #[inline]
         pub fn add_type_(&mut self, type_: ArchiveType) {
-            self.fbb_.push_slot::<ArchiveType>(ArchiveInfo::VT_TYPE_, type_, ArchiveType::none);
+            self.fbb_
+                .push_slot::<ArchiveType>(ArchiveInfo::VT_TYPE_, type_, ArchiveType::none);
         }
         #[inline]
-        pub fn add_version(&mut self, version: flatbuffers::WIPOffset<&'b  str>) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ArchiveInfo::VT_VERSION, version);
+        pub fn add_version(&mut self, version: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(ArchiveInfo::VT_VERSION, version);
         }
         #[inline]
-        pub fn add_profile(&mut self, profile: flatbuffers::WIPOffset<&'b  str>) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ArchiveInfo::VT_PROFILE, profile);
+        pub fn add_profile(&mut self, profile: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(ArchiveInfo::VT_PROFILE, profile);
         }
         #[inline]
-        pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ArchiveInfoBuilder<'a, 'b, A> {
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> ArchiveInfoBuilder<'a, 'b, A> {
             let start = _fbb.start_table();
             ArchiveInfoBuilder {
                 fbb_: _fbb,
@@ -1156,7 +1365,9 @@ pub mod arkavo {
         type Inner = ContentFormat<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
     }
 
@@ -1170,51 +1381,76 @@ pub mod arkavo {
             ContentFormat { _tab: table }
         }
         #[allow(unused_mut)]
-        pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
             _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-            args: &'args ContentFormatArgs<'args>
+            args: &'args ContentFormatArgs<'args>,
         ) -> flatbuffers::WIPOffset<ContentFormat<'bldr>> {
             let mut builder = ContentFormatBuilder::new(_fbb);
-            if let Some(x) = args.format { builder.add_format(x); }
+            if let Some(x) = args.format {
+                builder.add_format(x);
+            }
             builder.add_data_encoding(args.data_encoding);
             builder.add_media_type(args.media_type);
             builder.finish()
         }
-
 
         #[inline]
         pub fn media_type(&self) -> MediaType {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<MediaType>(ContentFormat::VT_MEDIA_TYPE, Some(MediaType::unused)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<MediaType>(ContentFormat::VT_MEDIA_TYPE, Some(MediaType::unused))
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn data_encoding(&self) -> DataEncoding {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<DataEncoding>(ContentFormat::VT_DATA_ENCODING, Some(DataEncoding::binary)).unwrap()}
+            unsafe {
+                self._tab
+                    .get::<DataEncoding>(
+                        ContentFormat::VT_DATA_ENCODING,
+                        Some(DataEncoding::binary),
+                    )
+                    .unwrap()
+            }
         }
         #[inline]
         pub fn format(&self) -> Option<FormatInfo<'a>> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<FormatInfo>>(ContentFormat::VT_FORMAT, None)}
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<FormatInfo>>(ContentFormat::VT_FORMAT, None)
+            }
         }
     }
 
     impl flatbuffers::Verifiable for ContentFormat<'_> {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier, pos: usize
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
                 .visit_field::<MediaType>("media_type", Self::VT_MEDIA_TYPE, false)?
                 .visit_field::<DataEncoding>("data_encoding", Self::VT_DATA_ENCODING, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<FormatInfo>>("format", Self::VT_FORMAT, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<FormatInfo>>(
+                    "format",
+                    Self::VT_FORMAT,
+                    false,
+                )?
                 .finish();
             Ok(())
         }
@@ -1242,18 +1478,32 @@ pub mod arkavo {
     impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ContentFormatBuilder<'a, 'b, A> {
         #[inline]
         pub fn add_media_type(&mut self, media_type: MediaType) {
-            self.fbb_.push_slot::<MediaType>(ContentFormat::VT_MEDIA_TYPE, media_type, MediaType::unused);
+            self.fbb_.push_slot::<MediaType>(
+                ContentFormat::VT_MEDIA_TYPE,
+                media_type,
+                MediaType::unused,
+            );
         }
         #[inline]
         pub fn add_data_encoding(&mut self, data_encoding: DataEncoding) {
-            self.fbb_.push_slot::<DataEncoding>(ContentFormat::VT_DATA_ENCODING, data_encoding, DataEncoding::binary);
+            self.fbb_.push_slot::<DataEncoding>(
+                ContentFormat::VT_DATA_ENCODING,
+                data_encoding,
+                DataEncoding::binary,
+            );
         }
         #[inline]
-        pub fn add_format(&mut self, format: flatbuffers::WIPOffset<FormatInfo<'b >>) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<FormatInfo>>(ContentFormat::VT_FORMAT, format);
+        pub fn add_format(&mut self, format: flatbuffers::WIPOffset<FormatInfo<'b>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<FormatInfo>>(
+                    ContentFormat::VT_FORMAT,
+                    format,
+                );
         }
         #[inline]
-        pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ContentFormatBuilder<'a, 'b, A> {
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> ContentFormatBuilder<'a, 'b, A> {
             let start = _fbb.start_table();
             ContentFormatBuilder {
                 fbb_: _fbb,
@@ -1287,7 +1537,9 @@ pub mod arkavo {
         type Inner = Metadata<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
     }
 
@@ -1307,105 +1559,194 @@ pub mod arkavo {
             Metadata { _tab: table }
         }
         #[allow(unused_mut)]
-        pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
             _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-            args: &'args MetadataArgs<'args>
+            args: &'args MetadataArgs<'args>,
         ) -> flatbuffers::WIPOffset<Metadata<'bldr>> {
             let mut builder = MetadataBuilder::new(_fbb);
             builder.add_created(args.created);
-            if let Some(x) = args.content { builder.add_content(x); }
-            if let Some(x) = args.archive { builder.add_archive(x); }
-            if let Some(x) = args.topics { builder.add_topics(x); }
-            if let Some(x) = args.purpose { builder.add_purpose(x); }
-            if let Some(x) = args.rating { builder.add_rating(x); }
-            if let Some(x) = args.creator { builder.add_creator(x); }
-            if let Some(x) = args.related { builder.add_related(x); }
-            if let Some(x) = args.id { builder.add_id(x); }
+            if let Some(x) = args.content {
+                builder.add_content(x);
+            }
+            if let Some(x) = args.archive {
+                builder.add_archive(x);
+            }
+            if let Some(x) = args.topics {
+                builder.add_topics(x);
+            }
+            if let Some(x) = args.purpose {
+                builder.add_purpose(x);
+            }
+            if let Some(x) = args.rating {
+                builder.add_rating(x);
+            }
+            if let Some(x) = args.creator {
+                builder.add_creator(x);
+            }
+            if let Some(x) = args.related {
+                builder.add_related(x);
+            }
+            if let Some(x) = args.id {
+                builder.add_id(x);
+            }
             builder.finish()
         }
-
 
         #[inline]
         pub fn created(&self) -> i64 {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<i64>(Metadata::VT_CREATED, Some(0)).unwrap()}
+            unsafe { self._tab.get::<i64>(Metadata::VT_CREATED, Some(0)).unwrap() }
         }
         #[inline]
         pub fn id(&self) -> Option<flatbuffers::Vector<'a, u8>> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(Metadata::VT_ID, None)}
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        Metadata::VT_ID,
+                        None,
+                    )
+            }
         }
         #[inline]
         pub fn related(&self) -> Option<flatbuffers::Vector<'a, u8>> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(Metadata::VT_RELATED, None)}
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        Metadata::VT_RELATED,
+                        None,
+                    )
+            }
         }
         #[inline]
         pub fn creator(&self) -> Option<flatbuffers::Vector<'a, u8>> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(Metadata::VT_CREATOR, None)}
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        Metadata::VT_CREATOR,
+                        None,
+                    )
+            }
         }
         #[inline]
         pub fn rating(&self) -> Option<Rating<'a>> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<Rating>>(Metadata::VT_RATING, None)}
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<Rating>>(Metadata::VT_RATING, None)
+            }
         }
         #[inline]
         pub fn purpose(&self) -> Option<Purpose<'a>> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<Purpose>>(Metadata::VT_PURPOSE, None)}
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<Purpose>>(Metadata::VT_PURPOSE, None)
+            }
         }
         #[inline]
         pub fn topics(&self) -> Option<flatbuffers::Vector<'a, u32>> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u32>>>(Metadata::VT_TOPICS, None)}
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u32>>>(
+                        Metadata::VT_TOPICS,
+                        None,
+                    )
+            }
         }
         #[inline]
         pub fn archive(&self) -> Option<ArchiveInfo<'a>> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<ArchiveInfo>>(Metadata::VT_ARCHIVE, None)}
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<ArchiveInfo>>(Metadata::VT_ARCHIVE, None)
+            }
         }
         #[inline]
         pub fn content(&self) -> Option<ContentFormat<'a>> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
-            unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<ContentFormat>>(Metadata::VT_CONTENT, None)}
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<ContentFormat>>(Metadata::VT_CONTENT, None)
+            }
         }
     }
 
     impl flatbuffers::Verifiable for Metadata<'_> {
         #[inline]
         fn run_verifier(
-            v: &mut flatbuffers::Verifier, pos: usize
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
                 .visit_field::<i64>("created", Self::VT_CREATED, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("id", Self::VT_ID, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("related", Self::VT_RELATED, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("creator", Self::VT_CREATOR, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<Rating>>("rating", Self::VT_RATING, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<Purpose>>("purpose", Self::VT_PURPOSE, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u32>>>("topics", Self::VT_TOPICS, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<ArchiveInfo>>("archive", Self::VT_ARCHIVE, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<ContentFormat>>("content", Self::VT_CONTENT, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "id",
+                    Self::VT_ID,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "related",
+                    Self::VT_RELATED,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "creator",
+                    Self::VT_CREATOR,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<Rating>>(
+                    "rating",
+                    Self::VT_RATING,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<Purpose>>(
+                    "purpose",
+                    Self::VT_PURPOSE,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u32>>>(
+                    "topics",
+                    Self::VT_TOPICS,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<ArchiveInfo>>(
+                    "archive",
+                    Self::VT_ARCHIVE,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<ContentFormat>>(
+                    "content",
+                    Self::VT_CONTENT,
+                    false,
+                )?
                 .finish();
             Ok(())
         }
@@ -1448,39 +1789,61 @@ pub mod arkavo {
             self.fbb_.push_slot::<i64>(Metadata::VT_CREATED, created, 0);
         }
         #[inline]
-        pub fn add_id(&mut self, id: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Metadata::VT_ID, id);
+        pub fn add_id(&mut self, id: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(Metadata::VT_ID, id);
         }
         #[inline]
-        pub fn add_related(&mut self, related: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Metadata::VT_RELATED, related);
+        pub fn add_related(
+            &mut self,
+            related: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(Metadata::VT_RELATED, related);
         }
         #[inline]
-        pub fn add_creator(&mut self, creator: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Metadata::VT_CREATOR, creator);
+        pub fn add_creator(
+            &mut self,
+            creator: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(Metadata::VT_CREATOR, creator);
         }
         #[inline]
-        pub fn add_rating(&mut self, rating: flatbuffers::WIPOffset<Rating<'b >>) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<Rating>>(Metadata::VT_RATING, rating);
+        pub fn add_rating(&mut self, rating: flatbuffers::WIPOffset<Rating<'b>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<Rating>>(Metadata::VT_RATING, rating);
         }
         #[inline]
-        pub fn add_purpose(&mut self, purpose: flatbuffers::WIPOffset<Purpose<'b >>) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<Purpose>>(Metadata::VT_PURPOSE, purpose);
+        pub fn add_purpose(&mut self, purpose: flatbuffers::WIPOffset<Purpose<'b>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<Purpose>>(Metadata::VT_PURPOSE, purpose);
         }
         #[inline]
-        pub fn add_topics(&mut self, topics: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u32>>) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Metadata::VT_TOPICS, topics);
+        pub fn add_topics(&mut self, topics: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u32>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(Metadata::VT_TOPICS, topics);
         }
         #[inline]
-        pub fn add_archive(&mut self, archive: flatbuffers::WIPOffset<ArchiveInfo<'b >>) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<ArchiveInfo>>(Metadata::VT_ARCHIVE, archive);
+        pub fn add_archive(&mut self, archive: flatbuffers::WIPOffset<ArchiveInfo<'b>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<ArchiveInfo>>(
+                    Metadata::VT_ARCHIVE,
+                    archive,
+                );
         }
         #[inline]
-        pub fn add_content(&mut self, content: flatbuffers::WIPOffset<ContentFormat<'b >>) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<ContentFormat>>(Metadata::VT_CONTENT, content);
+        pub fn add_content(&mut self, content: flatbuffers::WIPOffset<ContentFormat<'b>>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<ContentFormat>>(
+                    Metadata::VT_CONTENT,
+                    content,
+                );
         }
         #[inline]
-        pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> MetadataBuilder<'a, 'b, A> {
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> MetadataBuilder<'a, 'b, A> {
             let start = _fbb.start_table();
             MetadataBuilder {
                 fbb_: _fbb,
@@ -1526,7 +1889,9 @@ pub mod arkavo {
     /// catch every error, or be maximally performant. For the
     /// previous, unchecked, behavior use
     /// `size_prefixed_root_as_metadata_unchecked`.
-    pub fn size_prefixed_root_as_metadata(buf: &[u8]) -> Result<Metadata, flatbuffers::InvalidFlatbuffer> {
+    pub fn size_prefixed_root_as_metadata(
+        buf: &[u8],
+    ) -> Result<Metadata, flatbuffers::InvalidFlatbuffer> {
         flatbuffers::size_prefixed_root::<Metadata>(buf)
     }
     #[inline]
@@ -1572,13 +1937,16 @@ pub mod arkavo {
     #[inline]
     pub fn finish_metadata_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(
         fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-        root: flatbuffers::WIPOffset<Metadata<'a>>) {
+        root: flatbuffers::WIPOffset<Metadata<'a>>,
+    ) {
         fbb.finish(root, None);
     }
 
     #[inline]
-    pub fn finish_size_prefixed_metadata_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>, root: flatbuffers::WIPOffset<Metadata<'a>>) {
+    pub fn finish_size_prefixed_metadata_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(
+        fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        root: flatbuffers::WIPOffset<Metadata<'a>>,
+    ) {
         fbb.finish_size_prefixed(root, None);
     }
-}  // pub mod Arkavo
-
+} // pub mod Arkavo
