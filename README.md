@@ -117,6 +117,10 @@ export JWT_PUBLIC_KEY_PATH=/path/to/jwt_public_key.pem
 export NATS_URL=nats://localhost:4222
 export NATS_SUBJECT=nanotdf.messages
 export REDIS_URL=redis://localhost:6379
+export AWS_ACCESS_KEY_ID=your_access_key
+export AWS_SECRET_ACCESS_KEY=your_secret_key
+export AWS_REGION=your_region
+export S3_BUCKET=your_bucket_name
 export ENABLE_TIMING_LOGS=true
 export RUST_LOG=info
 ```
