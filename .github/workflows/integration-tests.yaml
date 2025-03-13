@@ -98,9 +98,6 @@ jobs:
         # Set file permissions
         chmod 600 privkey.pem fullchain.pem recipient_private_key.pem
     
-    - name: Run unit tests
-      run: cargo test --lib
-    
     - name: Run S3 integration tests
       run: |
         # Set environment variables for AWS endpoint

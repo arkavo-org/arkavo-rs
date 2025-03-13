@@ -1,6 +1,8 @@
 mod contracts;
 mod schemas;
 
+// No test modules in production code
+
 use crate::contracts::content_rating::content_rating::{
     AgeLevel, ContentRating, Rating, RatingLevel,
 };

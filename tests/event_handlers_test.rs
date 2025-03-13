@@ -25,10 +25,10 @@ enum MessageType {
 #[tokio::test]
 async fn test_minimal_event_handling() {
     // This test just ensures we can test event handling structures
-    
+
     // Create a simple event payload (not a real flatbuffer)
     let _event_payload = vec![1, 2, 3, 4, 5]; // Simple test data
-    
+
     // Create settings for testing
     let settings = ServerSettings {
         port: 8080,
@@ -42,7 +42,7 @@ async fn test_minimal_event_handling() {
         redis_url: String::from("redis://localhost:6379"),
         s3_bucket: String::from("test-bucket"),
     };
-    
+
     // Validate test setup
     assert_eq!(settings.port, 8080);
     assert_eq!(settings.s3_bucket, "test-bucket");
