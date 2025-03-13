@@ -9,7 +9,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  LOCALSTACK_VOLUME_DIR: /tmp/localstack-volume
   TEST_S3_BUCKET: test-integration-bucket
   REDIS_URL: redis://localhost:6379
   NATS_URL: nats://localhost:4222
@@ -51,7 +50,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-          --volume "${LOCALSTACK_VOLUME_DIR}:/var/lib/localstack"
 
     steps:
     - uses: actions/checkout@v3
