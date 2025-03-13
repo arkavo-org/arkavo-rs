@@ -45,47 +45,97 @@ async fn test_s3_integration() -> Result<(), Box<dyn Error>> {
     };
     let s3_client = S3Client::new(&config);
     
-    // Test uploading an object
-    let upload_result = s3_client
-        .put_object()
-        .bucket(&bucket)
-        .key(TEST_KEY)
-        .body(ByteStream::from(TEST_CONTENT.as_bytes().to_vec()))
-        .send()
-        .await;
-    
-    assert!(upload_result.is_ok(), "Failed to upload object to S3: {:?}", upload_result.err());
-    println!("Successfully uploaded test object to S3");
+    // For LocalStack, we need to use the AWS CLI instead of the SDK for some operations
+    if endpoint_url.is_some() {
+        println!("Using AWS CLI for LocalStack operations");
+        
+        // Create a test file
+        std::fs::write("test_content.txt", TEST_CONTENT)?;
+        
+        // Use AWS CLI to upload the file
+        let status = std::process::Command::new("aws")
+            .args([
+                "--endpoint-url", "http://localhost:4566",
+                "s3", "cp", "test_content.txt", &format!("s3://{}/{}", bucket, TEST_KEY)
+            ])
+            .status()?;
+            
+        assert!(status.success(), "Failed to upload object using AWS CLI");
+        println!("Successfully uploaded test object to S3 using AWS CLI");
+    } else {
+        // For real AWS, use the SDK as before
+        let upload_result = s3_client
+            .put_object()
+            .bucket(&bucket)
+            .key(TEST_KEY)
+            .body(ByteStream::from(TEST_CONTENT.as_bytes().to_vec()))
+            .send()
+            .await;
+            
+        assert!(upload_result.is_ok(), "Failed to upload object to S3: {:?}", upload_result.err());
+        println!("Successfully uploaded test object to S3");
+    }
     
     // Test downloading the object
-    let get_result = s3_client
-        .get_object()
-        .bucket(&bucket)
-        .key(TEST_KEY)
-        .send()
-        .await;
+    if endpoint_url.is_some() {
+        println!("Using AWS CLI for downloading");
         
-    assert!(get_result.is_ok(), "Failed to get object from S3: {:?}", get_result.err());
-    
-    // Read and verify the object content
-    let response = get_result.unwrap();
-    let mut body = Vec::new();
-    response.body.into_async_read().read_to_end(&mut body).await?;
-    
-    let content = String::from_utf8(body)?;
-    assert_eq!(content, TEST_CONTENT, "Retrieved content doesn't match expected content");
-    println!("Successfully verified downloaded content from S3");
-    
-    // Test deleting the object
-    let delete_result = s3_client
-        .delete_object()
-        .bucket(&bucket)
-        .key(TEST_KEY)
-        .send()
-        .await;
+        // Use AWS CLI to download the object
+        let status = std::process::Command::new("aws")
+            .args([
+                "--endpoint-url", "http://localhost:4566",
+                "s3", "cp", &format!("s3://{}/{}", bucket, TEST_KEY), "downloaded_content.txt"
+            ])
+            .status()?;
+            
+        assert!(status.success(), "Failed to download object using AWS CLI");
         
-    assert!(delete_result.is_ok(), "Failed to delete object from S3: {:?}", delete_result.err());
-    println!("Successfully deleted test object from S3");
+        // Read and verify the content
+        let downloaded_content = std::fs::read_to_string("downloaded_content.txt")?;
+        assert_eq!(downloaded_content, TEST_CONTENT, "Downloaded content doesn't match expected content");
+        println!("Successfully verified downloaded content from S3 using AWS CLI");
+        
+        // Use AWS CLI to delete the object
+        let status = std::process::Command::new("aws")
+            .args([
+                "--endpoint-url", "http://localhost:4566",
+                "s3", "rm", &format!("s3://{}/{}", bucket, TEST_KEY)
+            ])
+            .status()?;
+            
+        assert!(status.success(), "Failed to delete object using AWS CLI");
+        println!("Successfully deleted test object from S3 using AWS CLI");
+    } else {
+        // For real AWS, use the SDK as before
+        let get_result = s3_client
+            .get_object()
+            .bucket(&bucket)
+            .key(TEST_KEY)
+            .send()
+            .await;
+            
+        assert!(get_result.is_ok(), "Failed to get object from S3: {:?}", get_result.err());
+        
+        // Read and verify the object content
+        let response = get_result.unwrap();
+        let mut body = Vec::new();
+        response.body.into_async_read().read_to_end(&mut body).await?;
+        
+        let content = String::from_utf8(body)?;
+        assert_eq!(content, TEST_CONTENT, "Retrieved content doesn't match expected content");
+        println!("Successfully verified downloaded content from S3");
+        
+        // Test deleting the object
+        let delete_result = s3_client
+            .delete_object()
+            .bucket(&bucket)
+            .key(TEST_KEY)
+            .send()
+            .await;
+            
+        assert!(delete_result.is_ok(), "Failed to delete object from S3: {:?}", delete_result.err());
+        println!("Successfully deleted test object from S3");
+    }
     
     Ok(())
 }

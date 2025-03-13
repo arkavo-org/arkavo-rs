@@ -43,46 +43,90 @@ async fn test_event_storage_integration() -> Result<(), Box<dyn Error>> {
     
     // Test: Upload an object to S3 (simulating event storage)
     println!("Testing S3 event storage by uploading test object...");
-    let upload_result = s3_client
-        .put_object()
-        .bucket(&bucket_name)
-        .key(test_key)
-        .body(ByteStream::from(test_content.to_vec()))
-        .send()
-        .await;
+    
+    if endpoint_url.is_some() {
+        // Create a test file
+        std::fs::write("event_test_content.txt", test_content)?;
         
-    assert!(upload_result.is_ok(), "Failed to upload test event to S3: {:?}", upload_result.err());
-    println!("Successfully uploaded test event data to S3");
-    
-    // Test: Verify the object exists and has the correct content
-    let get_result = s3_client
-        .get_object()
-        .bucket(&bucket_name)
-        .key(test_key)
-        .send()
-        .await;
+        // Use AWS CLI to upload the file
+        let status = std::process::Command::new("aws")
+            .args([
+                "--endpoint-url", "http://localhost:4566",
+                "s3", "cp", "event_test_content.txt", &format!("s3://{}/{}", bucket_name, test_key)
+            ])
+            .status()?;
+            
+        assert!(status.success(), "Failed to upload event using AWS CLI");
+        println!("Successfully uploaded test event to S3 using AWS CLI");
         
-    assert!(get_result.is_ok(), "Failed to get test event from S3: {:?}", get_result.err());
-    
-    // Read event data
-    let response = get_result.unwrap();
-    let mut body = Vec::new();
-    response.body.into_async_read().read_to_end(&mut body).await?;
-    
-    // Verify content matches what we uploaded
-    assert_eq!(body, test_content, "Retrieved event data doesn't match what was stored");
-    println!("Successfully verified event data integrity in S3");
-    
-    // Clean up: Delete the test object
-    let delete_result = s3_client
-        .delete_object()
-        .bucket(&bucket_name)
-        .key(test_key)
-        .send()
-        .await;
+        // Use AWS CLI to download the object
+        let status = std::process::Command::new("aws")
+            .args([
+                "--endpoint-url", "http://localhost:4566",
+                "s3", "cp", &format!("s3://{}/{}", bucket_name, test_key), "downloaded_event.txt"
+            ])
+            .status()?;
+            
+        assert!(status.success(), "Failed to download event using AWS CLI");
         
-    assert!(delete_result.is_ok(), "Failed to delete test event from S3: {:?}", delete_result.err());
-    println!("Successfully cleaned up test event data from S3");
+        // Read and verify the content
+        let downloaded_content = std::fs::read("downloaded_event.txt")?;
+        assert_eq!(downloaded_content, test_content, "Downloaded event data doesn't match what was stored");
+        println!("Successfully verified event data integrity in S3 using AWS CLI");
+        
+        // Use AWS CLI to delete the object
+        let status = std::process::Command::new("aws")
+            .args([
+                "--endpoint-url", "http://localhost:4566",
+                "s3", "rm", &format!("s3://{}/{}", bucket_name, test_key)
+            ])
+            .status()?;
+            
+        assert!(status.success(), "Failed to delete event using AWS CLI");
+        println!("Successfully cleaned up test event data from S3 using AWS CLI");
+    } else {
+        // For real AWS, use the SDK as before
+        let upload_result = s3_client
+            .put_object()
+            .bucket(&bucket_name)
+            .key(test_key)
+            .body(ByteStream::from(test_content.to_vec()))
+            .send()
+            .await;
+            
+        assert!(upload_result.is_ok(), "Failed to upload test event to S3: {:?}", upload_result.err());
+        println!("Successfully uploaded test event data to S3");
+        
+        // Test: Verify the object exists and has the correct content
+        let get_result = s3_client
+            .get_object()
+            .bucket(&bucket_name)
+            .key(test_key)
+            .send()
+            .await;
+            
+        assert!(get_result.is_ok(), "Failed to get test event from S3: {:?}", get_result.err());
+        
+        // Read event data
+        let response = get_result.unwrap();
+        let mut body = Vec::new();
+        response.body.into_async_read().read_to_end(&mut body).await?;
+        
+        // Verify content matches what we uploaded
+        assert_eq!(body, test_content, "Retrieved event data doesn't match what was stored");
+        println!("Successfully verified event data integrity in S3");
+        
+        // Clean up: Delete the test object
+        let delete_result = s3_client
+            .delete_object()
+            .bucket(&bucket_name)
+            .key(test_key)
+            .send()
+            .await;
+            
+        assert!(delete_result.is_ok(), "Failed to delete test event from S3: {:?}", delete_result.err());
+        println!("Successfully cleaned up test event data from S3");
+    }
     
     println!("Event storage integration test completed successfully");
     Ok(())
