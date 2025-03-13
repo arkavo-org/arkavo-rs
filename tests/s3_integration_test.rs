@@ -1,5 +1,4 @@
 extern crate nanotdf;
-use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_s3 as s3;
 use aws_sdk_s3::primitives::ByteStream;
 use s3::Client as S3Client;
@@ -34,7 +33,7 @@ async fn test_s3_integration() -> Result<(), Box<dyn Error>> {
     let config_builder = aws_config::from_env();
     
     // If we're running with LocalStack, configure the endpoint URL
-    let config = if let Some(endpoint) = endpoint_url {
+    let config = if let Some(ref endpoint) = endpoint_url {
         println!("Using custom endpoint: {}", endpoint);
         config_builder
             .endpoint_url(endpoint)
