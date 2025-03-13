@@ -25,7 +25,7 @@ async fn test_event_storage_integration() -> Result<(), Box<dyn Error>> {
     let config_builder = aws_config::from_env();
     
     // If we're running with LocalStack, configure the endpoint URL
-    let config = if let Some(endpoint) = endpoint_url {
+    let config = if let Some(ref endpoint) = endpoint_url {
         println!("Using custom endpoint: {}", endpoint);
         config_builder
             .endpoint_url(endpoint)
