@@ -15,6 +15,8 @@ use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::KeyInit;
 use aes_gcm::aead::{Aead, Key};
 use aes_gcm::Aes256Gcm;
+
+const DEFAULT_SALT: &[u8] = b"L1L"; // Default salt for backward compatibility
 use async_nats::Message as NatsMessage;
 use async_nats::{Client as NatsClient, PublishError};
 use aws_sdk_s3 as s3;
@@ -726,9 +728,17 @@ async fn handle_rewrap(
     log_timing(settings, "Time for ECDH operation", ecdh_time);
 
     // Encrypt dek_shared_secret with symmetric key using AES GCM
-    let salt = connection_state.salt_lock.read().unwrap().clone().unwrap();
+    
+    // For the key derivation, use the salt from the NanoTDF policy if available
+    // Otherwise, use the default "L1L" salt for backward compatibility
+    let nanotdf_salt = match policy.get_salt() {
+        Some(salt) if !salt.is_empty() => salt.clone(),
+        _ => DEFAULT_SALT.to_vec(), // Use default "L1L" for backward compatibility
+    };
+    
+    // Use HKDF with the appropriate salt for key derivation
     let info = "rewrappedKey".as_bytes();
-    let hkdf = Hkdf::<Sha256>::new(Some(&salt), &session_shared_secret);
+    let hkdf = Hkdf::<Sha256>::new(Some(&nanotdf_salt), &session_shared_secret);
     let mut derived_key = [0u8; 32];
     hkdf.expand(info, &mut derived_key)
         .expect("HKDF expansion failed");
