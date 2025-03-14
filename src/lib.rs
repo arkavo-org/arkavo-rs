@@ -154,7 +154,7 @@ impl<'a> BinaryParser<'a> {
         let payload_sig_mode = self.read_symmetric_and_payload_config()?;
         
         // Pass the version to read_policy_field to handle salt differently based on version
-        let is_version_m_or_newer = version.len() > 0 && version[0] >= 0x4D; // 'M' or newer
+        let is_version_m_or_newer = !version.is_empty() && version[0] >= 0x4D; // 'M' or newer
         let policy = self.read_policy_field(&ecc_mode, is_version_m_or_newer)?;
         
         let ephemeral_key = self.read(MIN_EPHEMERAL_KEY_SIZE)?;
