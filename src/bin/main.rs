@@ -725,14 +725,14 @@ async fn handle_rewrap(
     log_timing(settings, "Time for ECDH operation", ecdh_time);
 
     // Encrypt dek_shared_secret with symmetric key using AES GCM
-    
+
     // For the key derivation, use the salt from the NanoTDF policy if available
     // Otherwise, use the default "L1L" salt for backward compatibility
     let nanotdf_salt = match policy.get_salt() {
         Some(salt) if !salt.is_empty() => salt.clone(),
         _ => DEFAULT_SALT.to_vec(), // Use default "L1L" for backward compatibility
     };
-    
+
     // Use HKDF with the appropriate salt for key derivation
     let info = "rewrappedKey".as_bytes();
     let hkdf = Hkdf::<Sha256>::new(Some(&nanotdf_salt), &session_shared_secret);

@@ -152,11 +152,11 @@ impl<'a> BinaryParser<'a> {
         let kas = self.read_kas_field()?;
         let ecc_mode = self.read_ecc_and_binding_mode()?;
         let payload_sig_mode = self.read_symmetric_and_payload_config()?;
-        
+
         // Pass the version to read_policy_field to handle salt differently based on version
         let is_version_m_or_newer = !version.is_empty() && version[0] >= 0x4D; // 'M' or newer
         let policy = self.read_policy_field(&ecc_mode, is_version_m_or_newer)?;
-        
+
         let ephemeral_key = self.read(MIN_EPHEMERAL_KEY_SIZE)?;
 
         Ok(Header {
@@ -486,9 +486,11 @@ mod tests {
     #[test]
     fn test_salt_handling() -> Result<(), Box<dyn Error>> {
         // Create a Policy object with salt
-        let salt = vec![0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 
-                        0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99];
-        
+        let salt = vec![
+            0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+            0x88, 0x99,
+        ];
+
         let policy = Policy {
             policy_type: PolicyType::Remote,
             body: None,
@@ -499,16 +501,16 @@ mod tests {
             binding: Some(vec![0x01, 0x02, 0x03, 0x04]),
             salt: Some(salt.clone()),
         };
-        
+
         // Verify salt getter works
         assert!(policy.get_salt().is_some());
         let retrieved_salt = policy.get_salt().as_ref().unwrap();
         assert_eq!(retrieved_salt.len(), 16);
         assert_eq!(&retrieved_salt[0..4], &[0xaa, 0xbb, 0xcc, 0xdd]);
-        
+
         // Verify DEFAULT_SALT constant is correctly defined
         assert_eq!(DEFAULT_SALT, b"L1L");
-        
+
         Ok(())
     }
 }
