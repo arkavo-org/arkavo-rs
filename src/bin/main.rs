@@ -495,6 +495,10 @@ async fn handle_rewrap(
     settings: &ServerSettings,
 ) -> Option<Message> {
     info!("Handling rewrap request, payload size: {} bytes", payload.len());
+    // Log first few bytes of payload for debugging
+    if payload.len() >= 10 {
+        info!("First 10 bytes of payload: {:02x?}", &payload[0..10]);
+    }
     // timing
     let start_time = Instant::now();
     // session shared secret

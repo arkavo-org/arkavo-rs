@@ -145,6 +145,7 @@ impl<'a> BinaryParser<'a> {
     pub fn parse_header(&mut self) -> Result<Header, ParsingError> {
         let magic_number = self.read(MAGIC_NUMBER_SIZE)?;
         let version = self.read(VERSION_SIZE)?;
+        eprintln!("Parsing nanoTDF header - Magic: {:02x?}, Version: 0x{:02x}", magic_number, version[0]);
         let kas = self.read_kas_field()?;
         let ecc_mode = self.read_ecc_and_binding_mode()?;
         let payload_sig_mode = self.read_symmetric_and_payload_config()?;
