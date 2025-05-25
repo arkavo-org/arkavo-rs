@@ -1,12 +1,14 @@
 mod contracts;
 mod schemas;
 
+// No test modules in production code
+
 use crate::contracts::content_rating::content_rating::{
     AgeLevel, ContentRating, Rating, RatingLevel,
 };
 use crate::contracts::geo_fence_contract::geo_fence_contract::Geofence3D;
 use crate::contracts::{contract_simple_abac, geo_fence_contract};
-use crate::schemas::event_generated::arkavo::{Event, EventData};
+use crate::schemas::event_generated::arkavo::{Action, Event, EventData};
 use crate::schemas::metadata_generated::arkavo;
 use crate::schemas::metadata_generated::arkavo::{root_as_metadata, Metadata};
 use aes_gcm::aead::generic_array::GenericArray;
@@ -15,6 +17,7 @@ use aes_gcm::aead::{Aead, Key};
 use aes_gcm::Aes256Gcm;
 use async_nats::Message as NatsMessage;
 use async_nats::{Client as NatsClient, PublishError};
+use aws_sdk_s3 as s3;
 use elliptic_curve::point::AffineCoordinates;
 use flatbuffers::root;
 use futures_util::{SinkExt, StreamExt};
@@ -161,7 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load configuration
     let settings = load_config()?;
-    let server_state = Arc::new(ServerState::new(settings.clone())?);
+    let server_state = Arc::new(ServerState::new(settings.clone()).await?);
     // Load and cache the apple-app-site-association.json file
     let apple_app_site_association = load_apple_app_site_association().await;
     // Initialize KAS keys
@@ -315,9 +318,12 @@ async fn handle_websocket(
                                 }
                             }
                         } else if let Some(response) = handle_binary_message(&connection_state, &server_state, msg.into_data(), nats_connection.clone()).await {
+                            info!("Sending response through WebSocket");
                             if ws_stream.send(response).await.is_err() {
                                 eprintln!("Failed to send response through WebSocket");
                                 break;
+                            } else {
+                                info!("Response sent successfully");
                             }
                         }
                     }
@@ -431,7 +437,14 @@ async fn handle_binary_message(
         Some(MessageType::PublicKey) => handle_public_key(connection_state, payload).await, // incoming
         Some(MessageType::KasPublicKey) => handle_kas_public_key(payload).await, // outgoing
         Some(MessageType::Rewrap) => {
-            handle_rewrap(connection_state, payload, &server_state.settings).await
+            info!("Received rewrap request (0x03)");
+            let response = handle_rewrap(connection_state, payload, &server_state.settings).await;
+            if response.is_none() {
+                info!("Rewrap denied - no response will be sent");
+            } else {
+                info!("Rewrap response prepared");
+            }
+            response
         } // incoming
         Some(MessageType::RewrappedKey) => None,                                 // outgoing
         Some(MessageType::Nats) => {
@@ -481,6 +494,11 @@ async fn handle_rewrap(
     payload: &[u8],
     settings: &ServerSettings,
 ) -> Option<Message> {
+    info!("Handling rewrap request, payload size: {} bytes", payload.len());
+    // Log first few bytes of payload for debugging
+    if payload.len() >= 10 {
+        info!("First 10 bytes of payload: {:02x?}", &payload[0..10]);
+    }
     // timing
     let start_time = Instant::now();
     // session shared secret
@@ -507,8 +525,9 @@ async fn handle_rewrap(
     log_timing(settings, "Time to parse header", parse_time);
     // TDF ephemeral key
     let tdf_ephemeral_key_bytes = header.get_ephemeral_key();
+    info!("TDF ephemeral key: {}", hex::encode(tdf_ephemeral_key_bytes));
     if tdf_ephemeral_key_bytes.len() != 33 {
-        info!("Invalid TDF compressed ephemeral key length");
+        info!("Invalid TDF compressed ephemeral key length: {} bytes", tdf_ephemeral_key_bytes.len());
         return None;
     }
     // TDF contract
@@ -753,6 +772,9 @@ async fn handle_rewrap(
 
     let total_time = start_time.elapsed();
     log_timing(settings, "Total time for handle_rewrap", total_time);
+    
+    info!("Sending rewrap response: type=0x04, total_size={} bytes, ephemeral_key={}", 
+        response_data.len(), hex::encode(tdf_ephemeral_key_bytes));
 
     Some(Message::Binary(response_data))
 }
@@ -863,8 +885,11 @@ async fn handle_nats(
     msg: NatsMessage,
     connection_state: Arc<ConnectionState>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // it nanotdf, then do a message, otherwise it is a Flatbuffers event
-    let message_type = if msg.payload[0..3].iter().eq(&[0x4C, 0x31, 0x4C]) {
+    // Check if it's nanoTDF (v12 or v13), otherwise it's a Flatbuffers event
+    let message_type = if msg.payload.len() >= 3 
+        && (msg.payload[0..3].iter().eq(&[0x4C, 0x31, 0x4C]) // v12: L1L
+            || msg.payload[0..3].iter().eq(&[0x4C, 0x31, 0x4D])) // v13: L1M (TDFN)
+    {
         MessageType::Nats
     } else {
         MessageType::Event
@@ -910,6 +935,49 @@ async fn handle_event(
         println!("Event Timestamp: {:?}", event.timestamp());
         println!("Event Status: {:?}", event.status());
         println!("Event Data Type: {:?}", event.data_type());
+        // S3 store
+        match event.action() {
+            Action::store => {
+                if let Some(cache_event) = event.data_as_cache_event() {
+                    if let (Some(target_id), Some(target_payload)) = (cache_event.target_id(), cache_event.target_payload()) {
+                        // Create S3 key using target_id
+                        let target_id_str = bs58::encode(target_id.bytes()).into_string();
+                        let s3_key = format!("{}/data", target_id_str);
+
+                        // Log the S3 key and payload size for debugging
+                        info!("Storing object in S3 with key: {}", s3_key);
+                        info!("Payload size: {} bytes", target_payload.bytes().len());
+
+                        // Upload to S3
+                        match server_state
+                            .s3_client
+                            .put_object()
+                            .bucket(&server_state.settings.s3_bucket)
+                            .key(&s3_key)
+                            .body(aws_sdk_s3::primitives::ByteStream::from(
+                                target_payload.bytes().to_vec(),
+                            ))
+                            .send()
+                            .await
+                        {
+                            Ok(_) => {
+                                info!("Successfully stored object in S3: {}", s3_key);
+                            }
+                            Err(e) => {
+                                error!("Failed to store object in S3: {}", e);
+                            }
+                        }
+                    } else {
+                        error!("target_id or target_payload is None");
+                    }
+                } else {
+                    error!("Failed to parse cache event from payload");
+                }
+            }
+            _ => {
+                error!("Unhandled action: {:?}", event.action());
+            }
+        }
         // redis connection
         let mut redis_conn = match server_state
             .redis_client
@@ -1145,24 +1213,32 @@ fn custom_ecdh(
 struct ServerState {
     settings: ServerSettings,
     redis_client: RedisClient,
+    s3_client: s3::Client,
 }
 
 impl ServerState {
-    fn new(settings: ServerSettings) -> Result<Self, redis::RedisError> {
+    async fn new(settings: ServerSettings) -> Result<Self, Box<dyn std::error::Error>> {
         info!("Attempting to connect to Redis at {}", settings.redis_url);
-        match RedisClient::open(settings.redis_url.clone()) {
+        let redis_client = match RedisClient::open(settings.redis_url.clone()) {
             Ok(client) => {
                 info!("Successfully connected to Redis server");
-                Ok(ServerState {
-                    settings,
-                    redis_client: client,
-                })
+                client
             }
             Err(e) => {
                 error!("Failed to connect to Redis server: {}", e);
-                Err(e)
+                return Err(Box::new(e));
             }
-        }
+        };
+
+        // Initialize AWS S3 client
+        let config = aws_config::load_from_env().await;
+        let s3_client = s3::Client::new(&config);
+
+        Ok(ServerState {
+            settings,
+            redis_client,
+            s3_client,
+        })
     }
 }
 
@@ -1177,6 +1253,7 @@ struct ServerSettings {
     nats_url: String,
     nats_subject: String,
     redis_url: String,
+    s3_bucket: String,
 }
 
 fn log_timing(settings: &ServerSettings, message: &str, duration: std::time::Duration) {
@@ -1220,6 +1297,7 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
         nats_url: env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string()),
         nats_subject: env::var("NATS_SUBJECT").unwrap_or_else(|_| "nanotdf.messages".to_string()),
         redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string()),
+        s3_bucket: env::var("S3_BUCKET").unwrap_or_else(|_| "default-bucket".to_string()),
     })
 }
 
