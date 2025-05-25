@@ -866,8 +866,11 @@ async fn handle_nats(
     msg: NatsMessage,
     connection_state: Arc<ConnectionState>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // it nanotdf, then do a message, otherwise it is a Flatbuffers event
-    let message_type = if msg.payload[0..3].iter().eq(&[0x4C, 0x31, 0x4C]) {
+    // Check if it's nanoTDF (v12 or v13), otherwise it's a Flatbuffers event
+    let message_type = if msg.payload.len() >= 3 
+        && (msg.payload[0..3].iter().eq(&[0x4C, 0x31, 0x4C]) // v12: L1L
+            || msg.payload[0..3].iter().eq(&[0x4C, 0x31, 0x4D])) // v13: L1M (TDFN)
+    {
         MessageType::Nats
     } else {
         MessageType::Event
@@ -917,15 +920,17 @@ async fn handle_event(
         match event.action() {
             Action::store => {
                 if let Some(cache_event) = event.data_as_cache_event() {
-                    if let (Some(target_id), Some(target_payload)) =
-                        (cache_event.target_id(), cache_event.target_payload())
-                    {
+                    if let (Some(target_id), Some(target_payload)) = (cache_event.target_id(), cache_event.target_payload()) {
                         // Create S3 key using target_id
                         let target_id_str = bs58::encode(target_id.bytes()).into_string();
                         let s3_key = format!("{}/data", target_id_str);
 
+                        // Log the S3 key and payload size for debugging
+                        info!("Storing object in S3 with key: {}", s3_key);
+                        info!("Payload size: {} bytes", target_payload.bytes().len());
+
                         // Upload to S3
-                        return match server_state
+                        match server_state
                             .s3_client
                             .put_object()
                             .bucket(&server_state.settings.s3_bucket)
@@ -938,22 +943,20 @@ async fn handle_event(
                         {
                             Ok(_) => {
                                 info!("Successfully stored object in S3: {}", s3_key);
-                                let mut response = Vec::new();
-                                response.push(MessageType::Event as u8);
-                                response.extend_from_slice(b"Successfully stored");
-                                Some(Message::Binary(response))
                             }
                             Err(e) => {
                                 error!("Failed to store object in S3: {}", e);
-                                None
                             }
-                        };
+                        }
+                    } else {
+                        error!("target_id or target_payload is None");
                     }
+                } else {
+                    error!("Failed to parse cache event from payload");
                 }
             }
             _ => {
                 error!("Unhandled action: {:?}", event.action());
-                drop(None::<Message>);
             }
         }
         // redis connection
