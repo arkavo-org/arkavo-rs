@@ -318,9 +318,12 @@ async fn handle_websocket(
                                 }
                             }
                         } else if let Some(response) = handle_binary_message(&connection_state, &server_state, msg.into_data(), nats_connection.clone()).await {
+                            info!("Sending response through WebSocket");
                             if ws_stream.send(response).await.is_err() {
                                 eprintln!("Failed to send response through WebSocket");
                                 break;
+                            } else {
+                                info!("Response sent successfully");
                             }
                         }
                     }
@@ -434,7 +437,14 @@ async fn handle_binary_message(
         Some(MessageType::PublicKey) => handle_public_key(connection_state, payload).await, // incoming
         Some(MessageType::KasPublicKey) => handle_kas_public_key(payload).await, // outgoing
         Some(MessageType::Rewrap) => {
-            handle_rewrap(connection_state, payload, &server_state.settings).await
+            info!("Received rewrap request (0x03)");
+            let response = handle_rewrap(connection_state, payload, &server_state.settings).await;
+            if response.is_none() {
+                info!("Rewrap denied - no response will be sent");
+            } else {
+                info!("Rewrap response prepared");
+            }
+            response
         } // incoming
         Some(MessageType::RewrappedKey) => None,                                 // outgoing
         Some(MessageType::Nats) => {
@@ -484,6 +494,7 @@ async fn handle_rewrap(
     payload: &[u8],
     settings: &ServerSettings,
 ) -> Option<Message> {
+    info!("Handling rewrap request, payload size: {} bytes", payload.len());
     // timing
     let start_time = Instant::now();
     // session shared secret
@@ -510,8 +521,9 @@ async fn handle_rewrap(
     log_timing(settings, "Time to parse header", parse_time);
     // TDF ephemeral key
     let tdf_ephemeral_key_bytes = header.get_ephemeral_key();
+    info!("TDF ephemeral key: {}", hex::encode(tdf_ephemeral_key_bytes));
     if tdf_ephemeral_key_bytes.len() != 33 {
-        info!("Invalid TDF compressed ephemeral key length");
+        info!("Invalid TDF compressed ephemeral key length: {} bytes", tdf_ephemeral_key_bytes.len());
         return None;
     }
     // TDF contract
@@ -756,6 +768,9 @@ async fn handle_rewrap(
 
     let total_time = start_time.elapsed();
     log_timing(settings, "Total time for handle_rewrap", total_time);
+    
+    info!("Sending rewrap response: type=0x04, total_size={} bytes, ephemeral_key={}", 
+        response_data.len(), hex::encode(tdf_ephemeral_key_bytes));
 
     Some(Message::Binary(response_data))
 }
