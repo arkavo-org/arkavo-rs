@@ -146,7 +146,7 @@ impl<'a> BinaryParser<'a> {
         let magic_number = self.read(MAGIC_NUMBER_SIZE)?;
         let version = self.read(VERSION_SIZE)?;
         eprintln!("Parsing nanoTDF header - Magic: {:02x?}, Version: 0x{:02x}", magic_number, version[0]);
-        let kas = self.read_kas_field()?;
+        let kas = self.read_kas_field(version[0])?;
         let ecc_mode = self.read_ecc_and_binding_mode()?;
         let payload_sig_mode = self.read_symmetric_and_payload_config()?;
         let policy = self.read_policy_field(&ecc_mode, version[0])?;
@@ -172,7 +172,7 @@ impl<'a> BinaryParser<'a> {
         Ok(result)
     }
 
-    pub fn read_kas_field(&mut self) -> Result<ResourceLocator, ParsingError> {
+    fn read_resource_locator(&mut self) -> Result<ResourceLocator, ParsingError> {
         let protocol_enum = match self.read(1)?[0] {
             0x00 => ProtocolEnum::Http,
             0x01 => ProtocolEnum::Https,
@@ -188,6 +188,32 @@ impl<'a> BinaryParser<'a> {
             protocol_enum,
             body,
         })
+    }
+
+    pub fn read_kas_field(&mut self, version: u8) -> Result<ResourceLocator, ParsingError> {
+        let locator = self.read_resource_locator()?;
+        // For v13, read additional KAS fields
+        if version == 0x4D { // v13
+            // Read KAS Key Curve Enum (1 byte)
+            let kas_curve_enum = self.read(1)?[0];
+            eprintln!("KAS Key Curve Enum: 0x{:02x}", kas_curve_enum);
+            
+            // Read KAS Public Key (size depends on curve)
+            let kas_key_size = match kas_curve_enum {
+                0x00 | 0x03 => 33, // secp256r1 or secp256k1
+                0x01 => 49,        // secp384r1
+                0x02 => 67,        // secp521r1
+                _ => {
+                    eprintln!("Invalid KAS Key Curve Enum: 0x{:02x}", kas_curve_enum);
+                    return Err(ParsingError::InvalidKas);
+                }
+            };
+            
+            let kas_public_key = self.read(kas_key_size)?;
+            eprintln!("KAS Public Key ({} bytes): {:02x?}", kas_key_size, &kas_public_key[..10]);
+        }
+        
+        Ok(locator)
     }
 
     pub fn read_policy_field(
@@ -213,7 +239,7 @@ impl<'a> BinaryParser<'a> {
 
         match policy_type {
             PolicyType::Remote => {
-                let remote = self.read_kas_field()?;
+                let remote = self.read_resource_locator()?;
                 let binding = self.read_policy_binding(binding_mode).unwrap();
                 Ok(Policy {
                     policy_type,
