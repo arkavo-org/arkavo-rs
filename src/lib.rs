@@ -148,7 +148,7 @@ impl<'a> BinaryParser<'a> {
         let kas = self.read_kas_field()?;
         let ecc_mode = self.read_ecc_and_binding_mode()?;
         let payload_sig_mode = self.read_symmetric_and_payload_config()?;
-        let policy = self.read_policy_field(&ecc_mode)?;
+        let policy = self.read_policy_field(&ecc_mode, version[0])?;
         let ephemeral_key = self.read(MIN_EPHEMERAL_KEY_SIZE)?;
 
         Ok(Header {
@@ -192,11 +192,22 @@ impl<'a> BinaryParser<'a> {
     pub fn read_policy_field(
         &mut self,
         binding_mode: &ECCAndBindingMode,
+        version: u8,
     ) -> Result<Policy, ParsingError> {
-        let policy_type = match self.read(1)?[0] {
+        let policy_type_byte = self.read(1)?[0];
+        let policy_type = match policy_type_byte {
             0x00 => PolicyType::Remote,
             0x01 => PolicyType::Embedded,
-            _ => return Err(ParsingError::InvalidPolicy),
+            0x02 | 0x03 if version == 0x4D => { // v13 only (0x4D)
+                eprintln!("Processing v13 policy type: 0x{:02x}", policy_type_byte);
+                // For v13, types 0x02 and 0x03 are valid
+                // For now, treat them as Embedded until we handle encryption
+                PolicyType::Embedded
+            }
+            _ => {
+                eprintln!("Unsupported policy type: 0x{:02x} for version: 0x{:02x}", policy_type_byte, version);
+                return Err(ParsingError::InvalidPolicy);
+            }
         };
 
         match policy_type {
