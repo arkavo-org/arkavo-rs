@@ -24,8 +24,8 @@ pub mod simple_abac {
             if claim == "Private" {
                 return false;
             }
-            // fail open for demo
-            true
+            // Fail closed - deny unknown claims by default for security
+            false
         }
     }
 }
