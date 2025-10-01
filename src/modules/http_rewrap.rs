@@ -33,6 +33,7 @@ pub struct SignedRewrapRequest {
 
 /// JWT claims structure for the signed request
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct JWTClaims {
     #[serde(rename = "requestBody")]
     pub request_body: String, // JSON string of UnsignedRewrapRequest
@@ -51,6 +52,7 @@ pub struct UnsignedRewrapRequest {
 /// Individual rewrap request entry
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct RewrapRequestEntry {
     pub algorithm: String,        // "ec:secp256r1"
     pub policy: Policy,
@@ -65,6 +67,7 @@ pub struct KeyAccessObjectWrapper {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct KeyAccessObject {
     pub header: String, // Base64-encoded NanoTDF header
     #[serde(rename = "type")]
@@ -74,6 +77,7 @@ pub struct KeyAccessObject {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct Policy {
     pub id: String,
     pub body: String, // Base64-encoded policy

@@ -24,7 +24,7 @@ pub const NANOTDF_VERSION_V13: u8 = 0x4D; // 'M' - version 1.3
 pub fn compute_nanotdf_salt(version: u8) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(NANOTDF_MAGIC);
-    hasher.update(&[version]);
+    hasher.update([version]);
     hasher.finalize().into()
 }
 
