@@ -30,6 +30,7 @@ use rand_core::{OsRng, RngCore};
 use redis::AsyncCommands;
 use redis::Client as RedisClient;
 use serde::{Deserialize, Serialize};
+use serde_json;
 use sha2::Sha256;
 use std::env;
 use std::pin::Pin;
@@ -129,6 +130,7 @@ enum MessageType {
     RewrappedKey = 0x04,
     Nats = 0x05,
     Event = 0x06,
+    Error = 0xFF,
 }
 
 impl MessageType {
@@ -140,8 +142,61 @@ impl MessageType {
             0x04 => Some(MessageType::RewrappedKey),
             0x05 => Some(MessageType::Nats),
             0x06 => Some(MessageType::Event),
+            0xFF => Some(MessageType::Error),
             _ => None,
         }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ErrorResponse {
+    error_type: String,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<String>,
+}
+
+impl ErrorResponse {
+    fn invalid_format(message: impl Into<String>) -> Self {
+        Self {
+            error_type: "invalid_format".to_string(),
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    fn policy_denied(message: impl Into<String>) -> Self {
+        Self {
+            error_type: "policy_denied".to_string(),
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    fn crypto_error(message: impl Into<String>) -> Self {
+        Self {
+            error_type: "crypto_error".to_string(),
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    fn server_error(message: impl Into<String>) -> Self {
+        Self {
+            error_type: "server_error".to_string(),
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    fn to_message(&self) -> Message {
+        let json_payload = serde_json::to_vec(self).unwrap_or_else(|_| {
+            br#"{"error_type":"server_error","message":"Failed to serialize error"}"#.to_vec()
+        });
+        let mut response_data = Vec::with_capacity(1 + json_payload.len());
+        response_data.push(MessageType::Error as u8);
+        response_data.extend_from_slice(&json_payload);
+        Message::Binary(response_data)
     }
 }
 
@@ -497,8 +552,13 @@ async fn handle_binary_message(
             .await
         } // internal
         Some(MessageType::Event) => handle_event(server_state, payload, nats_connection).await, // embedded
+        Some(MessageType::Error) => {
+            // Error messages are sent from server to client, not received
+            error!("Received unexpected Error message type from client");
+            None
+        }
         None => {
-            // println!("Unknown message type: {:?}", message_type);
+            // Unknown message type
             None
         }
     }
@@ -546,8 +606,13 @@ async fn handle_rewrap(
         shared_secret.clone()
     };
     if session_shared_secret.is_none() {
-        info!("Shared Secret not set");
-        return None;
+        error!("Rewrap attempted before key agreement - no session secret");
+        return Some(
+            ErrorResponse::invalid_format(
+                "Session not established - perform key agreement first",
+            )
+            .to_message(),
+        );
     }
     let session_shared_secret = session_shared_secret.unwrap();
     // Parse NanoTDF header
@@ -555,8 +620,11 @@ async fn handle_rewrap(
     let header = match BinaryParser::parse_header(&mut parser) {
         Ok(header) => header,
         Err(e) => {
-            info!("Error parsing header: {:?}", e);
-            return None;
+            error!("Failed to parse NanoTDF header: {:?}", e);
+            return Some(
+                ErrorResponse::invalid_format(format!("Invalid NanoTDF header: {}", e))
+                    .to_message(),
+            );
         }
     };
     // timing
@@ -565,8 +633,17 @@ async fn handle_rewrap(
     // TDF ephemeral key
     let tdf_ephemeral_key_bytes = header.get_ephemeral_key();
     if tdf_ephemeral_key_bytes.len() != 33 {
-        info!("Invalid TDF compressed ephemeral key length");
-        return None;
+        error!(
+            "Invalid NanoTDF ephemeral key length: {} (expected 33)",
+            tdf_ephemeral_key_bytes.len()
+        );
+        return Some(
+            ErrorResponse::invalid_format(format!(
+                "Invalid ephemeral key size: {} bytes",
+                tdf_ephemeral_key_bytes.len()
+            ))
+            .to_message(),
+        );
     }
     // TDF contract
     let policy = header.get_policy();
@@ -586,8 +663,14 @@ async fn handle_rewrap(
                 metadata = match root_as_metadata(body) {
                     Ok(metadata) => Some(metadata),
                     Err(e) => {
-                        error!("Failed to parse metadata: {}", e);
-                        return None;
+                        error!("Failed to parse embedded policy metadata: {}", e);
+                        return Some(
+                            ErrorResponse::invalid_format(format!(
+                                "Invalid embedded policy metadata: {}",
+                                e
+                            ))
+                            .to_message(),
+                        );
                     }
                 };
                 info!("Parsed metadata: {:#?}", metadata);
@@ -666,15 +749,16 @@ async fn handle_rewrap(
                             if claims_result.is_ok()
                                 && !contract.is_within_geofence(geofence, coordinate)
                             {
-                                // binary response for DENY
-                                let mut response_data: Vec<u8> = Vec::new();
-                                response_data.push(MessageType::RewrappedKey as u8);
-                                response_data.extend_from_slice(tdf_ephemeral_key_bytes);
+                                error!("Geofence policy denied access - location outside allowed area");
                                 // timing
                                 let total_time = start_time.elapsed();
-                                log_timing(settings, "Time to deny", total_time);
-                                // DENY
-                                return Some(Message::Binary(response_data));
+                                log_timing(settings, "Time to deny (geofence)", total_time);
+                                return Some(
+                                    ErrorResponse::policy_denied(
+                                        "Access denied - location outside permitted geofence",
+                                    )
+                                    .to_message(),
+                                );
                             }
                         }
                     }
@@ -734,9 +818,17 @@ async fn handle_rewrap(
                         mature: convert_rating_level(rating_data.mature()),
                         bully: convert_rating_level(rating_data.bully()),
                     };
+                    // Format age level before check_content consumes it
+                    let age_level_str = format!("{:?}", age_level);
                     if !contract.check_content(age_level, rating) {
-                        println!("content rating DENY");
-                        return None;
+                        error!("Content rating policy denied access for age level: {}", age_level_str);
+                        return Some(
+                            ErrorResponse::policy_denied(format!(
+                                "Content not suitable for age level: {}",
+                                age_level_str
+                            ))
+                            .to_message(),
+                        );
                     }
                 }
                 // simple_abac
@@ -748,15 +840,14 @@ async fn handle_rewrap(
                     if claims_result.is_ok()
                         && !contract.check_access(claims_result.unwrap(), locator.body.clone())
                     {
-                        // binary response
-                        let mut response_data = Vec::new();
-                        response_data.push(MessageType::RewrappedKey as u8);
-                        response_data.extend_from_slice(tdf_ephemeral_key_bytes);
+                        error!("ABAC policy denied access for user claims");
                         // timing
                         let total_time = start_time.elapsed();
-                        log_timing(settings, "Time to deny", total_time);
-                        // DENY
-                        return Some(Message::Binary(response_data));
+                        log_timing(settings, "Time to deny (ABAC)", total_time);
+                        return Some(
+                            ErrorResponse::policy_denied("Access denied by attribute-based access control policy")
+                                .to_message(),
+                        );
                     }
                 }
             }
@@ -835,22 +926,31 @@ async fn handle_public_key(
         let shared_secret_lock = connection_state.shared_secret_lock.read();
         let shared_secret = shared_secret_lock.unwrap();
         if shared_secret.is_some() {
-            // println!("Shared Secret Connection: {}", hex::encode(shared_secret.clone().unwrap()));
+            // Session already established - ignore duplicate key exchange
             return None;
         }
     }
-    // println!("Client Public Key payload: {}", hex::encode(payload.as_ref()));
+
     if payload.len() != 33 {
-        error!("Client Public Key wrong size");
-        error!("Client Public Key length: {}", payload.len());
-        return None;
+        error!("Invalid client public key size: {} bytes (expected 33)", payload.len());
+        return Some(
+            ErrorResponse::invalid_format(format!(
+                "Invalid public key size: {} bytes (expected 33 for compressed P-256)",
+                payload.len()
+            ))
+            .to_message(),
+        );
     }
+
     // Deserialize the public key sent by the client
     let client_public_key = match PublicKey::from_sec1_bytes(payload) {
         Ok(key) => key,
         Err(e) => {
-            error!("Error deserializing client public key: {:?}", e);
-            return None;
+            error!("Failed to deserialize client public key: {:?}", e);
+            return Some(
+                ErrorResponse::crypto_error(format!("Invalid P-256 public key: {}", e))
+                    .to_message(),
+            );
         }
     };
     // Generate an ephemeral private key
