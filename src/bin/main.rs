@@ -1685,6 +1685,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for RewindableStream<S> {
     }
 }
 
+fn convert_rating_level(level: arkavo::RatingLevel) -> RatingLevel {
+    match level.0 {
+        x if x == arkavo::RatingLevel::unused.0 => RatingLevel::Unused,
+        x if x == arkavo::RatingLevel::none.0 => RatingLevel::None,
+        x if x == arkavo::RatingLevel::mild.0 => RatingLevel::Mild,
+        x if x == arkavo::RatingLevel::moderate.0 => RatingLevel::Moderate,
+        x if x == arkavo::RatingLevel::severe.0 => RatingLevel::Severe,
+        _ => RatingLevel::Unused, // Default to Unused for any invalid values
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error;
@@ -1756,8 +1767,7 @@ mod tests {
         let kas_private_key_array = match kas_private_key_option {
             Some(array) => array,
             None => {
-                return Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(Box::new(std::io::Error::other(
                     "Could not convert to array.",
                 )))
             }
@@ -1782,16 +1792,5 @@ mod tests {
         C: CurveArithmetic,
     {
         pub scalar: NonZeroScalar<C>,
-    }
-}
-
-fn convert_rating_level(level: arkavo::RatingLevel) -> RatingLevel {
-    match level.0 {
-        x if x == arkavo::RatingLevel::unused.0 => RatingLevel::Unused,
-        x if x == arkavo::RatingLevel::none.0 => RatingLevel::None,
-        x if x == arkavo::RatingLevel::mild.0 => RatingLevel::Mild,
-        x if x == arkavo::RatingLevel::moderate.0 => RatingLevel::Moderate,
-        x if x == arkavo::RatingLevel::severe.0 => RatingLevel::Severe,
-        _ => RatingLevel::Unused, // Default to Unused for any invalid values
     }
 }

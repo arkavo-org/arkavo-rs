@@ -412,7 +412,7 @@ mod tests {
 
             let bytes = hex::decode(hex_string.replace(" ", ""))?;
             // println!("{:?}", bytes);
-            let mut parser = BinaryParser::new(&*bytes);
+            let mut parser = BinaryParser::new(&bytes);
             let _header = parser.parse_header()?;
             // println!("{:?}", header);
             // Process header as needed
@@ -430,7 +430,7 @@ mod tests {
 
             let bytes = hex::decode(encrypted_payload.replace(" ", ""))?;
             // println!("{:?}", bytes);
-            let mut parser = BinaryParser::new(&*bytes);
+            let mut parser = BinaryParser::new(&bytes);
             let _header = parser.parse_header()?;
             // println!("{:?}", header);
             Ok(())
@@ -447,7 +447,7 @@ mod tests {
 
             let bytes = hex::decode(hex_string.replace(" ", ""))?;
             // println!("{:?}", bytes);
-            let _parser = BinaryParser::new(&*bytes);
+            let _parser = BinaryParser::new(&bytes);
             // let header = parser.parse_header()?;
             // println!("{:?}", header);
             // Process header as needed
@@ -520,9 +520,9 @@ mod tests {
         let expected_gmac_size = 16;
 
         // Simulate GMAC binding validation
-        let valid_gmac_binding = vec![0u8; 16];
-        let invalid_gmac_binding_short = vec![0u8; 8];
-        let invalid_gmac_binding_long = vec![0u8; 32];
+        let valid_gmac_binding = [0u8; 16];
+        let invalid_gmac_binding_short = [0u8; 8];
+        let invalid_gmac_binding_long = [0u8; 32];
 
         assert_eq!(valid_gmac_binding.len(), expected_gmac_size);
         assert_ne!(invalid_gmac_binding_short.len(), expected_gmac_size);
