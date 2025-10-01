@@ -91,20 +91,31 @@ The server can be configured using environment variables. If not set, default va
 
 | Environment Variable | Description                              | Default Value               |
 |----------------------|------------------------------------------|-----------------------------|
-| PORT                 | The port on which the server will listen | 8443                        |
+| PORT                 | The port on which the server will listen | 8080                        |
 | TLS_CERT_PATH        | Path to the TLS certificate file         | ./fullchain.pem             |
 | TLS_KEY_PATH         | Path to the TLS private key file         | ./privkey.pem               |
 | KAS_KEY_PATH         | Path to the KAS private key file         | ./recipient_private_key.pem |
+| JWT_VALIDATION_DISABLED | Disable JWT signature validation (dev only) | true                        |
+| JWT_PUBLIC_KEY_PATH  | Path to JWT public key (if validation enabled) | -                           |
+| NATS_URL             | URL for NATS connection                  | nats://localhost:4222       |
+| NATS_SUBJECT         | Default NATS subscription subject        | nanotdf.messages            |
 | REDIS_URL            | URL for Redis connection                 | redis://localhost:6379      |
+| ENABLE_TIMING_LOGS   | Enable performance timing logs           | false                       |
+| RUST_LOG             | Rust logging level                       | -                           |
 
 All file paths are relative to the current working directory where the server is run.
+
+**Security Note:** For production deployments, set `JWT_VALIDATION_DISABLED=false` and provide a public key via `JWT_PUBLIC_KEY_PATH` to enable proper JWT signature verification.
 
 ```env
 export PORT=8443
 export TLS_CERT_PATH=/path/to/fullchain.pem
 export TLS_KEY_PATH=/path/to/privkey.pem
 export KAS_KEY_PATH=/path/to/recipient_private_key.pem
+export JWT_VALIDATION_DISABLED=false
+export JWT_PUBLIC_KEY_PATH=/path/to/jwt_public_key.pem
 export NATS_URL=nats://localhost:4222
+export NATS_SUBJECT=nanotdf.messages
 export REDIS_URL=redis://localhost:6379
 export ENABLE_TIMING_LOGS=true
 export RUST_LOG=info
@@ -139,6 +150,13 @@ The server will start and listen on the configured port.
 
 - **Key Agreement**: The server establishes a shared secret with each client using ECDH.
 - **NanoTDF Rewrap**: Clients can send rewrap requests to securely re-encrypt keys with a new shared secret.
+
+**For detailed protocol specification**, see [PROTOCOL.md](PROTOCOL.md) which documents:
+- Custom binary WebSocket protocol
+- Message format and types
+- Authentication and security
+- Comparison with standard OpenTDF REST API
+- Testing recommendations for OpenTDF interoperability
 
 ## Diagrams
 

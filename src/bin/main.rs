@@ -44,6 +44,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio_native_tls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::Message;
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug)]
 struct PublicKeyMessage {
     salt: Vec<u8>,
@@ -129,6 +130,7 @@ enum MessageType {
     RewrappedKey = 0x04,
     Nats = 0x05,
     Event = 0x06,
+    Error = 0xFF,
 }
 
 impl MessageType {
@@ -140,8 +142,62 @@ impl MessageType {
             0x04 => Some(MessageType::RewrappedKey),
             0x05 => Some(MessageType::Nats),
             0x06 => Some(MessageType::Event),
+            0xFF => Some(MessageType::Error),
             _ => None,
         }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ErrorResponse {
+    error_type: String,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<String>,
+}
+
+impl ErrorResponse {
+    fn invalid_format(message: impl Into<String>) -> Self {
+        Self {
+            error_type: "invalid_format".to_string(),
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    fn policy_denied(message: impl Into<String>) -> Self {
+        Self {
+            error_type: "policy_denied".to_string(),
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    fn crypto_error(message: impl Into<String>) -> Self {
+        Self {
+            error_type: "crypto_error".to_string(),
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    #[allow(dead_code)]
+    fn server_error(message: impl Into<String>) -> Self {
+        Self {
+            error_type: "server_error".to_string(),
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    fn to_message(&self) -> Message {
+        let json_payload = serde_json::to_vec(self).unwrap_or_else(|_| {
+            br#"{"error_type":"server_error","message":"Failed to serialize error"}"#.to_vec()
+        });
+        let mut response_data = Vec::with_capacity(1 + json_payload.len());
+        response_data.push(MessageType::Error as u8);
+        response_data.extend_from_slice(&json_payload);
+        Message::Binary(response_data)
     }
 }
 
@@ -288,7 +344,7 @@ async fn handle_websocket(
                             // Handle JWT token
                             let token = msg.into_text().unwrap();
                             println!("token: {}", token);
-                            match verify_token(&token) {
+                            match verify_token(&token, &server_state.settings) {
                                 Ok(claims) => {
                                     println!("Valid JWT received. Claims: {:?}", claims);
                                     // store the claims
@@ -311,7 +367,7 @@ async fn handle_websocket(
                                     )));
                                 }
                                 Err(e) => {
-                                    println!("Invalid JWT: {}", e);
+                                    error!("Invalid JWT: {}", e);
                                 }
                             }
                         } else if let Some(response) = handle_binary_message(&connection_state, &server_state, msg.into_data(), nats_connection.clone()).await {
@@ -403,15 +459,73 @@ struct Claims {
     sub: String,
     age: String,
 }
-fn verify_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
+
+fn verify_token(
+    token: &str,
+    settings: &ServerSettings,
+) -> Result<Claims, jsonwebtoken::errors::Error> {
     let mut validation = Validation::default();
-    validation.insecure_disable_signature_validation();
-    validation.validate_exp = false;
-    validation.validate_aud = false;
-    let secret = b"any_secret_key"; // The actual value doesn't matter when signature validation is disabled
-    let token_data = decode::<Claims>(token, &DecodingKey::from_secret(secret), &validation)?;
-    // println!("Decoded token: {:?}", token_data.claims);
-    Ok(token_data.claims)
+
+    if settings.jwt_validation_disabled {
+        // Development mode - disable signature validation
+        log::warn!(
+            "⚠️  JWT signature validation is DISABLED - for development only! \
+             Set JWT_VALIDATION_DISABLED=false for production."
+        );
+        validation.insecure_disable_signature_validation();
+        validation.validate_exp = false;
+        validation.validate_aud = false;
+        let secret = b"any_secret_key"; // The actual value doesn't matter when validation is disabled
+        let token_data = decode::<Claims>(token, &DecodingKey::from_secret(secret), &validation)?;
+        Ok(token_data.claims)
+    } else {
+        // Production mode - proper JWT validation
+        validation.validate_exp = true;
+        validation.validate_aud = false; // Can be enabled if audience is specified
+
+        // Load the public key for verification
+        let public_key_path = settings.jwt_public_key_path.as_ref().ok_or_else(|| {
+            jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidKeyFormat)
+        })?;
+
+        let public_key_pem = std::fs::read_to_string(public_key_path).map_err(|e| {
+            error!(
+                "Failed to read JWT public key from {}: {}",
+                public_key_path, e
+            );
+            jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidKeyFormat)
+        })?;
+
+        // Support both RSA and ECDSA keys
+        let decoding_key = if public_key_pem.contains("BEGIN RSA PUBLIC KEY")
+            || public_key_pem.contains("BEGIN PUBLIC KEY")
+        {
+            validation.algorithms = vec![
+                jsonwebtoken::Algorithm::RS256,
+                jsonwebtoken::Algorithm::RS384,
+                jsonwebtoken::Algorithm::RS512,
+            ];
+            DecodingKey::from_rsa_pem(public_key_pem.as_bytes())?
+        } else if public_key_pem.contains("BEGIN EC PUBLIC KEY") {
+            validation.algorithms = vec![
+                jsonwebtoken::Algorithm::ES256,
+                jsonwebtoken::Algorithm::ES384,
+            ];
+            DecodingKey::from_ec_pem(public_key_pem.as_bytes())?
+        } else {
+            error!("Unsupported JWT public key format");
+            return Err(jsonwebtoken::errors::Error::from(
+                jsonwebtoken::errors::ErrorKind::InvalidKeyFormat,
+            ));
+        };
+
+        let token_data = decode::<Claims>(token, &decoding_key, &validation)?;
+        info!(
+            "JWT signature verified successfully for subject: {}",
+            token_data.claims.sub
+        );
+        Ok(token_data.claims)
+    }
 }
 
 async fn handle_binary_message(
@@ -444,8 +558,13 @@ async fn handle_binary_message(
             .await
         } // internal
         Some(MessageType::Event) => handle_event(server_state, payload, nats_connection).await, // embedded
+        Some(MessageType::Error) => {
+            // Error messages are sent from server to client, not received
+            error!("Received unexpected Error message type from client");
+            None
+        }
         None => {
-            // println!("Unknown message type: {:?}", message_type);
+            // Unknown message type
             None
         }
     }
@@ -459,14 +578,18 @@ async fn handle_nats_publish(
 ) -> Option<Message> {
     match NATSMessage::new(payload) {
         Ok(nanotdf_msg) => {
-            let nats_client = nats_connection.get_client().await;
-            if let Err(e) = nanotdf_msg
-                .send_to_nats(&nats_client.unwrap(), settings.nats_subject.clone())
-                .await
-            {
-                error!("Failed to send NanoTDF message to NATS: {}", e);
+            // Check if NATS client is available before attempting to send
+            if let Some(nats_client) = nats_connection.get_client().await {
+                if let Err(e) = nanotdf_msg
+                    .send_to_nats(&nats_client, settings.nats_subject.clone())
+                    .await
+                {
+                    error!("Failed to send NanoTDF message to NATS: {}", e);
+                } else {
+                    info!("NanoTDF message sent to NATS successfully");
+                }
             } else {
-                info!("NanoTDF message sent to NATS successfully");
+                error!("NATS client not available - message not sent");
             }
         }
         Err(e) => {
@@ -489,8 +612,11 @@ async fn handle_rewrap(
         shared_secret.clone()
     };
     if session_shared_secret.is_none() {
-        info!("Shared Secret not set");
-        return None;
+        error!("Rewrap attempted before key agreement - no session secret");
+        return Some(
+            ErrorResponse::invalid_format("Session not established - perform key agreement first")
+                .to_message(),
+        );
     }
     let session_shared_secret = session_shared_secret.unwrap();
     // Parse NanoTDF header
@@ -498,8 +624,11 @@ async fn handle_rewrap(
     let header = match BinaryParser::parse_header(&mut parser) {
         Ok(header) => header,
         Err(e) => {
-            info!("Error parsing header: {:?}", e);
-            return None;
+            error!("Failed to parse NanoTDF header: {:?}", e);
+            return Some(
+                ErrorResponse::invalid_format(format!("Invalid NanoTDF header: {}", e))
+                    .to_message(),
+            );
         }
     };
     // timing
@@ -508,8 +637,17 @@ async fn handle_rewrap(
     // TDF ephemeral key
     let tdf_ephemeral_key_bytes = header.get_ephemeral_key();
     if tdf_ephemeral_key_bytes.len() != 33 {
-        info!("Invalid TDF compressed ephemeral key length");
-        return None;
+        error!(
+            "Invalid NanoTDF ephemeral key length: {} (expected 33)",
+            tdf_ephemeral_key_bytes.len()
+        );
+        return Some(
+            ErrorResponse::invalid_format(format!(
+                "Invalid ephemeral key size: {} bytes",
+                tdf_ephemeral_key_bytes.len()
+            ))
+            .to_message(),
+        );
     }
     // TDF contract
     let policy = header.get_policy();
@@ -523,31 +661,50 @@ async fn handle_rewrap(
             locator = policy.get_locator().clone();
         }
         PolicyType::Embedded => {
-            println!("embedded policy");
+            info!("Processing embedded policy");
             if let Some(body) = &policy.body {
-                println!("Metadata buffer size: {}", body.len());
-                println!("Metadata buffer contents: {:?}", body);
+                info!("Metadata buffer size: {}", body.len());
                 metadata = match root_as_metadata(body) {
                     Ok(metadata) => Some(metadata),
                     Err(e) => {
-                        eprintln!("Failed to parse metadata: {}", e);
-                        return None;
+                        error!("Failed to parse embedded policy metadata: {}", e);
+                        return Some(
+                            ErrorResponse::invalid_format(format!(
+                                "Invalid embedded policy metadata: {}",
+                                e
+                            ))
+                            .to_message(),
+                        );
                     }
                 };
-                // TODO add contracts
-                println!("metadata: {:#?}", metadata);
+                info!("Parsed metadata: {:#?}", metadata);
+
+                // For embedded policies with rating metadata, infer content rating contract
+                // TODO: Add contract_id field to metadata schema or use policy binding
+                // to explicitly specify which contract to use
+                if let Some(ref meta) = metadata {
+                    if meta.rating().is_some() {
+                        locator = Some(ResourceLocator {
+                            protocol_enum: ProtocolEnum::SharedResource,
+                            body: "5HKLo6CKbt1Z5dU4wZ3MiufeZzjM6JGwKUWUQ6a91fmuA6RB".to_string(),
+                        });
+                        info!("Inferred content rating contract from metadata");
+                    } else {
+                        // Metadata present but no rating - no contract enforcement
+                        locator = None;
+                        info!("No rating in metadata - skipping contract enforcement");
+                    }
+                } else {
+                    locator = None;
+                }
+            } else {
+                locator = None;
             }
-            // add content rating contract
-            let rl = ResourceLocator {
-                protocol_enum: ProtocolEnum::SharedResource,
-                body: "5HKLo6CKbt1Z5dU4wZ3MiufeZzjM6JGwKUWUQ6a91fmuA6RB".to_string(),
-            };
-            locator = Some(rl);
         }
     }
     if let Some(locator) = &locator {
         if locator.protocol_enum == ProtocolEnum::SharedResource {
-            println!("contract {}", locator.body.clone());
+            info!("Evaluating contract: {}", locator.body.clone());
             if !locator.body.is_empty() {
                 //  "Verified 18+"
                 let claims_result = match connection_state.claims_lock.read() {
@@ -596,15 +753,18 @@ async fn handle_rewrap(
                             if claims_result.is_ok()
                                 && !contract.is_within_geofence(geofence, coordinate)
                             {
-                                // binary response for DENY
-                                let mut response_data: Vec<u8> = Vec::new();
-                                response_data.push(MessageType::RewrappedKey as u8);
-                                response_data.extend_from_slice(tdf_ephemeral_key_bytes);
+                                error!(
+                                    "Geofence policy denied access - location outside allowed area"
+                                );
                                 // timing
                                 let total_time = start_time.elapsed();
-                                log_timing(settings, "Time to deny", total_time);
-                                // DENY
-                                return Some(Message::Binary(response_data));
+                                log_timing(settings, "Time to deny (geofence)", total_time);
+                                return Some(
+                                    ErrorResponse::policy_denied(
+                                        "Access denied - location outside permitted geofence",
+                                    )
+                                    .to_message(),
+                                );
                             }
                         }
                     }
@@ -664,9 +824,20 @@ async fn handle_rewrap(
                         mature: convert_rating_level(rating_data.mature()),
                         bully: convert_rating_level(rating_data.bully()),
                     };
+                    // Format age level before check_content consumes it
+                    let age_level_str = format!("{:?}", age_level);
                     if !contract.check_content(age_level, rating) {
-                        println!("content rating DENY");
-                        return None;
+                        error!(
+                            "Content rating policy denied access for age level: {}",
+                            age_level_str
+                        );
+                        return Some(
+                            ErrorResponse::policy_denied(format!(
+                                "Content not suitable for age level: {}",
+                                age_level_str
+                            ))
+                            .to_message(),
+                        );
                     }
                 }
                 // simple_abac
@@ -678,15 +849,16 @@ async fn handle_rewrap(
                     if claims_result.is_ok()
                         && !contract.check_access(claims_result.unwrap(), locator.body.clone())
                     {
-                        // binary response
-                        let mut response_data = Vec::new();
-                        response_data.push(MessageType::RewrappedKey as u8);
-                        response_data.extend_from_slice(tdf_ephemeral_key_bytes);
+                        error!("ABAC policy denied access for user claims");
                         // timing
                         let total_time = start_time.elapsed();
-                        log_timing(settings, "Time to deny", total_time);
-                        // DENY
-                        return Some(Message::Binary(response_data));
+                        log_timing(settings, "Time to deny (ABAC)", total_time);
+                        return Some(
+                            ErrorResponse::policy_denied(
+                                "Access denied by attribute-based access control policy",
+                            )
+                            .to_message(),
+                        );
                     }
                 }
             }
@@ -765,22 +937,34 @@ async fn handle_public_key(
         let shared_secret_lock = connection_state.shared_secret_lock.read();
         let shared_secret = shared_secret_lock.unwrap();
         if shared_secret.is_some() {
-            // println!("Shared Secret Connection: {}", hex::encode(shared_secret.clone().unwrap()));
+            // Session already established - ignore duplicate key exchange
             return None;
         }
     }
-    // println!("Client Public Key payload: {}", hex::encode(payload.as_ref()));
+
     if payload.len() != 33 {
-        error!("Client Public Key wrong size");
-        error!("Client Public Key length: {}", payload.len());
-        return None;
+        error!(
+            "Invalid client public key size: {} bytes (expected 33)",
+            payload.len()
+        );
+        return Some(
+            ErrorResponse::invalid_format(format!(
+                "Invalid public key size: {} bytes (expected 33 for compressed P-256)",
+                payload.len()
+            ))
+            .to_message(),
+        );
     }
+
     // Deserialize the public key sent by the client
     let client_public_key = match PublicKey::from_sec1_bytes(payload) {
         Ok(key) => key,
         Err(e) => {
-            error!("Error deserializing client public key: {:?}", e);
-            return None;
+            error!("Failed to deserialize client public key: {:?}", e);
+            return Some(
+                ErrorResponse::crypto_error(format!("Invalid P-256 public key: {}", e))
+                    .to_message(),
+            );
         }
     };
     // Generate an ephemeral private key
@@ -1177,6 +1361,8 @@ struct ServerSettings {
     nats_url: String,
     nats_subject: String,
     redis_url: String,
+    jwt_validation_disabled: bool,
+    jwt_public_key_path: Option<String>,
 }
 
 fn log_timing(settings: &ServerSettings, message: &str, duration: std::time::Duration) {
@@ -1220,6 +1406,11 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
         nats_url: env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string()),
         nats_subject: env::var("NATS_SUBJECT").unwrap_or_else(|_| "nanotdf.messages".to_string()),
         redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string()),
+        jwt_validation_disabled: env::var("JWT_VALIDATION_DISABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse()
+            .unwrap_or(true),
+        jwt_public_key_path: env::var("JWT_PUBLIC_KEY_PATH").ok(),
     })
 }
 

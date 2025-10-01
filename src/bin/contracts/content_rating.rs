@@ -1,4 +1,5 @@
 #![allow(unexpected_cfgs)]
+#![allow(dead_code)] // Ink contract generated functions
 #[ink::contract]
 pub mod content_rating {
     #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
