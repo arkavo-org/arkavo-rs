@@ -512,14 +512,18 @@ async fn handle_nats_publish(
 ) -> Option<Message> {
     match NATSMessage::new(payload) {
         Ok(nanotdf_msg) => {
-            let nats_client = nats_connection.get_client().await;
-            if let Err(e) = nanotdf_msg
-                .send_to_nats(&nats_client.unwrap(), settings.nats_subject.clone())
-                .await
-            {
-                error!("Failed to send NanoTDF message to NATS: {}", e);
+            // Check if NATS client is available before attempting to send
+            if let Some(nats_client) = nats_connection.get_client().await {
+                if let Err(e) = nanotdf_msg
+                    .send_to_nats(&nats_client, settings.nats_subject.clone())
+                    .await
+                {
+                    error!("Failed to send NanoTDF message to NATS: {}", e);
+                } else {
+                    info!("NanoTDF message sent to NATS successfully");
+                }
             } else {
-                info!("NanoTDF message sent to NATS successfully");
+                error!("NATS client not available - message not sent");
             }
         }
         Err(e) => {
