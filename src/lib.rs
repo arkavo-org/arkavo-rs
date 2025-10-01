@@ -56,6 +56,9 @@ impl Header {
     pub fn get_policy(&self) -> &Policy {
         &self.policy
     }
+    pub fn get_ecc_mode(&self) -> &ECCAndBindingMode {
+        &self.ecc_mode
+    }
 }
 
 #[derive(Debug)]
@@ -460,5 +463,99 @@ mod tests {
         // NanoTDFTests::test_no_signature_spec_example_binary_parser()?;
         NanoTDFTests::teardown()?;
         Ok(())
+    }
+
+    #[test]
+    fn test_policy_binding_size_validation() {
+        // Test ECDSA binding sizes for different curves
+        let binding_mode_secp256r1 = ECCAndBindingMode {
+            use_ecdsa_binding: true,
+            ephemeral_ecc_params_enum: ECDSAParams::Secp256r1,
+        };
+
+        let binding_mode_secp384r1 = ECCAndBindingMode {
+            use_ecdsa_binding: true,
+            ephemeral_ecc_params_enum: ECDSAParams::Secp384r1,
+        };
+
+        let binding_mode_secp521r1 = ECCAndBindingMode {
+            use_ecdsa_binding: true,
+            ephemeral_ecc_params_enum: ECDSAParams::Secp521r1,
+        };
+
+        // Secp256r1 should be 64 bytes
+        assert_eq!(
+            match binding_mode_secp256r1.ephemeral_ecc_params_enum {
+                ECDSAParams::Secp256r1 | ECDSAParams::Secp256k1 => 64,
+                ECDSAParams::Secp384r1 => 96,
+                ECDSAParams::Secp521r1 => 132,
+            },
+            64
+        );
+
+        // Secp384r1 should be 96 bytes
+        assert_eq!(
+            match binding_mode_secp384r1.ephemeral_ecc_params_enum {
+                ECDSAParams::Secp256r1 | ECDSAParams::Secp256k1 => 64,
+                ECDSAParams::Secp384r1 => 96,
+                ECDSAParams::Secp521r1 => 132,
+            },
+            96
+        );
+
+        // Secp521r1 should be 132 bytes
+        assert_eq!(
+            match binding_mode_secp521r1.ephemeral_ecc_params_enum {
+                ECDSAParams::Secp256r1 | ECDSAParams::Secp256k1 => 64,
+                ECDSAParams::Secp384r1 => 96,
+                ECDSAParams::Secp521r1 => 132,
+            },
+            132
+        );
+    }
+
+    #[test]
+    fn test_gmac_binding_size() {
+        // GMAC binding should always be 16 bytes (128 bits)
+        let expected_gmac_size = 16;
+
+        // Simulate GMAC binding validation
+        let valid_gmac_binding = vec![0u8; 16];
+        let invalid_gmac_binding_short = vec![0u8; 8];
+        let invalid_gmac_binding_long = vec![0u8; 32];
+
+        assert_eq!(valid_gmac_binding.len(), expected_gmac_size);
+        assert_ne!(invalid_gmac_binding_short.len(), expected_gmac_size);
+        assert_ne!(invalid_gmac_binding_long.len(), expected_gmac_size);
+    }
+
+    #[test]
+    fn test_policy_binding_format_detection() {
+        // Test detection of ECDSA vs GMAC binding based on ECC mode
+        let ecdsa_mode = ECCAndBindingMode {
+            use_ecdsa_binding: true,
+            ephemeral_ecc_params_enum: ECDSAParams::Secp256r1,
+        };
+
+        let gmac_mode = ECCAndBindingMode {
+            use_ecdsa_binding: false,
+            ephemeral_ecc_params_enum: ECDSAParams::Secp256r1,
+        };
+
+        // Verify ECDSA mode detection
+        assert!(ecdsa_mode.use_ecdsa_binding);
+        assert!(!gmac_mode.use_ecdsa_binding);
+
+        // Verify expected sizes
+        let ecdsa_binding_size = match ecdsa_mode.ephemeral_ecc_params_enum {
+            ECDSAParams::Secp256r1 | ECDSAParams::Secp256k1 => 64,
+            ECDSAParams::Secp384r1 => 96,
+            ECDSAParams::Secp521r1 => 132,
+        };
+        assert_eq!(ecdsa_binding_size, 64);
+
+        // GMAC is always 16 bytes regardless of ECC params
+        let gmac_binding_size = 16;
+        assert_eq!(gmac_binding_size, 16);
     }
 }

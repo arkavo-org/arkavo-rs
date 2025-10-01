@@ -787,63 +787,77 @@ async fn handle_rewrap(
     // to either an ECDSA signature or GMAC tag
     if let Some(binding_bytes) = policy.get_binding() {
         info!("Policy binding present ({} bytes)", binding_bytes.len());
-        // TODO: Implement policy binding verification
-        // The binding verification depends on the ECC mode:
-        // - If use_ecdsa_binding: Verify ECDSA signature over policy body
-        // - If GMAC binding: Verify GMAC tag over policy body
-        //
-        // For now, log warning and continue without verification
-        log::warn!(
-            "Policy binding verification not yet implemented - proceeding without verification"
-        );
-        //
-        // Future implementation:
-        // let ecc_mode = header.get_ecc_mode();
-        // if ecc_mode.use_ecdsa_binding {
-        //     // Verify ECDSA signature
-        //     match verify_ecdsa_binding(binding_bytes, &policy.body, &ecc_mode) {
-        //         Ok(true) => info!("Policy binding signature verified"),
-        //         Ok(false) => {
-        //             error!("Policy binding signature verification failed");
-        //             return Some(
-        //                 ErrorResponse::policy_denied("Invalid policy binding signature")
-        //                     .to_message(),
-        //             );
-        //         }
-        //         Err(e) => {
-        //             error!("Policy binding verification error: {}", e);
-        //             return Some(
-        //                 ErrorResponse::invalid_format(format!(
-        //                     "Policy binding verification failed: {}",
-        //                     e
-        //                 ))
-        //                 .to_message(),
-        //             );
-        //         }
-        //     }
-        // } else {
-        //     // Verify GMAC tag
-        //     match verify_gmac_binding(binding_bytes, &policy.body) {
-        //         Ok(true) => info!("Policy binding GMAC verified"),
-        //         Ok(false) => {
-        //             error!("Policy binding GMAC verification failed");
-        //             return Some(
-        //                 ErrorResponse::policy_denied("Invalid policy binding GMAC")
-        //                     .to_message(),
-        //             );
-        //         }
-        //         Err(e) => {
-        //             error!("Policy binding verification error: {}", e);
-        //             return Some(
-        //                 ErrorResponse::invalid_format(format!(
-        //                     "Policy binding verification failed: {}",
-        //                     e
-        //                 ))
-        //                 .to_message(),
-        //             );
-        //         }
-        //     }
-        // }
+
+        let ecc_mode = header.get_ecc_mode();
+
+        // Validate binding format based on binding type
+        if ecc_mode.use_ecdsa_binding {
+            // ECDSA binding - validate signature format
+            let expected_size = match ecc_mode.ephemeral_ecc_params_enum {
+                nanotdf::ECDSAParams::Secp256r1 | nanotdf::ECDSAParams::Secp256k1 => 64,
+                nanotdf::ECDSAParams::Secp384r1 => 96,
+                nanotdf::ECDSAParams::Secp521r1 => 132,
+            };
+
+            if binding_bytes.len() != expected_size {
+                error!(
+                    "Invalid ECDSA binding size: {} bytes (expected {} for {:?})",
+                    binding_bytes.len(),
+                    expected_size,
+                    ecc_mode.ephemeral_ecc_params_enum
+                );
+                return Some(
+                    ErrorResponse::invalid_format(format!(
+                        "Invalid policy binding signature size: {} bytes (expected {})",
+                        binding_bytes.len(),
+                        expected_size
+                    ))
+                    .to_message(),
+                );
+            }
+
+            info!(
+                "ECDSA policy binding format validated ({:?})",
+                ecc_mode.ephemeral_ecc_params_enum
+            );
+
+            // For full ECDSA verification, we need the public key from the policy authority
+            // This would typically be:
+            // 1. Embedded in the policy metadata as a JWK or raw bytes
+            // 2. Retrieved from a trusted authority/certificate
+            // 3. Derived from a known policy signing key
+            //
+            // Without the public key, we can only validate format
+            log::warn!(
+                "ECDSA policy binding signature format valid, but cryptographic verification \
+                 requires policy authority public key (not implemented)"
+            );
+        } else {
+            // GMAC binding - validate tag size
+            if binding_bytes.len() != 16 {
+                error!(
+                    "Invalid GMAC binding size: {} bytes (expected 16)",
+                    binding_bytes.len()
+                );
+                return Some(
+                    ErrorResponse::invalid_format(format!(
+                        "Invalid policy binding GMAC tag size: {} bytes (expected 16)",
+                        binding_bytes.len()
+                    ))
+                    .to_message(),
+                );
+            }
+
+            info!("GMAC policy binding format validated");
+
+            // GMAC verification requires the symmetric key derived during rewrap
+            // The GMAC tag is computed over the policy bytes using the payload key
+            // We'll verify this later in the rewrap process after deriving the key
+            log::warn!(
+                "GMAC policy binding tag format valid, but cryptographic verification \
+                 requires payload key (deferred to rewrap)"
+            );
+        }
     } else {
         info!("No policy binding present");
     }
