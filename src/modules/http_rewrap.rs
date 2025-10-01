@@ -9,10 +9,8 @@ use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use log::{error, info};
 use nanotdf::BinaryParser;
 use p256::{
-    ecdh::EphemeralSecret,
-    elliptic_curve::sec1::ToEncodedPoint,
-    PublicKey as P256PublicKey,
-    SecretKey
+    ecdh::EphemeralSecret, elliptic_curve::sec1::ToEncodedPoint, PublicKey as P256PublicKey,
+    SecretKey,
 };
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
@@ -54,7 +52,7 @@ pub struct UnsignedRewrapRequest {
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub struct RewrapRequestEntry {
-    pub algorithm: String,        // "ec:secp256r1"
+    pub algorithm: String, // "ec:secp256r1"
     pub policy: Policy,
     pub key_access_objects: Vec<KeyAccessObjectWrapper>,
 }
@@ -103,7 +101,7 @@ pub struct ResponsePolicyEntry {
 #[serde(rename_all = "camelCase")]
 pub struct KASResult {
     pub key_access_object_id: String,
-    pub status: String, // "permit" or "fail"
+    pub status: String,                  // "permit" or "fail"
     pub kas_wrapped_key: Option<String>, // Base64
     pub metadata: Option<serde_json::Value>,
 }
@@ -271,30 +269,23 @@ fn verify_and_decode_jwt(
 
     let token_data = if let Some(pem) = oauth_public_key_pem {
         // Validate signature with provided public key
-        let decoding_key = DecodingKey::from_ec_pem(pem.as_bytes()).map_err(|e| {
-            ErrorResponse {
-                error: "configuration_error".to_string(),
-                message: format!("Failed to load OAuth public key: {}", e),
-            }
+        let decoding_key = DecodingKey::from_ec_pem(pem.as_bytes()).map_err(|e| ErrorResponse {
+            error: "configuration_error".to_string(),
+            message: format!("Failed to load OAuth public key: {}", e),
         })?;
 
-        decode::<JWTClaims>(token, &decoding_key, &validation).map_err(|e| {
-            ErrorResponse {
-                error: "authentication_failed".to_string(),
-                message: format!("JWT validation failed: {}", e),
-            }
+        decode::<JWTClaims>(token, &decoding_key, &validation).map_err(|e| ErrorResponse {
+            error: "authentication_failed".to_string(),
+            message: format!("JWT validation failed: {}", e),
         })?
     } else {
         // Development mode: skip signature validation
         validation.insecure_disable_signature_validation();
-        decode::<JWTClaims>(
-            token,
-            &DecodingKey::from_secret(&[]),
-            &validation,
-        )
-        .map_err(|e| ErrorResponse {
-            error: "authentication_failed".to_string(),
-            message: format!("Invalid JWT: {}", e),
+        decode::<JWTClaims>(token, &DecodingKey::from_secret(&[]), &validation).map_err(|e| {
+            ErrorResponse {
+                error: "authentication_failed".to_string(),
+                message: format!("Invalid JWT: {}", e),
+            }
         })?
     };
 
@@ -315,12 +306,11 @@ fn parse_pem_public_key(pem: &str) -> Result<P256PublicKey, ErrorResponse> {
         message: format!("Failed to parse PEM: {}", e),
     })?;
 
-    let public_key = P256PublicKey::from_sec1_bytes(pem_parsed.contents()).map_err(|e| {
-        ErrorResponse {
+    let public_key =
+        P256PublicKey::from_sec1_bytes(pem_parsed.contents()).map_err(|e| ErrorResponse {
             error: "invalid_request".to_string(),
             message: format!("Invalid P-256 public key: {}", e),
-        }
-    })?;
+        })?;
 
     Ok(public_key)
 }

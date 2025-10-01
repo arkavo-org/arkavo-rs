@@ -133,11 +133,17 @@ mod tests {
     fn test_detect_nanotdf_version() {
         // Valid v12 header
         let header_v12 = b"L1L";
-        assert_eq!(detect_nanotdf_version(header_v12), Some(NANOTDF_VERSION_V12));
+        assert_eq!(
+            detect_nanotdf_version(header_v12),
+            Some(NANOTDF_VERSION_V12)
+        );
 
         // Valid v13 header
         let header_v13 = b"L1M";
-        assert_eq!(detect_nanotdf_version(header_v13), Some(NANOTDF_VERSION_V13));
+        assert_eq!(
+            detect_nanotdf_version(header_v13),
+            Some(NANOTDF_VERSION_V13)
+        );
 
         // Invalid magic
         let header_invalid = b"XXL";

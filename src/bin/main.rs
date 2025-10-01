@@ -227,8 +227,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kas_private_key_array: [u8; 32] = kas_private_key_bytes
         .try_into()
         .expect("Invalid KAS private key size");
-    let kas_private_key = SecretKey::from_bytes(&kas_private_key_array.into())
-        .expect("Invalid KAS private key");
+    let kas_private_key =
+        SecretKey::from_bytes(&kas_private_key_array.into()).expect("Invalid KAS private key");
     let kas_public_key = kas_private_key.public_key();
     let kas_public_key_pem = {
         let encoded = kas_public_key.to_encoded_point(false);
@@ -291,10 +291,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         oauth_public_key_pem,
     });
 
-    use axum::{routing::{get, post}, Router};
+    use axum::{
+        routing::{get, post},
+        Router,
+    };
     let app = Router::new()
         .route("/kas/v2/rewrap", post(http_rewrap::rewrap_handler))
-        .route("/kas/v2/kas_public_key", get(http_rewrap::kas_public_key_handler))
+        .route(
+            "/kas/v2/kas_public_key",
+            get(http_rewrap::kas_public_key_handler),
+        )
         .with_state(rewrap_state);
 
     let http_addr = format!("0.0.0.0:{}", http_port);
@@ -328,17 +334,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 tokio::spawn(async move {
                     // Use a trait object to hold either TcpStream or TlsStream<TcpStream>
-                    let stream: Box<dyn AsyncStream> = if let Some(tls_acceptor) = tls_acceptor_clone {
-                        match tls_acceptor.accept(stream).await {
-                            Ok(tls_stream) => Box::new(tls_stream),
-                            Err(e) => {
-                                eprintln!("Failed to accept TLS connection: {}", e);
-                                return;
+                    let stream: Box<dyn AsyncStream> =
+                        if let Some(tls_acceptor) = tls_acceptor_clone {
+                            match tls_acceptor.accept(stream).await {
+                                Ok(tls_stream) => Box::new(tls_stream),
+                                Err(e) => {
+                                    eprintln!("Failed to accept TLS connection: {}", e);
+                                    return;
+                                }
                             }
-                        }
-                    } else {
-                        Box::new(stream)
-                    };
+                        } else {
+                            Box::new(stream)
+                        };
 
                     handle_connection(
                         stream,
@@ -1129,13 +1136,14 @@ async fn handle_rewrap(
 
     // Perform custom ECDH
     let ecdh_start = Instant::now();
-    let dek_shared_secret_bytes = match crypto::custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
-        Ok(secret) => secret,
-        Err(e) => {
-            info!("Error performing ECDH: {:?}", e);
-            return None;
-        }
-    };
+    let dek_shared_secret_bytes =
+        match crypto::custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
+            Ok(secret) => secret,
+            Err(e) => {
+                info!("Error performing ECDH: {:?}", e);
+                return None;
+            }
+        };
     let ecdh_time = ecdh_start.elapsed();
     log_timing(settings, "Time for ECDH operation", ecdh_time);
 
@@ -1161,8 +1169,7 @@ async fn handle_rewrap(
         Err(e) => {
             error!("Rewrap DEK failed: {}", e);
             return Some(
-                ErrorResponse::crypto_error(format!("Failed to rewrap key: {}", e))
-                    .to_message(),
+                ErrorResponse::crypto_error(format!("Failed to rewrap key: {}", e)).to_message(),
             );
         }
     };
