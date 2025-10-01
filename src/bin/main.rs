@@ -580,31 +580,44 @@ async fn handle_rewrap(
             locator = policy.get_locator().clone();
         }
         PolicyType::Embedded => {
-            println!("embedded policy");
+            info!("Processing embedded policy");
             if let Some(body) = &policy.body {
-                println!("Metadata buffer size: {}", body.len());
-                println!("Metadata buffer contents: {:?}", body);
+                info!("Metadata buffer size: {}", body.len());
                 metadata = match root_as_metadata(body) {
                     Ok(metadata) => Some(metadata),
                     Err(e) => {
-                        eprintln!("Failed to parse metadata: {}", e);
+                        error!("Failed to parse metadata: {}", e);
                         return None;
                     }
                 };
-                // TODO add contracts
-                println!("metadata: {:#?}", metadata);
+                info!("Parsed metadata: {:#?}", metadata);
+
+                // For embedded policies with rating metadata, infer content rating contract
+                // TODO: Add contract_id field to metadata schema or use policy binding
+                // to explicitly specify which contract to use
+                if let Some(ref meta) = metadata {
+                    if meta.rating().is_some() {
+                        locator = Some(ResourceLocator {
+                            protocol_enum: ProtocolEnum::SharedResource,
+                            body: "5HKLo6CKbt1Z5dU4wZ3MiufeZzjM6JGwKUWUQ6a91fmuA6RB".to_string(),
+                        });
+                        info!("Inferred content rating contract from metadata");
+                    } else {
+                        // Metadata present but no rating - no contract enforcement
+                        locator = None;
+                        info!("No rating in metadata - skipping contract enforcement");
+                    }
+                } else {
+                    locator = None;
+                }
+            } else {
+                locator = None;
             }
-            // add content rating contract
-            let rl = ResourceLocator {
-                protocol_enum: ProtocolEnum::SharedResource,
-                body: "5HKLo6CKbt1Z5dU4wZ3MiufeZzjM6JGwKUWUQ6a91fmuA6RB".to_string(),
-            };
-            locator = Some(rl);
         }
     }
     if let Some(locator) = &locator {
         if locator.protocol_enum == ProtocolEnum::SharedResource {
-            println!("contract {}", locator.body.clone());
+            info!("Evaluating contract: {}", locator.body.clone());
             if !locator.body.is_empty() {
                 //  "Verified 18+"
                 let claims_result = match connection_state.claims_lock.read() {
