@@ -47,6 +47,12 @@ flatbuffers = "24.12.23"
 scale = { package = "parity-scale-codec", version = "3.6.12", default-features = false, features = ["derive"] }
 scale-info = { version = "2.11.3", default-features = false, features = ["derive"], optional = true }
 bs58 = "0.5.1"
+axum = "0.7"
+tower = "0.4"
+hyper = "1.0"
+http-body-util = "0.1"
+base64 = "0.22"
+chrono = "0.4"
 
 [dev-dependencies]
 criterion = "0.5.1"
