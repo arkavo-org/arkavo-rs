@@ -1,4 +1,5 @@
 #![allow(unexpected_cfgs)]
+#![allow(dead_code)] // Ink contract generated functions
 #[ink::contract]
 pub mod geo_fence_contract {
     use scale::{Decode, Encode};

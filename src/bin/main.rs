@@ -30,7 +30,6 @@ use rand_core::{OsRng, RngCore};
 use redis::AsyncCommands;
 use redis::Client as RedisClient;
 use serde::{Deserialize, Serialize};
-use serde_json;
 use sha2::Sha256;
 use std::env;
 use std::pin::Pin;
@@ -45,6 +44,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio_native_tls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::Message;
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug)]
 struct PublicKeyMessage {
     salt: Vec<u8>,
@@ -181,6 +181,7 @@ impl ErrorResponse {
         }
     }
 
+    #[allow(dead_code)]
     fn server_error(message: impl Into<String>) -> Self {
         Self {
             error_type: "server_error".to_string(),
