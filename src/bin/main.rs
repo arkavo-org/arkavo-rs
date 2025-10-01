@@ -484,13 +484,15 @@ fn verify_token(
         validation.validate_aud = false; // Can be enabled if audience is specified
 
         // Load the public key for verification
-        let public_key_path = settings
-            .jwt_public_key_path
-            .as_ref()
-            .ok_or_else(|| jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidKeyFormat))?;
+        let public_key_path = settings.jwt_public_key_path.as_ref().ok_or_else(|| {
+            jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidKeyFormat)
+        })?;
 
         let public_key_pem = std::fs::read_to_string(public_key_path).map_err(|e| {
-            error!("Failed to read JWT public key from {}: {}", public_key_path, e);
+            error!(
+                "Failed to read JWT public key from {}: {}",
+                public_key_path, e
+            );
             jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidKeyFormat)
         })?;
 
@@ -518,7 +520,10 @@ fn verify_token(
         };
 
         let token_data = decode::<Claims>(token, &decoding_key, &validation)?;
-        info!("JWT signature verified successfully for subject: {}", token_data.claims.sub);
+        info!(
+            "JWT signature verified successfully for subject: {}",
+            token_data.claims.sub
+        );
         Ok(token_data.claims)
     }
 }
@@ -609,10 +614,8 @@ async fn handle_rewrap(
     if session_shared_secret.is_none() {
         error!("Rewrap attempted before key agreement - no session secret");
         return Some(
-            ErrorResponse::invalid_format(
-                "Session not established - perform key agreement first",
-            )
-            .to_message(),
+            ErrorResponse::invalid_format("Session not established - perform key agreement first")
+                .to_message(),
         );
     }
     let session_shared_secret = session_shared_secret.unwrap();
@@ -750,7 +753,9 @@ async fn handle_rewrap(
                             if claims_result.is_ok()
                                 && !contract.is_within_geofence(geofence, coordinate)
                             {
-                                error!("Geofence policy denied access - location outside allowed area");
+                                error!(
+                                    "Geofence policy denied access - location outside allowed area"
+                                );
                                 // timing
                                 let total_time = start_time.elapsed();
                                 log_timing(settings, "Time to deny (geofence)", total_time);
@@ -822,7 +827,10 @@ async fn handle_rewrap(
                     // Format age level before check_content consumes it
                     let age_level_str = format!("{:?}", age_level);
                     if !contract.check_content(age_level, rating) {
-                        error!("Content rating policy denied access for age level: {}", age_level_str);
+                        error!(
+                            "Content rating policy denied access for age level: {}",
+                            age_level_str
+                        );
                         return Some(
                             ErrorResponse::policy_denied(format!(
                                 "Content not suitable for age level: {}",
@@ -846,8 +854,10 @@ async fn handle_rewrap(
                         let total_time = start_time.elapsed();
                         log_timing(settings, "Time to deny (ABAC)", total_time);
                         return Some(
-                            ErrorResponse::policy_denied("Access denied by attribute-based access control policy")
-                                .to_message(),
+                            ErrorResponse::policy_denied(
+                                "Access denied by attribute-based access control policy",
+                            )
+                            .to_message(),
                         );
                     }
                 }
@@ -933,7 +943,10 @@ async fn handle_public_key(
     }
 
     if payload.len() != 33 {
-        error!("Invalid client public key size: {} bytes (expected 33)", payload.len());
+        error!(
+            "Invalid client public key size: {} bytes (expected 33)",
+            payload.len()
+        );
         return Some(
             ErrorResponse::invalid_format(format!(
                 "Invalid public key size: {} bytes (expected 33 for compressed P-256)",
