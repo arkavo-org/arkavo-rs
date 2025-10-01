@@ -288,7 +288,7 @@ async fn handle_websocket(
                             // Handle JWT token
                             let token = msg.into_text().unwrap();
                             println!("token: {}", token);
-                            match verify_token(&token) {
+                            match verify_token(&token, &server_state.settings) {
                                 Ok(claims) => {
                                     println!("Valid JWT received. Claims: {:?}", claims);
                                     // store the claims
@@ -311,7 +311,7 @@ async fn handle_websocket(
                                     )));
                                 }
                                 Err(e) => {
-                                    println!("Invalid JWT: {}", e);
+                                    error!("Invalid JWT: {}", e);
                                 }
                             }
                         } else if let Some(response) = handle_binary_message(&connection_state, &server_state, msg.into_data(), nats_connection.clone()).await {
@@ -403,15 +403,68 @@ struct Claims {
     sub: String,
     age: String,
 }
-fn verify_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
+
+fn verify_token(
+    token: &str,
+    settings: &ServerSettings,
+) -> Result<Claims, jsonwebtoken::errors::Error> {
     let mut validation = Validation::default();
-    validation.insecure_disable_signature_validation();
-    validation.validate_exp = false;
-    validation.validate_aud = false;
-    let secret = b"any_secret_key"; // The actual value doesn't matter when signature validation is disabled
-    let token_data = decode::<Claims>(token, &DecodingKey::from_secret(secret), &validation)?;
-    // println!("Decoded token: {:?}", token_data.claims);
-    Ok(token_data.claims)
+
+    if settings.jwt_validation_disabled {
+        // Development mode - disable signature validation
+        log::warn!(
+            "⚠️  JWT signature validation is DISABLED - for development only! \
+             Set JWT_VALIDATION_DISABLED=false for production."
+        );
+        validation.insecure_disable_signature_validation();
+        validation.validate_exp = false;
+        validation.validate_aud = false;
+        let secret = b"any_secret_key"; // The actual value doesn't matter when validation is disabled
+        let token_data = decode::<Claims>(token, &DecodingKey::from_secret(secret), &validation)?;
+        Ok(token_data.claims)
+    } else {
+        // Production mode - proper JWT validation
+        validation.validate_exp = true;
+        validation.validate_aud = false; // Can be enabled if audience is specified
+
+        // Load the public key for verification
+        let public_key_path = settings
+            .jwt_public_key_path
+            .as_ref()
+            .ok_or_else(|| jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidKeyFormat))?;
+
+        let public_key_pem = std::fs::read_to_string(public_key_path).map_err(|e| {
+            error!("Failed to read JWT public key from {}: {}", public_key_path, e);
+            jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidKeyFormat)
+        })?;
+
+        // Support both RSA and ECDSA keys
+        let decoding_key = if public_key_pem.contains("BEGIN RSA PUBLIC KEY")
+            || public_key_pem.contains("BEGIN PUBLIC KEY")
+        {
+            validation.algorithms = vec![
+                jsonwebtoken::Algorithm::RS256,
+                jsonwebtoken::Algorithm::RS384,
+                jsonwebtoken::Algorithm::RS512,
+            ];
+            DecodingKey::from_rsa_pem(public_key_pem.as_bytes())?
+        } else if public_key_pem.contains("BEGIN EC PUBLIC KEY") {
+            validation.algorithms = vec![
+                jsonwebtoken::Algorithm::ES256,
+                jsonwebtoken::Algorithm::ES384,
+            ];
+            DecodingKey::from_ec_pem(public_key_pem.as_bytes())?
+        } else {
+            error!("Unsupported JWT public key format");
+            return Err(jsonwebtoken::errors::Error::from(
+                jsonwebtoken::errors::ErrorKind::InvalidKeyFormat,
+            ));
+        };
+
+        let token_data = decode::<Claims>(token, &decoding_key, &validation)?;
+        info!("JWT signature verified successfully for subject: {}", token_data.claims.sub);
+        Ok(token_data.claims)
+    }
 }
 
 async fn handle_binary_message(
@@ -1177,6 +1230,8 @@ struct ServerSettings {
     nats_url: String,
     nats_subject: String,
     redis_url: String,
+    jwt_validation_disabled: bool,
+    jwt_public_key_path: Option<String>,
 }
 
 fn log_timing(settings: &ServerSettings, message: &str, duration: std::time::Duration) {
@@ -1220,6 +1275,11 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
         nats_url: env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string()),
         nats_subject: env::var("NATS_SUBJECT").unwrap_or_else(|_| "nanotdf.messages".to_string()),
         redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string()),
+        jwt_validation_disabled: env::var("JWT_VALIDATION_DISABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse()
+            .unwrap_or(true),
+        jwt_public_key_path: env::var("JWT_PUBLIC_KEY_PATH").ok(),
     })
 }
 
