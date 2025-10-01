@@ -1,6 +1,12 @@
 mod contracts;
 mod schemas;
 
+// Include modules from parent src/modules directory
+#[path = "../modules/mod.rs"]
+mod modules;
+
+use modules::{crypto, http_rewrap};
+
 use crate::contracts::content_rating::content_rating::{
     AgeLevel, ContentRating, Rating, RatingLevel,
 };
@@ -9,16 +15,10 @@ use crate::contracts::{contract_simple_abac, geo_fence_contract};
 use crate::schemas::event_generated::arkavo::{Event, EventData};
 use crate::schemas::metadata_generated::arkavo;
 use crate::schemas::metadata_generated::arkavo::{root_as_metadata, Metadata};
-use aes_gcm::aead::generic_array::GenericArray;
-use aes_gcm::aead::KeyInit;
-use aes_gcm::aead::{Aead, Key};
-use aes_gcm::Aes256Gcm;
 use async_nats::Message as NatsMessage;
 use async_nats::{Client as NatsClient, PublishError};
-use elliptic_curve::point::AffineCoordinates;
 use flatbuffers::root;
 use futures_util::{SinkExt, StreamExt};
-use hkdf::Hkdf;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use log::{error, info};
 use nanotdf::{BinaryParser, PolicyType, ProtocolEnum, ResourceLocator};
@@ -30,7 +30,6 @@ use rand_core::{OsRng, RngCore};
 use redis::AsyncCommands;
 use redis::Client as RedisClient;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 use std::env;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -223,6 +222,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize KAS keys
     init_kas_keys(&settings.kas_key_path)?;
 
+    // Get KAS keys for HTTP rewrap endpoint
+    let kas_private_key_bytes = get_kas_private_key_bytes().expect("KAS keys not initialized");
+    let kas_private_key_array: [u8; 32] = kas_private_key_bytes
+        .try_into()
+        .expect("Invalid KAS private key size");
+    let kas_private_key = SecretKey::from_bytes(&kas_private_key_array.into())
+        .expect("Invalid KAS private key");
+    let kas_public_key = kas_private_key.public_key();
+    let kas_public_key_pem = {
+        let encoded = kas_public_key.to_encoded_point(false);
+        let pem_data = pem::Pem::new("PUBLIC KEY", encoded.as_bytes().to_vec());
+        pem::encode(&pem_data)
+    };
+
     // Set up TLS if not disabled
     let tls_acceptor = if settings.tls_enabled {
         Some(load_tls_config(
@@ -232,6 +245,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
+
     // Initialize NATS connection
     let nats_connection = Arc::new(NatsConnection::new(settings.nats_url.clone()));
     // Spawn a task to handle NATS connection and reconnection
@@ -256,40 +270,90 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::time::sleep(NATS_RETRY_INTERVAL).await;
         }
     });
-    // Bind the server
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", settings.port)).await?;
-    println!("Listening on: 0.0.0.0:{}", settings.port);
 
-    // Accept connections
-    while let Ok((stream, _)) = listener.accept().await {
-        let tls_acceptor_clone = tls_acceptor.clone();
-        let server_state_clone = server_state.clone();
-        let nats_connection_clone = nats_connection.clone();
-        let apple_app_site_association_clone = apple_app_site_association.clone();
+    // Set up HTTP REST API server
+    let http_port = env::var("HTTP_PORT").unwrap_or_else(|_| settings.port.to_string());
 
-        tokio::spawn(async move {
-            // Use a trait object to hold either TcpStream or TlsStream<TcpStream>
-            let stream: Box<dyn AsyncStream> = if let Some(tls_acceptor) = tls_acceptor_clone {
-                match tls_acceptor.accept(stream).await {
-                    Ok(tls_stream) => Box::new(tls_stream),
-                    Err(e) => {
-                        eprintln!("Failed to accept TLS connection: {}", e);
-                        return;
-                    }
-                }
-            } else {
-                Box::new(stream)
-            };
+    // Load OAuth public key from environment if provided
+    let oauth_public_key_pem = env::var("OAUTH_PUBLIC_KEY_PATH")
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok());
 
-            handle_connection(
-                stream,
-                server_state_clone,
-                nats_connection_clone,
-                apple_app_site_association_clone,
-            )
-            .await;
-        });
+    if oauth_public_key_pem.is_some() {
+        info!("OAuth JWT signature validation enabled");
+    } else {
+        info!("OAuth JWT signature validation disabled (development mode)");
     }
+
+    let rewrap_state = Arc::new(http_rewrap::RewrapState {
+        kas_private_key,
+        kas_public_key_pem,
+        oauth_public_key_pem,
+    });
+
+    use axum::{routing::{get, post}, Router};
+    let app = Router::new()
+        .route("/kas/v2/rewrap", post(http_rewrap::rewrap_handler))
+        .route("/kas/v2/kas_public_key", get(http_rewrap::kas_public_key_handler))
+        .with_state(rewrap_state);
+
+    let http_addr = format!("0.0.0.0:{}", http_port);
+    info!("Starting HTTP server on {}", http_addr);
+
+    let http_server = tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::bind(&http_addr)
+            .await
+            .expect("Failed to bind HTTP server");
+        axum::serve(listener, app)
+            .await
+            .expect("HTTP server failed");
+    });
+
+    // Set up WebSocket server (existing)
+    let ws_port = env::var("WS_PORT").unwrap_or_else(|_| settings.port.to_string());
+    let ws_addr = format!("0.0.0.0:{}", ws_port);
+    info!("Starting WebSocket server on {}", ws_addr);
+
+    let ws_server = tokio::spawn(async move {
+        let listener = TcpListener::bind(&ws_addr)
+            .await
+            .expect("Failed to bind WebSocket server");
+
+        loop {
+            if let Ok((stream, _)) = listener.accept().await {
+                let tls_acceptor_clone = tls_acceptor.clone();
+                let server_state_clone = server_state.clone();
+                let nats_connection_clone = nats_connection.clone();
+                let apple_app_site_association_clone = apple_app_site_association.clone();
+
+                tokio::spawn(async move {
+                    // Use a trait object to hold either TcpStream or TlsStream<TcpStream>
+                    let stream: Box<dyn AsyncStream> = if let Some(tls_acceptor) = tls_acceptor_clone {
+                        match tls_acceptor.accept(stream).await {
+                            Ok(tls_stream) => Box::new(tls_stream),
+                            Err(e) => {
+                                eprintln!("Failed to accept TLS connection: {}", e);
+                                return;
+                            }
+                        }
+                    } else {
+                        Box::new(stream)
+                    };
+
+                    handle_connection(
+                        stream,
+                        server_state_clone,
+                        nats_connection_clone,
+                        apple_app_site_association_clone,
+                    )
+                    .await;
+                });
+            }
+        }
+    });
+
+    // Run both servers concurrently
+    tokio::try_join!(http_server, ws_server)?;
 
     Ok(())
 }
@@ -1065,7 +1129,7 @@ async fn handle_rewrap(
 
     // Perform custom ECDH
     let ecdh_start = Instant::now();
-    let dek_shared_secret_bytes = match custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
+    let dek_shared_secret_bytes = match crypto::custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
         Ok(secret) => secret,
         Err(e) => {
             info!("Error performing ECDH: {:?}", e);
@@ -1075,25 +1139,33 @@ async fn handle_rewrap(
     let ecdh_time = ecdh_start.elapsed();
     log_timing(settings, "Time for ECDH operation", ecdh_time);
 
-    // Encrypt dek_shared_secret with symmetric key using AES GCM
-    let salt = connection_state.salt_lock.read().unwrap().clone().unwrap();
-    let info = "rewrappedKey".as_bytes();
-    let hkdf = Hkdf::<Sha256>::new(Some(&salt), &session_shared_secret);
-    let mut derived_key = [0u8; 32];
-    hkdf.expand(info, &mut derived_key)
-        .expect("HKDF expansion failed");
+    // Determine HKDF salt based on NanoTDF version
+    let nanotdf_salt = if let Some(version) = crypto::detect_nanotdf_version(payload) {
+        crypto::compute_nanotdf_salt(version)
+    } else {
+        // Fallback to v12 for backward compatibility
+        crypto::compute_nanotdf_salt(crypto::NANOTDF_VERSION_V12)
+    };
 
-    let mut nonce = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce);
-    let nonce = GenericArray::from_slice(&nonce);
-
-    let key = Key::<Aes256Gcm>::from(derived_key);
-    let cipher = Aes256Gcm::new(&key);
+    // Use NanoTDF-compatible HKDF: empty info parameter per spec section 4
+    let info = b"";
 
     let encryption_start = Instant::now();
-    let wrapped_dek = cipher
-        .encrypt(nonce, dek_shared_secret_bytes.as_ref())
-        .expect("encryption failure!");
+    let (nonce_vec, wrapped_dek) = match crypto::rewrap_dek(
+        &dek_shared_secret_bytes,
+        &session_shared_secret,
+        &nanotdf_salt,
+        info,
+    ) {
+        Ok(result) => result,
+        Err(e) => {
+            error!("Rewrap DEK failed: {}", e);
+            return Some(
+                ErrorResponse::crypto_error(format!("Failed to rewrap key: {}", e))
+                    .to_message(),
+            );
+        }
+    };
     let encryption_time = encryption_start.elapsed();
     log_timing(settings, "Time for AES-GCM encryption", encryption_time);
 
@@ -1101,7 +1173,7 @@ async fn handle_rewrap(
     let mut response_data = Vec::new();
     response_data.push(MessageType::RewrappedKey as u8);
     response_data.extend_from_slice(tdf_ephemeral_key_bytes);
-    response_data.extend_from_slice(nonce);
+    response_data.extend_from_slice(&nonce_vec);
     response_data.extend_from_slice(&wrapped_dek);
 
     let total_time = start_time.elapsed();
@@ -1485,28 +1557,6 @@ fn get_kas_private_key_bytes() -> Option<Vec<u8>> {
     KAS_KEYS.get().map(|keys| keys.private_key.clone())
 }
 
-fn custom_ecdh(
-    secret_key: &SecretKey,
-    public_key: &PublicKey,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    // Get the scalar from the secret key
-    let scalar = secret_key.to_nonzero_scalar();
-    // println!("scalar {}", hex::encode(scalar.to_bytes()));
-
-    // Get the public key point
-    let public_key_point = public_key.to_projective();
-
-    // Perform the ECDH operation
-    let shared_point = (public_key_point * *scalar).to_affine();
-
-    // Extract the x-coordinate as the shared secret
-    let x_coordinate = shared_point.x();
-    let shared_secret = x_coordinate.to_vec();
-    // println!("Raw shared secret: {}", hex::encode(&shared_secret));
-
-    Ok(shared_secret)
-}
-
 struct ServerState {
     settings: ServerSettings,
     redis_client: RedisClient,
@@ -1734,7 +1784,7 @@ mod tests {
             .expect("Error deserializing client public key");
 
         // Run custom ECDH
-        let result = custom_ecdh(&secret_key, &public_key).expect("Error performing ECDH");
+        let result = crypto::custom_ecdh(&secret_key, &public_key).expect("Error performing ECDH");
 
         let computed_secret = hex::encode(result);
         // println!("Computed shared secret: {}", computed_secret);
@@ -1783,7 +1833,7 @@ mod tests {
         // println!("KAS Public Key Hex: {}", hex::encode(compressed_public_key_bytes));
         assert_eq!(hex::encode(compressed_public_key_bytes), server_public);
 
-        let result = custom_ecdh(&server_secret_key, &client_public_key).unwrap();
+        let result = crypto::custom_ecdh(&server_secret_key, &client_public_key).unwrap();
         assert_eq!(hex::encode(result), expected_shared_secret);
         Ok(())
     }
