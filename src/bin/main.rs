@@ -604,6 +604,23 @@ async fn handle_rewrap(
     payload: &[u8],
     settings: &ServerSettings,
 ) -> Option<Message> {
+    // Validate payload size before processing
+    if payload.len() > MAX_NANOTDF_SIZE {
+        error!(
+            "Rewrap request exceeds maximum size: {} bytes (max: {} bytes)",
+            payload.len(),
+            MAX_NANOTDF_SIZE
+        );
+        return Some(
+            ErrorResponse::invalid_format(format!(
+                "Rewrap request exceeds maximum size: {} bytes (max: {} bytes)",
+                payload.len(),
+                MAX_NANOTDF_SIZE
+            ))
+            .to_message(),
+        );
+    }
+
     // timing
     let start_time = Instant::now();
     // session shared secret
@@ -658,7 +675,69 @@ async fn handle_rewrap(
 
     match policy.policy_type {
         PolicyType::Remote => {
+            info!("Processing remote policy");
             locator = policy.get_locator().clone();
+
+            // Fetch remote policy if HTTP/HTTPS URL
+            if let Some(ref loc) = locator {
+                if loc.protocol_enum == ProtocolEnum::Http
+                    || loc.protocol_enum == ProtocolEnum::Https
+                {
+                    info!("Fetching remote policy from: {}", loc.body);
+                    // TODO: Implement actual HTTP fetch of remote policy
+                    // For now, return error indicating feature not complete
+                    error!("Remote policy fetching not yet implemented");
+                    return Some(
+                        ErrorResponse::invalid_format(
+                            "Remote policy fetching via HTTP/HTTPS not yet implemented",
+                        )
+                        .to_message(),
+                    );
+
+                    // Future implementation:
+                    // match reqwest::get(&loc.body).await {
+                    //     Ok(response) => {
+                    //         match response.bytes().await {
+                    //             Ok(bytes) => {
+                    //                 metadata = match root_as_metadata(&bytes) {
+                    //                     Ok(meta) => Some(meta),
+                    //                     Err(e) => {
+                    //                         error!("Failed to parse remote policy metadata: {}", e);
+                    //                         return Some(
+                    //                             ErrorResponse::invalid_format(format!(
+                    //                                 "Invalid remote policy metadata: {}",
+                    //                                 e
+                    //                             ))
+                    //                             .to_message(),
+                    //                         );
+                    //                     }
+                    //                 };
+                    //             }
+                    //             Err(e) => {
+                    //                 error!("Failed to read remote policy response: {}", e);
+                    //                 return Some(
+                    //                     ErrorResponse::invalid_format(format!(
+                    //                         "Failed to fetch remote policy: {}",
+                    //                         e
+                    //                     ))
+                    //                     .to_message(),
+                    //                 );
+                    //             }
+                    //         }
+                    //     }
+                    //     Err(e) => {
+                    //         error!("Failed to fetch remote policy: {}", e);
+                    //         return Some(
+                    //             ErrorResponse::invalid_format(format!(
+                    //                 "Failed to fetch remote policy: {}",
+                    //                 e
+                    //             ))
+                    //             .to_message(),
+                    //         );
+                    //     }
+                    // }
+                }
+            }
         }
         PolicyType::Embedded => {
             info!("Processing embedded policy");
@@ -702,6 +781,87 @@ async fn handle_rewrap(
             }
         }
     }
+
+    // Verify policy binding if present
+    // Policy binding ensures integrity of the policy by cryptographically binding it
+    // to either an ECDSA signature or GMAC tag
+    if let Some(binding_bytes) = policy.get_binding() {
+        info!("Policy binding present ({} bytes)", binding_bytes.len());
+
+        let ecc_mode = header.get_ecc_mode();
+
+        // Validate binding format based on binding type
+        if ecc_mode.use_ecdsa_binding {
+            // ECDSA binding - validate signature format
+            let expected_size = match ecc_mode.ephemeral_ecc_params_enum {
+                nanotdf::ECDSAParams::Secp256r1 | nanotdf::ECDSAParams::Secp256k1 => 64,
+                nanotdf::ECDSAParams::Secp384r1 => 96,
+                nanotdf::ECDSAParams::Secp521r1 => 132,
+            };
+
+            if binding_bytes.len() != expected_size {
+                error!(
+                    "Invalid ECDSA binding size: {} bytes (expected {} for {:?})",
+                    binding_bytes.len(),
+                    expected_size,
+                    ecc_mode.ephemeral_ecc_params_enum
+                );
+                return Some(
+                    ErrorResponse::invalid_format(format!(
+                        "Invalid policy binding signature size: {} bytes (expected {})",
+                        binding_bytes.len(),
+                        expected_size
+                    ))
+                    .to_message(),
+                );
+            }
+
+            info!(
+                "ECDSA policy binding format validated ({:?})",
+                ecc_mode.ephemeral_ecc_params_enum
+            );
+
+            // For full ECDSA verification, we need the public key from the policy authority
+            // This would typically be:
+            // 1. Embedded in the policy metadata as a JWK or raw bytes
+            // 2. Retrieved from a trusted authority/certificate
+            // 3. Derived from a known policy signing key
+            //
+            // Without the public key, we can only validate format
+            log::warn!(
+                "ECDSA policy binding signature format valid, but cryptographic verification \
+                 requires policy authority public key (not implemented)"
+            );
+        } else {
+            // GMAC binding - validate tag size
+            if binding_bytes.len() != 16 {
+                error!(
+                    "Invalid GMAC binding size: {} bytes (expected 16)",
+                    binding_bytes.len()
+                );
+                return Some(
+                    ErrorResponse::invalid_format(format!(
+                        "Invalid policy binding GMAC tag size: {} bytes (expected 16)",
+                        binding_bytes.len()
+                    ))
+                    .to_message(),
+                );
+            }
+
+            info!("GMAC policy binding format validated");
+
+            // GMAC verification requires the symmetric key derived during rewrap
+            // The GMAC tag is computed over the policy bytes using the payload key
+            // We'll verify this later in the rewrap process after deriving the key
+            log::warn!(
+                "GMAC policy binding tag format valid, but cryptographic verification \
+                 requires payload key (deferred to rewrap)"
+            );
+        }
+    } else {
+        info!("No policy binding present");
+    }
+
     if let Some(locator) = &locator {
         if locator.protocol_enum == ProtocolEnum::SharedResource {
             info!("Evaluating contract: {}", locator.body.clone());
@@ -728,72 +888,93 @@ async fn handle_rewrap(
                     .body
                     .contains("5H6sLwXKBv3cdm5VVRxrvA8p5cux2Rrni5CQ4GRyYKo4b9B4")
                 {
-                    println!("contract geofence");
-                    let contract = geo_fence_contract::geo_fence_contract::GeoFenceContract::new();
-                    // Parse the geofence data from the policy body
-                    if let Some(body) = policy_body {
-                        if body.len() >= 24 {
-                            // Ensure we have enough bytes for the geofence data
-                            let geofence = Geofence3D {
-                                min_latitude: 0.0,
-                                max_latitude: 0.00061, // Approximately 20 feet in latitude
-                                min_longitude: 0.0,
-                                max_longitude: 0.00061, // Approximately 20 feet in longitude
-                                min_altitude: 0.0,
-                                max_altitude: 6.1, // 20 feet in altitude
-                            };
+                    info!("Processing geofence contract");
+                    let _contract = geo_fence_contract::geo_fence_contract::GeoFenceContract::new();
 
-                            // Get from rewrap request, second payload will be NanoTDF location
-                            let coordinate = geo_fence_contract::geo_fence_contract::Coordinate3D {
-                                latitude: 0.0003,
-                                longitude: 0.0003,
-                                altitude: 3.0,
-                            };
-
-                            if claims_result.is_ok()
-                                && !contract.is_within_geofence(geofence, coordinate)
-                            {
-                                error!(
-                                    "Geofence policy denied access - location outside allowed area"
-                                );
-                                // timing
-                                let total_time = start_time.elapsed();
-                                log_timing(settings, "Time to deny (geofence)", total_time);
-                                return Some(
-                                    ErrorResponse::policy_denied(
-                                        "Access denied - location outside permitted geofence",
-                                    )
-                                    .to_message(),
-                                );
+                    // Parse geofence bounds from policy body
+                    // Expected format: 6 f64 values (48 bytes total)
+                    // min_lat, max_lat, min_lon, max_lon, min_alt, max_alt
+                    let _geofence = if let Some(body) = policy_body {
+                        if body.len() >= 48 {
+                            // Parse 6 f64 values from little-endian bytes
+                            let mut values = [0f64; 6];
+                            for (i, value) in values.iter_mut().enumerate() {
+                                let start = i * 8;
+                                let bytes = &body[start..start + 8];
+                                *value = f64::from_le_bytes(bytes.try_into().unwrap_or([0u8; 8]));
                             }
+                            Geofence3D {
+                                min_latitude: values[0],
+                                max_latitude: values[1],
+                                min_longitude: values[2],
+                                max_longitude: values[3],
+                                min_altitude: values[4],
+                                max_altitude: values[5],
+                            }
+                        } else {
+                            error!(
+                                "Policy body too small for geofence data: {} bytes (expected 48)",
+                                body.len()
+                            );
+                            return Some(
+                                ErrorResponse::invalid_format(
+                                    "Geofence policy body must contain 48 bytes (6 f64 values)",
+                                )
+                                .to_message(),
+                            );
                         }
-                    }
-                    // let geofence = geo_fence_contract::geo_fence_contract::Geofence3D {
-                    //     min_latitude: -10_000_000,
-                    //     max_latitude: 10_000_000,
-                    //     min_longitude: -20_000_000,
-                    //     max_longitude: 20_000_000,
-                    //     min_altitude: 0,
-                    //     max_altitude: 100_000_000,
+                    } else {
+                        error!("Geofence policy missing body data");
+                        return Some(
+                            ErrorResponse::invalid_format("Geofence policy requires body data")
+                                .to_message(),
+                        );
+                    };
+
+                    // Extract coordinates from JWT claims
+                    // TODO: Add latitude/longitude/altitude fields to Claims struct
+                    // For now, return error indicating feature not complete
+                    error!("Geofence coordinate extraction from JWT claims not yet implemented");
+                    return Some(
+                        ErrorResponse::invalid_format(
+                            "Geofence validation requires location fields in JWT claims (feature incomplete)",
+                        )
+                        .to_message(),
+                    );
+
+                    // Future implementation once Claims struct has location fields:
+                    // let coordinate = match connection_state.claims_lock.read() {
+                    //     Ok(read_lock) => match read_lock.clone() {
+                    //         Some(claims) => geo_fence_contract::geo_fence_contract::Coordinate3D {
+                    //             latitude: claims.latitude,
+                    //             longitude: claims.longitude,
+                    //             altitude: claims.altitude,
+                    //         },
+                    //         None => {
+                    //             return Some(ErrorResponse::policy_denied(
+                    //                 "Geofence validation requires authentication"
+                    //             ).to_message());
+                    //         }
+                    //     },
+                    //     Err(_) => {
+                    //         return Some(ErrorResponse::policy_denied(
+                    //             "Failed to read authentication claims"
+                    //         ).to_message());
+                    //     }
                     // };
-                    // let coordinate = geo_fence_contract::geo_fence_contract::Coordinate3D {
-                    //     latitude: 0,
-                    //     longitude: 0,
-                    //     altitude: 50_000_000,
-                    // };
-                    // if claims_result.is_ok()
-                    //     && !contract.is_within_geofence(geofence, coordinate)
-                    // {
-                    //     // binary response
-                    //     let mut response_data: Vec<u8> = Vec::new();
-                    //     response_data.push(MessageType::RewrappedKey as u8);
-                    //     response_data.extend_from_slice(tdf_ephemeral_key_bytes);
-                    //     // timing
+                    //
+                    // if !contract.is_within_geofence(geofence, coordinate) {
+                    //     error!("Geofence policy denied access - location outside allowed area");
                     //     let total_time = start_time.elapsed();
-                    //     log_timing(settings, "Time to deny", total_time);
-                    //     // DENY
-                    //     return Some(Message::Binary(response_data));
+                    //     log_timing(settings, "Time to deny (geofence)", total_time);
+                    //     return Some(
+                    //         ErrorResponse::policy_denied(
+                    //             "Access denied - location outside permitted geofence",
+                    //         )
+                    //         .to_message(),
+                    //     );
                     // }
+                    // info!("Geofence validation passed");
                 }
                 // content_rating
                 else if locator
@@ -1504,6 +1685,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for RewindableStream<S> {
     }
 }
 
+fn convert_rating_level(level: arkavo::RatingLevel) -> RatingLevel {
+    match level.0 {
+        x if x == arkavo::RatingLevel::unused.0 => RatingLevel::Unused,
+        x if x == arkavo::RatingLevel::none.0 => RatingLevel::None,
+        x if x == arkavo::RatingLevel::mild.0 => RatingLevel::Mild,
+        x if x == arkavo::RatingLevel::moderate.0 => RatingLevel::Moderate,
+        x if x == arkavo::RatingLevel::severe.0 => RatingLevel::Severe,
+        _ => RatingLevel::Unused, // Default to Unused for any invalid values
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error;
@@ -1575,8 +1767,7 @@ mod tests {
         let kas_private_key_array = match kas_private_key_option {
             Some(array) => array,
             None => {
-                return Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(Box::new(std::io::Error::other(
                     "Could not convert to array.",
                 )))
             }
@@ -1601,16 +1792,5 @@ mod tests {
         C: CurveArithmetic,
     {
         pub scalar: NonZeroScalar<C>,
-    }
-}
-
-fn convert_rating_level(level: arkavo::RatingLevel) -> RatingLevel {
-    match level.0 {
-        x if x == arkavo::RatingLevel::unused.0 => RatingLevel::Unused,
-        x if x == arkavo::RatingLevel::none.0 => RatingLevel::None,
-        x if x == arkavo::RatingLevel::mild.0 => RatingLevel::Mild,
-        x if x == arkavo::RatingLevel::moderate.0 => RatingLevel::Moderate,
-        x if x == arkavo::RatingLevel::severe.0 => RatingLevel::Severe,
-        _ => RatingLevel::Unused, // Default to Unused for any invalid values
     }
 }
