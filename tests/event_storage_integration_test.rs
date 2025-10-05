@@ -22,16 +22,19 @@ async fn test_event_storage_integration() -> Result<(), Box<dyn Error>> {
     }
 
     // Initialize S3 client with the region from env
-    let config_builder = aws_config::from_env();
+    let config = aws_config::from_env().load().await;
 
-    // If we're running with LocalStack, configure the endpoint URL
-    let config = if let Some(endpoint) = endpoint_url {
+    // Build S3 client with LocalStack-specific configuration if needed
+    let s3_client = if let Some(endpoint) = endpoint_url {
         println!("Using custom endpoint: {}", endpoint);
-        config_builder.endpoint_url(endpoint).load().await
+        let s3_config = s3::config::Builder::from(&config)
+            .endpoint_url(endpoint)
+            .force_path_style(true)  // Required for LocalStack
+            .build();
+        s3::Client::from_conf(s3_config)
     } else {
-        config_builder.load().await
+        s3::Client::new(&config)
     };
-    let s3_client = s3::Client::new(&config);
 
     // Set up test data
     let test_key = "test-event-storage-key";

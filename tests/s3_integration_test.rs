@@ -30,16 +30,19 @@ async fn test_s3_integration() -> Result<(), Box<dyn Error>> {
     // Check if we're using LocalStack (in CI environment)
     let endpoint_url = env::var("AWS_ENDPOINT_URL").ok();
 
-    let config_builder = aws_config::from_env();
+    let config = aws_config::from_env().load().await;
 
-    // If we're running with LocalStack, configure the endpoint URL
-    let config = if let Some(endpoint) = endpoint_url {
+    // Build S3 client with LocalStack-specific configuration if needed
+    let s3_client = if let Some(endpoint) = endpoint_url {
         println!("Using custom endpoint: {}", endpoint);
-        config_builder.endpoint_url(endpoint).load().await
+        let s3_config = s3::config::Builder::from(&config)
+            .endpoint_url(endpoint)
+            .force_path_style(true)  // Required for LocalStack
+            .build();
+        S3Client::from_conf(s3_config)
     } else {
-        config_builder.load().await
+        S3Client::new(&config)
     };
-    let s3_client = S3Client::new(&config);
 
     // Test uploading an object
     let upload_result = s3_client
