@@ -1,11 +1,13 @@
 mod contracts;
 mod schemas;
+mod session_manager;
+mod media_metrics;
 
 // Include modules from parent src/modules directory
 #[path = "../modules/mod.rs"]
 mod modules;
 
-use modules::{crypto, http_rewrap};
+use modules::{crypto, http_rewrap, media_api};
 
 use crate::contracts::content_rating::content_rating::{
     AgeLevel, ContentRating, Rating, RatingLevel,
@@ -210,6 +212,31 @@ static KAS_KEYS: OnceCell<Arc<KasKeys>> = OnceCell::new();
 trait AsyncStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T> AsyncStream for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
 
+/// Middleware for logging HTTP requests
+async fn log_request_middleware(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let start = Instant::now();
+
+    let response = next.run(req).await;
+
+    let latency = start.elapsed();
+    let status = response.status();
+
+    info!(
+        "{} {} - {} ({:?})",
+        method,
+        uri,
+        status.as_u16(),
+        latency
+    );
+
+    response
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
@@ -292,17 +319,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         oauth_public_key_pem,
     });
 
+    // Initialize media DRM components
+    let max_concurrent_streams = env::var("MAX_CONCURRENT_STREAMS")
+        .ok()
+        .and_then(|s| s.parse().ok());
+
+    let session_manager = Arc::new(session_manager::SessionManager::new(
+        Arc::new(server_state.redis_client.clone()),
+        max_concurrent_streams,
+    ));
+
+    let enable_media_analytics = env::var("ENABLE_MEDIA_ANALYTICS")
+        .unwrap_or_else(|_| "true".to_string())
+        .parse()
+        .unwrap_or(true);
+
+    let media_metrics_subject = env::var("MEDIA_METRICS_SUBJECT")
+        .unwrap_or_else(|_| "media.metrics".to_string());
+
+    let nats_client_for_metrics = nats_connection.get_client().await.map(Arc::new);
+    let media_metrics = Arc::new(media_metrics::MediaMetrics::new(
+        nats_client_for_metrics,
+        media_metrics_subject,
+        enable_media_analytics,
+    ));
+
+    let media_api_state = Arc::new(media_api::MediaApiState {
+        rewrap_state: rewrap_state.clone(),
+        session_manager: session_manager.clone(),
+        media_metrics: media_metrics.clone(),
+    });
+
     use axum::{
-        routing::{get, post},
+        routing::{delete, get, post},
         Router,
     };
-    let app = Router::new()
+
+    // OpenTDF compatibility router
+    let opentdf_router = Router::new()
         .route("/kas/v2/rewrap", post(http_rewrap::rewrap_handler))
         .route(
             "/kas/v2/kas_public_key",
             get(http_rewrap::kas_public_key_handler),
         )
         .with_state(rewrap_state);
+
+    // Media DRM router
+    let media_router = Router::new()
+        .route("/media/v1/key-request", post(media_api::media_key_request))
+        .route("/media/v1/session/start", post(media_api::session_start))
+        .route(
+            "/media/v1/session/:session_id/heartbeat",
+            post(media_api::session_heartbeat),
+        )
+        .route(
+            "/media/v1/session/:session_id",
+            delete(media_api::session_terminate),
+        )
+        .with_state(media_api_state);
+
+    // Combine routers
+    let app = Router::new()
+        .merge(opentdf_router)
+        .merge(media_router)
+        .layer(
+            tower::ServiceBuilder::new()
+                .layer(axum::middleware::from_fn(log_request_middleware))
+        );
 
     let http_addr = format!("0.0.0.0:{}", http_port);
     info!("Starting HTTP server on {}", http_addr);
