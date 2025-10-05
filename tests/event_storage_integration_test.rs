@@ -29,7 +29,7 @@ async fn test_event_storage_integration() -> Result<(), Box<dyn Error>> {
         println!("Using custom endpoint: {}", endpoint);
         let s3_config = s3::config::Builder::from(&config)
             .endpoint_url(endpoint)
-            .force_path_style(true)  // Required for LocalStack
+            .force_path_style(true) // Required for LocalStack
             .build();
         s3::Client::from_conf(s3_config)
     } else {
