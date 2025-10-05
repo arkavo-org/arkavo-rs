@@ -1,5 +1,4 @@
 extern crate nanotdf;
-use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_s3 as s3;
 use aws_sdk_s3::primitives::ByteStream;
 use s3::Client as S3Client;
