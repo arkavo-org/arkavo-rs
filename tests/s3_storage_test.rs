@@ -29,15 +29,15 @@ async fn test_s3_upload_helper_function() {
         // Simulate successful upload by returning the key
         Ok(s3_key)
     }
-    
+
     // Create test data
     let bucket = "test-bucket";
     let target_id = "test-key";
     let target_payload = b"test data".to_vec();
-    
+
     // Call the function
     let result = upload_to_s3_test(bucket, target_id, &target_payload).await;
-    
+
     // Verify the result
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "test-key/data");
@@ -54,15 +54,15 @@ async fn test_s3_upload_failure_handling() {
     ) -> Result<String, Box<dyn Error>> {
         Err("Simulated failure".into())
     }
-    
+
     // Create test data
     let bucket = "test-bucket";
     let target_id = "test-key";
     let target_payload = b"test data".to_vec();
-    
+
     // Call the function
     let result = upload_to_s3_failing_test(bucket, target_id, &target_payload).await;
-    
+
     // Verify the result
     assert!(result.is_err());
     assert_eq!(result.unwrap_err().to_string(), "Simulated failure");
