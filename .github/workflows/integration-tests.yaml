@@ -1,0 +1,127 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allows manual triggering
+
+env:
+  CARGO_TERM_COLOR: always
+  TEST_S3_BUCKET: test-integration-bucket
+  REDIS_URL: redis://localhost:6379
+  NATS_URL: nats://localhost:4222
+
+jobs:
+  integration-test:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      nats:
+        image: nats:alpine
+        ports:
+          - 4222:4222
+          - 8222:8222
+        options: >-
+          --health-cmd "wget -qO- http://localhost:8222/varz || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      localstack:
+        image: localstack/localstack:3.0
+        env:
+          SERVICES: s3
+          AWS_DEFAULT_REGION: us-east-1
+          DEBUG: 1
+        ports:
+          - 4566:4566
+        options: >-
+          --health-cmd "curl -s http://localhost:4566/_localstack/health | grep -q '\"s3\": \"available\"' || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/checkout@v3
+      
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+      
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+      
+    - name: Setup LocalStack
+      run: |
+        # Configure AWS CLI for LocalStack (AWS CLI already installed on GitHub runners)
+        aws configure set aws_access_key_id test
+        aws configure set aws_secret_access_key test
+        aws configure set region us-east-1
+        aws configure set output json
+
+        # Wait for LocalStack to be ready
+        echo "Waiting for LocalStack to be ready..."
+        for i in {1..30}; do
+          if curl -s http://localhost:4566/_localstack/health | grep -q '"s3": "available"'; then
+            echo "LocalStack is ready!"
+            break
+          fi
+          echo "Waiting... (attempt $i/30)"
+          sleep 2
+        done
+
+        # Create test bucket
+        aws --endpoint-url=http://localhost:4566 s3 mb s3://$TEST_S3_BUCKET
+        aws --endpoint-url=http://localhost:4566 s3api put-bucket-acl --bucket $TEST_S3_BUCKET --acl public-read
+
+        # Verify bucket was created
+        aws --endpoint-url=http://localhost:4566 s3 ls
+
+    - name: Generate key files for tests
+      run: |
+        # Generate certificates for TLS tests
+        openssl req -x509 -newkey rsa:4096 -keyout privkey.pem -out fullchain.pem -days 365 -nodes -subj "/CN=localhost"
+        
+        # Generate EC key for KAS
+        openssl ecparam -genkey -name prime256v1 -noout -out recipient_private_key.pem
+        
+        # Verify keys
+        openssl ec -in recipient_private_key.pem -text -noout
+        
+        # Set file permissions
+        chmod 600 privkey.pem fullchain.pem recipient_private_key.pem
+    
+    - name: Run unit tests
+      run: cargo test --lib
+    
+    - name: Run S3 integration tests
+      run: |
+        # Set environment variables for AWS endpoint
+        export AWS_ENDPOINT_URL=http://localhost:4566
+        export AWS_ACCESS_KEY_ID=test
+        export AWS_SECRET_ACCESS_KEY=test
+        export AWS_REGION=us-east-1
+        export TEST_S3_BUCKET=$TEST_S3_BUCKET
+        
+        # Run the S3 integration tests without the --ignore flag
+        cargo test --test s3_integration_test
+
+    - name: Run event storage integration tests
+      run: |
+        # Set environment variables for AWS endpoint
+        export AWS_ENDPOINT_URL=http://localhost:4566
+        export AWS_ACCESS_KEY_ID=test
+        export AWS_SECRET_ACCESS_KEY=test
+        export AWS_REGION=us-east-1
+        export TEST_S3_BUCKET=$TEST_S3_BUCKET
+        
+        # Run event storage integration tests
+        cargo test --test event_storage_integration_test

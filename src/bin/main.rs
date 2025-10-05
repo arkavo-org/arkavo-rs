@@ -12,11 +12,12 @@ use crate::contracts::content_rating::content_rating::{
 };
 use crate::contracts::geo_fence_contract::geo_fence_contract::Geofence3D;
 use crate::contracts::{contract_simple_abac, geo_fence_contract};
-use crate::schemas::event_generated::arkavo::{Event, EventData};
+use crate::schemas::event_generated::arkavo::{Action, Event, EventData};
 use crate::schemas::metadata_generated::arkavo;
 use crate::schemas::metadata_generated::arkavo::{root_as_metadata, Metadata};
 use async_nats::Message as NatsMessage;
 use async_nats::{Client as NatsClient, PublishError};
+use aws_sdk_s3 as s3;
 use flatbuffers::root;
 use futures_util::{SinkExt, StreamExt};
 use jsonwebtoken::{decode, DecodingKey, Validation};
@@ -216,7 +217,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load configuration
     let settings = load_config()?;
-    let server_state = Arc::new(ServerState::new(settings.clone())?);
+    let server_state = Arc::new(ServerState::new(settings.clone()).await?);
     // Load and cache the apple-app-site-association.json file
     let apple_app_site_association = load_apple_app_site_association().await;
     // Initialize KAS keys
@@ -1354,6 +1355,49 @@ async fn handle_event(
         println!("Event Timestamp: {:?}", event.timestamp());
         println!("Event Status: {:?}", event.status());
         println!("Event Data Type: {:?}", event.data_type());
+        // S3 store
+        match event.action() {
+            Action::store => {
+                if let Some(cache_event) = event.data_as_cache_event() {
+                    if let (Some(target_id), Some(target_payload)) =
+                        (cache_event.target_id(), cache_event.target_payload())
+                    {
+                        // Create S3 key using target_id
+                        let target_id_str = bs58::encode(target_id.bytes()).into_string();
+                        let s3_key = format!("{}/data", target_id_str);
+
+                        // Upload to S3
+                        return match server_state
+                            .s3_client
+                            .put_object()
+                            .bucket(&server_state.settings.s3_bucket)
+                            .key(&s3_key)
+                            .body(aws_sdk_s3::primitives::ByteStream::from(
+                                target_payload.bytes().to_vec(),
+                            ))
+                            .send()
+                            .await
+                        {
+                            Ok(_) => {
+                                info!("Successfully stored object in S3: {}", s3_key);
+                                let mut response = Vec::new();
+                                response.push(MessageType::Event as u8);
+                                response.extend_from_slice(b"Successfully stored");
+                                Some(Message::Binary(response))
+                            }
+                            Err(e) => {
+                                error!("Failed to store object in S3: {}", e);
+                                None
+                            }
+                        };
+                    }
+                }
+            }
+            _ => {
+                error!("Unhandled action: {:?}", event.action());
+                drop(None::<Message>);
+            }
+        }
         // redis connection
         let mut redis_conn = match server_state
             .redis_client
@@ -1567,24 +1611,32 @@ fn get_kas_private_key_bytes() -> Option<Vec<u8>> {
 struct ServerState {
     settings: ServerSettings,
     redis_client: RedisClient,
+    s3_client: s3::Client,
 }
 
 impl ServerState {
-    fn new(settings: ServerSettings) -> Result<Self, redis::RedisError> {
+    async fn new(settings: ServerSettings) -> Result<Self, Box<dyn std::error::Error>> {
         info!("Attempting to connect to Redis at {}", settings.redis_url);
-        match RedisClient::open(settings.redis_url.clone()) {
+        let redis_client = match RedisClient::open(settings.redis_url.clone()) {
             Ok(client) => {
                 info!("Successfully connected to Redis server");
-                Ok(ServerState {
-                    settings,
-                    redis_client: client,
-                })
+                client
             }
             Err(e) => {
                 error!("Failed to connect to Redis server: {}", e);
-                Err(e)
+                return Err(Box::new(e));
             }
-        }
+        };
+
+        // Initialize AWS S3 client
+        let config = aws_config::load_from_env().await;
+        let s3_client = s3::Client::new(&config);
+
+        Ok(ServerState {
+            settings,
+            redis_client,
+            s3_client,
+        })
     }
 }
 
@@ -1601,6 +1653,7 @@ struct ServerSettings {
     redis_url: String,
     jwt_validation_disabled: bool,
     jwt_public_key_path: Option<String>,
+    s3_bucket: String,
 }
 
 fn log_timing(settings: &ServerSettings, message: &str, duration: std::time::Duration) {
@@ -1649,6 +1702,7 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
             .parse()
             .unwrap_or(true),
         jwt_public_key_path: env::var("JWT_PUBLIC_KEY_PATH").ok(),
+        s3_bucket: env::var("S3_BUCKET").unwrap_or_else(|_| "default-bucket".to_string()),
     })
 }
 

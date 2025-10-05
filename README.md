@@ -117,6 +117,10 @@ export JWT_PUBLIC_KEY_PATH=/path/to/jwt_public_key.pem
 export NATS_URL=nats://localhost:4222
 export NATS_SUBJECT=nanotdf.messages
 export REDIS_URL=redis://localhost:6379
+export AWS_ACCESS_KEY_ID=your_access_key
+export AWS_SECRET_ACCESS_KEY=your_secret_key
+export AWS_REGION=your_region
+export S3_BUCKET=your_bucket_name
 export ENABLE_TIMING_LOGS=true
 export RUST_LOG=info
 ```
@@ -157,6 +161,51 @@ The server will start and listen on the configured port.
 - Authentication and security
 - Comparison with standard OpenTDF REST API
 - Testing recommendations for OpenTDF interoperability
+
+## Automated Testing
+
+### Unit Tests
+
+Run unit tests with:
+
+```shell
+cargo test --lib
+```
+
+### Integration Tests
+
+Integration tests verify functionality with external services like S3, Redis, and NATS. They can run:
+
+1. **Locally** with real AWS credentials:
+
+```shell
+# S3 integration tests
+export AWS_ACCESS_KEY_ID=your_access_key
+export AWS_SECRET_ACCESS_KEY=your_secret_key
+export AWS_REGION=your_region
+export TEST_S3_BUCKET=your_test_bucket
+cargo test --test s3_integration_test
+cargo test --test event_storage_integration_test
+```
+
+2. **In CI** with LocalStack (simulated AWS services):
+
+The project includes GitHub Actions workflow in `.github/workflows/integration-tests.yml` that uses:
+
+- LocalStack for S3 testing (no real AWS credentials needed)
+- Redis container for Redis testing
+- NATS container for NATS testing
+
+### GitHub Actions Workflow
+
+Our CI/CD pipeline automatically runs integration tests on pull requests and commits to main:
+
+1. Sets up runtime dependencies (Redis, NATS, LocalStack)
+2. Configures LocalStack to work as a drop-in S3 replacement
+3. Generates test certificates and keys
+4. Runs all tests including integration tests
+
+To view test results, check the "Actions" tab in GitHub.
 
 ## Diagrams
 
