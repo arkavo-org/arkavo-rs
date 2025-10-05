@@ -62,27 +62,27 @@ jobs:
       
     - name: Setup LocalStack
       run: |
-        # Install AWS CLI
-        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-        unzip -q awscliv2.zip
-        sudo ./aws/install
-        
-        # Configure AWS CLI for LocalStack
+        # Configure AWS CLI for LocalStack (AWS CLI already installed on GitHub runners)
         aws configure set aws_access_key_id test
         aws configure set aws_secret_access_key test
         aws configure set region us-east-1
         aws configure set output json
-        
-        # Set up LocalStack endpoint
-        export AWS_ENDPOINT_URL=http://localhost:4566
-        export AWS_ACCESS_KEY_ID=test
-        export AWS_SECRET_ACCESS_KEY=test
-        export AWS_REGION=us-east-1
-        
+
+        # Wait for LocalStack to be ready
+        echo "Waiting for LocalStack to be ready..."
+        for i in {1..30}; do
+          if curl -s http://localhost:4566/_localstack/health | grep -q '"s3": "available"'; then
+            echo "LocalStack is ready!"
+            break
+          fi
+          echo "Waiting... (attempt $i/30)"
+          sleep 2
+        done
+
         # Create test bucket
         aws --endpoint-url=http://localhost:4566 s3 mb s3://$TEST_S3_BUCKET
         aws --endpoint-url=http://localhost:4566 s3api put-bucket-acl --bucket $TEST_S3_BUCKET --acl public-read
-        
+
         # Verify bucket was created
         aws --endpoint-url=http://localhost:4566 s3 ls
 
