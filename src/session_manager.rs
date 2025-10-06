@@ -129,11 +129,7 @@ impl SessionManager {
 
         // Store session data with TTL
         let _: () = conn
-            .set_ex(
-                &session_key,
-                session_json,
-                SESSION_HEARTBEAT_TIMEOUT as u64,
-            )
+            .set_ex(&session_key, session_json, SESSION_HEARTBEAT_TIMEOUT as u64)
             .await?;
 
         // Add to user's active sessions set
