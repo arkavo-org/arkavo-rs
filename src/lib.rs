@@ -7,6 +7,12 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+// Session manager for media DRM
+pub mod session_manager;
+
+// Media metrics for analytics
+pub mod media_metrics;
+
 #[derive(Serialize, Deserialize, Debug)]
 struct NanoTDFHeader {
     magic_number: u16,

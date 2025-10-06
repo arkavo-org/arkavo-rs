@@ -10,26 +10,26 @@
 pub mod media_policy {
 
     /// Content security levels based on resolution/quality
-    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub enum ContentSecurityLevel {
-        Audio,      // Audio-only content
-        SD,         // Standard Definition (< 720p)
-        HD,         // High Definition (720p-1080p)
-        UHD,        // Ultra High Definition (4K+)
+        Audio, // Audio-only content
+        SD,    // Standard Definition (< 720p)
+        HD,    // High Definition (720p-1080p)
+        UHD,   // Ultra High Definition (4K+)
     }
 
     /// HDCP (High-bandwidth Digital Content Protection) requirements
-    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub enum HDCPRequirement {
-        NotRequired,  // No HDCP needed
-        Type0,        // HDCP 1.x or 2.0
-        Type1,        // HDCP 2.2+ (required for UHD)
+        NotRequired, // No HDCP needed
+        Type0,       // HDCP 1.x or 2.0
+        Type1,       // HDCP 2.2+ (required for UHD)
     }
 
     /// License/rental type
-    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub enum LicenseType {
         Streaming,    // Online streaming only
@@ -39,7 +39,7 @@ pub mod media_policy {
     }
 
     /// Subscription status
-    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub enum SubscriptionStatus {
         Active,
@@ -49,29 +49,29 @@ pub mod media_policy {
     }
 
     /// User entitlement information
-    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct UserEntitlement {
         pub user_id: [u8; 32],
         pub subscription_status: SubscriptionStatus,
-        pub subscription_tier: u8,          // 0=free, 1=basic, 2=premium, etc.
+        pub subscription_tier: u8, // 0=free, 1=basic, 2=premium, etc.
         pub max_concurrent_streams: u32,
-        pub geo_region: [u8; 2],            // ISO 3166-1 alpha-2 country code
-        pub allowed_regions: Vec<[u8; 2]>,  // Allowed country codes
+        pub geo_region: [u8; 2],           // ISO 3166-1 alpha-2 country code
+        pub allowed_regions: Vec<[u8; 2]>, // Allowed country codes
     }
 
     /// Rental window constraints
-    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct RentalWindow {
-        pub purchase_timestamp: i64,       // Unix timestamp
+        pub purchase_timestamp: i64, // Unix timestamp
         pub first_play_timestamp: Option<i64>,
-        pub rental_duration_seconds: i64,  // Total time from purchase
+        pub rental_duration_seconds: i64, // Total time from purchase
         pub playback_duration_seconds: i64, // Time from first play
     }
 
     /// Content metadata
-    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct ContentMetadata {
         pub asset_id: [u8; 32],
@@ -82,12 +82,12 @@ pub mod media_policy {
     }
 
     /// Device security capabilities
-    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct DeviceCapabilities {
         pub supports_hdcp_type_0: bool,
         pub supports_hdcp_type_1: bool,
-        pub security_level: u8,  // 0=none, 1=baseline, 2=main
+        pub security_level: u8, // 0=none, 1=baseline, 2=main
         pub is_virtual_machine: bool,
     }
 
@@ -309,7 +309,14 @@ pub mod media_policy {
 
             // Should fail with expired subscription
             assert_eq!(
-                contract.validate_access(entitlement.clone(), content.clone(), device.clone(), 0, [b'U', b'S'], 0),
+                contract.validate_access(
+                    entitlement.clone(),
+                    content.clone(),
+                    device.clone(),
+                    0,
+                    [b'U', b'S'],
+                    0
+                ),
                 Err(Error::SubscriptionInactive)
             );
 
@@ -350,7 +357,14 @@ pub mod media_policy {
 
             // Should fail when at limit
             assert_eq!(
-                contract.validate_access(entitlement.clone(), content.clone(), device.clone(), 2, [b'U', b'S'], 0),
+                contract.validate_access(
+                    entitlement.clone(),
+                    content.clone(),
+                    device.clone(),
+                    2,
+                    [b'U', b'S'],
+                    0
+                ),
                 Err(Error::ConcurrencyLimitExceeded)
             );
 
@@ -397,12 +411,26 @@ pub mod media_policy {
 
             // Should pass within playback window
             assert!(contract
-                .validate_access(entitlement.clone(), content.clone(), device.clone(), 0, [b'U', b'S'], 1100 + 10000)
+                .validate_access(
+                    entitlement.clone(),
+                    content.clone(),
+                    device.clone(),
+                    0,
+                    [b'U', b'S'],
+                    1100 + 10000
+                )
                 .is_ok());
 
             // Should fail after playback window expires (48h after first play)
             assert_eq!(
-                contract.validate_access(entitlement, content, device, 0, [b'U', b'S'], 1100 + 172801),
+                contract.validate_access(
+                    entitlement,
+                    content,
+                    device,
+                    0,
+                    [b'U', b'S'],
+                    1100 + 172801
+                ),
                 Err(Error::RentalWindowExpired)
             );
         }
@@ -437,7 +465,14 @@ pub mod media_policy {
 
             // Should fail without HDCP Type 1
             assert_eq!(
-                contract.validate_access(entitlement.clone(), content.clone(), device.clone(), 0, [b'U', b'S'], 0),
+                contract.validate_access(
+                    entitlement.clone(),
+                    content.clone(),
+                    device.clone(),
+                    0,
+                    [b'U', b'S'],
+                    0
+                ),
                 Err(Error::HDCPNotSupported)
             );
 

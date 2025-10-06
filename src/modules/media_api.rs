@@ -2,7 +2,6 @@
 ///
 /// Provides dedicated endpoints optimized for streaming media key delivery,
 /// session management, and rental window tracking.
-
 use crate::modules::crypto;
 use crate::modules::http_rewrap::RewrapState;
 use axum::{
@@ -23,10 +22,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 // Re-import session manager types
-use crate::session_manager::{PlaybackSession, SessionManager, SessionState};
 use crate::media_metrics::{
     KeyRequestResult, MediaEvent, MediaMetrics, RequestTimer, SessionEndReason,
 };
+use crate::session_manager::{PlaybackSession, SessionManager, SessionState};
 
 /// Shared state for media API endpoints
 pub struct MediaApiState {
@@ -45,15 +44,15 @@ pub struct MediaKeyRequest {
     pub asset_id: String,
     pub segment_index: Option<u32>,
     pub client_public_key: String, // PEM format
-    pub nanotdf_header: String,     // Base64-encoded NanoTDF header
+    pub nanotdf_header: String,    // Base64-encoded NanoTDF header
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaKeyResponse {
     pub session_public_key: String, // PEM format
-    pub wrapped_key: String,         // Base64 (nonce + encrypted DEK)
-    pub status: String,              // "success" or "denied"
+    pub wrapped_key: String,        // Base64 (nonce + encrypted DEK)
+    pub status: String,             // "success" or "denied"
     pub metadata: Option<serde_json::Value>,
 }
 
@@ -175,22 +174,20 @@ pub async fn media_key_request(
     }
 
     // 3. Parse client public key
-    let client_public_key = parse_pem_public_key(&payload.client_public_key).map_err(|e| {
-        ErrorResponse {
+    let client_public_key =
+        parse_pem_public_key(&payload.client_public_key).map_err(|e| ErrorResponse {
             error: "invalid_request".to_string(),
             message: format!("Invalid client public key: {}", e),
-        }
-    })?;
+        })?;
 
     // 4. Generate ephemeral session key pair
     let session_private_key = EphemeralSecret::random(&mut OsRng);
     let session_public_key = P256PublicKey::from(&session_private_key);
-    let session_public_key_pem = public_key_to_pem(&session_public_key).map_err(|e| {
-        ErrorResponse {
+    let session_public_key_pem =
+        public_key_to_pem(&session_public_key).map_err(|e| ErrorResponse {
             error: "internal_error".to_string(),
             message: format!("Failed to generate session key: {}", e),
-        }
-    })?;
+        })?;
 
     // 5. Perform ECDH with client
     let session_shared_secret = session_private_key.diffie_hellman(&client_public_key);
@@ -213,7 +210,10 @@ pub async fn media_key_request(
     let latency = timer.elapsed_ms();
 
     // 7. Record metrics
-    state.media_metrics.record_key_request_latency(latency).await;
+    state
+        .media_metrics
+        .record_key_request_latency(latency)
+        .await;
     let event = MediaEvent::KeyRequest {
         session_id: payload.session_id.clone(),
         user_id: payload.user_id.clone(),

@@ -27,21 +27,16 @@ pub struct PlaybackSession {
     pub asset_id: String,
     pub segment_index: Option<u32>,
     pub state: SessionState,
-    pub start_timestamp: i64,          // Unix timestamp
+    pub start_timestamp: i64, // Unix timestamp
     pub first_play_timestamp: Option<i64>,
     pub last_heartbeat_timestamp: i64,
     pub client_ip: String,
-    pub geo_region: Option<String>,    // ISO 3166-1 alpha-2
+    pub geo_region: Option<String>, // ISO 3166-1 alpha-2
     pub user_agent: Option<String>,
 }
 
 impl PlaybackSession {
-    pub fn new(
-        session_id: String,
-        user_id: String,
-        asset_id: String,
-        client_ip: String,
-    ) -> Self {
+    pub fn new(session_id: String, user_id: String, asset_id: String, client_ip: String) -> Self {
         let now = Utc::now().timestamp();
         Self {
             session_id,
@@ -264,7 +259,10 @@ impl SessionManager {
     }
 
     /// Clean up expired sessions for a user
-    pub async fn cleanup_expired_sessions(&self, user_id: &str) -> Result<u32, SessionManagerError> {
+    pub async fn cleanup_expired_sessions(
+        &self,
+        user_id: &str,
+    ) -> Result<u32, SessionManagerError> {
         let sessions = self.get_user_sessions(user_id).await?;
         let now = Utc::now().timestamp();
         let mut cleaned = 0;
@@ -277,7 +275,10 @@ impl SessionManager {
         }
 
         if cleaned > 0 {
-            info!("Cleaned up {} expired sessions for user {}", cleaned, user_id);
+            info!(
+                "Cleaned up {} expired sessions for user {}",
+                cleaned, user_id
+            );
         }
 
         Ok(cleaned)

@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
 
+#[cfg(test)]
+use chrono::Utc;
+#[cfg(test)]
+use std::time::Duration;
+
 /// Media-specific event types for analytics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
