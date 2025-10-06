@@ -8,10 +8,7 @@ use axum::{
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use log::{error, info};
 use nanotdf::BinaryParser;
-use p256::{
-    ecdh::EphemeralSecret, elliptic_curve::sec1::ToEncodedPoint, PublicKey as P256PublicKey,
-    SecretKey,
-};
+use p256::{ecdh::EphemeralSecret, PublicKey as P256PublicKey, SecretKey};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -300,28 +297,20 @@ fn verify_and_decode_jwt(
 }
 
 /// Parse PEM-encoded P-256 public key
+/// Parse PEM-formatted P-256 public key with ErrorResponse error conversion
 fn parse_pem_public_key(pem: &str) -> Result<P256PublicKey, ErrorResponse> {
-    let pem_parsed = pem::parse(pem).map_err(|e| ErrorResponse {
+    crypto::parse_pem_public_key(pem).map_err(|e| ErrorResponse {
         error: "invalid_request".to_string(),
-        message: format!("Failed to parse PEM: {}", e),
-    })?;
-
-    let public_key =
-        P256PublicKey::from_sec1_bytes(pem_parsed.contents()).map_err(|e| ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: format!("Invalid P-256 public key: {}", e),
-        })?;
-
-    Ok(public_key)
+        message: format!("Failed to parse PEM public key: {}", e),
+    })
 }
 
-/// Convert P-256 public key to PEM format
+/// Convert P-256 public key to PEM format with ErrorResponse error conversion
 fn public_key_to_pem(public_key: &P256PublicKey) -> Result<String, ErrorResponse> {
-    let encoded_point = public_key.to_encoded_point(false); // Uncompressed for PEM
-    let sec1_bytes = encoded_point.as_bytes();
-
-    let pem_encoded = pem::Pem::new("PUBLIC KEY", sec1_bytes.to_vec());
-    Ok(pem::encode(&pem_encoded))
+    crypto::public_key_to_pem(public_key).map_err(|e| ErrorResponse {
+        error: "internal_error".to_string(),
+        message: format!("Failed to convert public key to PEM: {}", e),
+    })
 }
 
 // Re-export base64 crate for this module
