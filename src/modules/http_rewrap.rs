@@ -8,10 +8,7 @@ use axum::{
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use log::{error, info};
 use nanotdf::BinaryParser;
-use p256::{
-    ecdh::EphemeralSecret, elliptic_curve::sec1::ToEncodedPoint, PublicKey as P256PublicKey,
-    SecretKey,
-};
+use p256::{ecdh::EphemeralSecret, PublicKey as P256PublicKey, SecretKey};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

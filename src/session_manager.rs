@@ -329,9 +329,9 @@ impl SessionManager {
 
         // Use SET NX to only set if not exists
         let result: Option<String> = conn.get(&key).await?;
-        if result.is_some() {
+        if let Some(value) = result {
             // Already exists, return existing timestamp
-            let timestamp: i64 = result.unwrap().parse().unwrap_or(now);
+            let timestamp: i64 = value.parse().unwrap_or(now);
             return Ok(timestamp);
         }
 

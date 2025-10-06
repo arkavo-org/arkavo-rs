@@ -5,7 +5,7 @@
 use crate::modules::crypto;
 use crate::modules::http_rewrap::RewrapState;
 use axum::{
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -13,13 +13,12 @@ use axum::{
 use chrono::Utc;
 use log::{error, info};
 use nanotdf::BinaryParser;
-use p256::{
-    ecdh::EphemeralSecret, elliptic_curve::sec1::ToEncodedPoint, PublicKey as P256PublicKey,
-    SecretKey,
-};
+use p256::{ecdh::EphemeralSecret, PublicKey as P256PublicKey, SecretKey};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::sync::Arc;
+use uuid::Uuid;
 
 // Re-import session manager types
 use crate::media_metrics::{
@@ -61,7 +60,6 @@ pub struct MediaKeyResponse {
 pub struct SessionStartRequest {
     pub user_id: String,
     pub asset_id: String,
-    pub client_ip: String,
     pub geo_region: Option<String>,
     pub user_agent: Option<String>,
 }
@@ -241,14 +239,17 @@ pub async fn media_key_request(
 /// Initialize a new playback session
 pub async fn session_start(
     State(state): State<Arc<MediaApiState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<SessionStartRequest>,
 ) -> Result<Json<SessionStartResponse>, ErrorResponse> {
-    // Generate unique session ID
+    // Extract real client IP from connection (not from untrusted payload)
+    let client_ip = addr.ip().to_string();
+    // Generate cryptographically secure session ID with UUID v4
     let session_id = format!(
         "{}:{}:{}",
         payload.user_id,
         payload.asset_id,
-        Utc::now().timestamp_millis()
+        Uuid::new_v4()
     );
 
     let session = PlaybackSession {
@@ -260,7 +261,7 @@ pub async fn session_start(
         start_timestamp: Utc::now().timestamp(),
         first_play_timestamp: None,
         last_heartbeat_timestamp: Utc::now().timestamp(),
-        client_ip: payload.client_ip.clone(),
+        client_ip: client_ip.clone(),
         geo_region: payload.geo_region.clone(),
         user_agent: payload.user_agent.clone(),
     };
@@ -272,7 +273,7 @@ pub async fn session_start(
                 session_id: session_id.clone(),
                 user_id: payload.user_id.clone(),
                 asset_id: payload.asset_id.clone(),
-                client_ip: payload.client_ip.clone(),
+                client_ip: client_ip.clone(),
                 geo_region: payload.geo_region.clone(),
                 user_agent: payload.user_agent.clone(),
                 timestamp: Utc::now().timestamp(),

@@ -12,6 +12,7 @@ pub mod media_policy {
     /// Content security levels based on resolution/quality
     #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[allow(clippy::upper_case_acronyms)]
     pub enum ContentSecurityLevel {
         Audio, // Audio-only content
         SD,    // Standard Definition (< 720p)
@@ -157,19 +158,16 @@ pub mod media_policy {
             entitlement: &UserEntitlement,
             content: &ContentMetadata,
         ) -> Result<(), Error> {
-            match content.license_type {
-                LicenseType::Subscription => {
-                    if entitlement.subscription_status != SubscriptionStatus::Active {
-                        return Err(Error::SubscriptionInactive);
-                    }
-                    // Premium content requires higher tier
-                    if matches!(content.security_level, ContentSecurityLevel::UHD)
-                        && entitlement.subscription_tier < 2
-                    {
-                        return Err(Error::SubscriptionTierInsufficient);
-                    }
+            if content.license_type == LicenseType::Subscription {
+                if entitlement.subscription_status != SubscriptionStatus::Active {
+                    return Err(Error::SubscriptionInactive);
                 }
-                _ => {} // Other license types don't require subscription
+                // Premium content requires higher tier
+                if matches!(content.security_level, ContentSecurityLevel::UHD)
+                    && entitlement.subscription_tier < 2
+                {
+                    return Err(Error::SubscriptionTierInsufficient);
+                }
             }
             Ok(())
         }

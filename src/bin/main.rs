@@ -399,9 +399,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let listener = tokio::net::TcpListener::bind(&http_addr)
             .await
             .expect("Failed to bind HTTP server");
-        axum::serve(listener, app)
-            .await
-            .expect("HTTP server failed");
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .expect("HTTP server failed");
     });
 
     // Set up WebSocket server (existing)
