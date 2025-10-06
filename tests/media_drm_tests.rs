@@ -3,9 +3,10 @@ use chrono::Utc;
 /// Tests session management, policy enforcement, and key delivery
 ///
 /// These tests require Redis to be running on localhost:6379
-/// Run with: cargo test --test media_drm_tests -- --test-threads=1
+/// Tests use #[serial] attribute to prevent parallel execution conflicts
 use nanotdf::session_manager::{PlaybackSession, SessionManager, SessionState};
 use redis::Client as RedisClient;
+use serial_test::serial;
 use std::sync::Arc;
 
 // Helper function to create Redis client for tests
@@ -76,6 +77,7 @@ async fn cleanup_test_data(redis_client: &RedisClient, user_id: &str) {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_session_lifecycle() {
     let redis_client = create_test_redis_client();
     let user_id = "test-user-lifecycle";
@@ -139,6 +141,7 @@ async fn test_session_lifecycle() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_concurrency_limits() {
     let redis_client = create_test_redis_client();
     let user_id = "test-user-concurrency";
@@ -209,6 +212,7 @@ async fn test_concurrency_limits() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_rental_window_enforcement() {
     let redis_client = create_test_redis_client();
     let user_id = "test-user-rental";
@@ -248,6 +252,7 @@ async fn test_rental_window_enforcement() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_session_heartbeat_timeout() {
     let redis_client = create_test_redis_client();
     let user_id = "test-user-timeout";
@@ -289,6 +294,7 @@ async fn test_session_heartbeat_timeout() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_first_play_tracking() {
     let redis_client = create_test_redis_client();
     let user_id = "test-user-firstplay";
@@ -341,6 +347,7 @@ async fn test_first_play_tracking() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_session_state_transitions() {
     let redis_client = create_test_redis_client();
     let user_id = "test-user-states";
@@ -413,6 +420,7 @@ async fn test_session_state_transitions() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_get_user_sessions() {
     let redis_client = create_test_redis_client();
     let user_id = "test-user-sessions";
@@ -454,6 +462,7 @@ async fn test_get_user_sessions() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_cleanup_expired_sessions() {
     let redis_client = create_test_redis_client();
     let user_id = "test-user-cleanup";
@@ -514,6 +523,7 @@ mod benchmarks {
     use super::*;
 
     #[tokio::test]
+    #[serial]
     async fn benchmark_session_creation() {
         let redis_client = create_test_redis_client();
         let user_id = "test-user-benchmark";
@@ -558,6 +568,7 @@ mod benchmarks {
     }
 
     #[tokio::test]
+    #[serial]
     async fn benchmark_heartbeat_latency() {
         let redis_client = create_test_redis_client();
         let user_id = "test-user-heartbeat-bench";

@@ -237,6 +237,7 @@ impl SessionManager {
     }
 
     /// Get count of active sessions for a user
+    /// This is optimized for concurrency checking - uses EXISTS instead of GET
     pub async fn get_active_session_count(
         &self,
         user_id: &str,
@@ -247,18 +248,17 @@ impl SessionManager {
         // Get all session IDs for this user
         let session_ids: Vec<String> = conn.smembers(&user_sessions_key).await?;
 
-        // Filter out expired sessions
+        // Quick path: check key existence rather than fetching data
+        // This is much faster for concurrency limit checking
         let mut active_count = 0;
-        let now = Utc::now().timestamp();
-
-        for session_id in session_ids {
-            if let Ok(Some(session)) = self.get_session(&session_id).await {
-                if !session.is_expired(now) && session.state != SessionState::Stopped {
-                    active_count += 1;
-                } else {
-                    // Clean up expired session
-                    let _ = self.terminate_session(&session_id).await;
-                }
+        for session_id in &session_ids {
+            let session_key = self.session_key(session_id);
+            let exists: bool = conn.exists(&session_key).await?;
+            if exists {
+                active_count += 1;
+            } else {
+                // Session key expired but still in set - clean up
+                let _: () = conn.srem(&user_sessions_key, session_id).await?;
             }
         }
 
