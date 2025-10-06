@@ -1,14 +1,47 @@
 use chrono::Utc;
-use log::info;
+use log::{info, warn};
 use redis::{AsyncCommands, Client as RedisClient};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Maximum allowed concurrent streams per user (global default)
 const DEFAULT_MAX_CONCURRENT_STREAMS: u32 = 5;
 
 /// Session heartbeat timeout (seconds) - sessions expire if no heartbeat
 const SESSION_HEARTBEAT_TIMEOUT: i64 = 300; // 5 minutes
+
+/// Redis operation retry configuration
+const REDIS_MAX_RETRIES: u32 = 3;
+const REDIS_RETRY_DELAY_MS: u64 = 100;
+
+/// Retry helper for Redis operations with exponential backoff
+async fn retry_redis_operation<F, T, Fut>(operation: F) -> Result<T, SessionManagerError>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<T, SessionManagerError>>,
+{
+    let mut attempt = 0;
+    loop {
+        match operation().await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                attempt += 1;
+                if attempt >= REDIS_MAX_RETRIES {
+                    return Err(e);
+                }
+
+                // Exponential backoff: 100ms, 200ms, 400ms
+                let delay = Duration::from_millis(REDIS_RETRY_DELAY_MS * (2_u64.pow(attempt - 1)));
+                warn!(
+                    "Redis operation failed (attempt {}/{}), retrying after {:?}: {}",
+                    attempt, REDIS_MAX_RETRIES, delay, e
+                );
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+}
 
 /// Session state
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -96,7 +129,11 @@ impl SessionManager {
 
         // Store session data with TTL
         let _: () = conn
-            .set_ex(&session_key, session_json, SESSION_HEARTBEAT_TIMEOUT as u64)
+            .set_ex(
+                &session_key,
+                session_json,
+                SESSION_HEARTBEAT_TIMEOUT as u64,
+            )
             .await?;
 
         // Add to user's active sessions set

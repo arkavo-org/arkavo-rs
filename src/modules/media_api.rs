@@ -442,25 +442,20 @@ fn process_nanotdf_header(
     Ok(base64_encode(&combined))
 }
 
+// Helper wrappers for crypto utilities with error conversion
 fn parse_pem_public_key(pem: &str) -> Result<P256PublicKey, String> {
-    let pem_parsed = pem::parse(pem).map_err(|e| format!("Failed to parse PEM: {}", e))?;
-    P256PublicKey::from_sec1_bytes(pem_parsed.contents())
-        .map_err(|e| format!("Invalid P-256 public key: {}", e))
+    crypto::parse_pem_public_key(pem).map_err(|e| format!("Failed to parse PEM public key: {}", e))
 }
 
 fn public_key_to_pem(public_key: &P256PublicKey) -> Result<String, String> {
-    let encoded_point = public_key.to_encoded_point(false);
-    let sec1_bytes = encoded_point.as_bytes();
-    let pem_encoded = pem::Pem::new("PUBLIC KEY", sec1_bytes.to_vec());
-    Ok(pem::encode(&pem_encoded))
+    crypto::public_key_to_pem(public_key)
+        .map_err(|e| format!("Failed to convert public key to PEM: {}", e))
 }
 
 fn base64_encode(data: &[u8]) -> String {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
-    STANDARD.encode(data)
+    crypto::base64_encode(data)
 }
 
 fn base64_decode(data: &str) -> Result<Vec<u8>, base64::DecodeError> {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
-    STANDARD.decode(data)
+    crypto::base64_decode(data)
 }
