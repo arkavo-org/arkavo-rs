@@ -417,11 +417,13 @@ mod tests {
 
     #[test]
     fn test_session_expiry() {
+        use crate::modules::MediaProtocol;
         let now = Utc::now().timestamp();
         let mut session = PlaybackSession::new(
             "test-session".to_string(),
             "user-1".to_string(),
             "asset-1".to_string(),
+            MediaProtocol::TDF3,
             "192.168.1.1".to_string(),
         );
 
@@ -435,11 +437,13 @@ mod tests {
 
     #[test]
     fn test_first_play_tracking() {
+        use crate::modules::MediaProtocol;
         let now = Utc::now().timestamp();
         let mut session = PlaybackSession::new(
             "test-session".to_string(),
             "user-1".to_string(),
             "asset-1".to_string(),
+            MediaProtocol::TDF3,
             "192.168.1.1".to_string(),
         );
 

@@ -11,6 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use base64;
 use chrono::Utc;
 use log::{error, info};
 use nanotdf::BinaryParser;
@@ -32,6 +33,8 @@ pub struct MediaApiState {
     pub rewrap_state: Arc<RewrapState>,
     pub session_manager: Arc<SessionManager>,
     pub media_metrics: Arc<MediaMetrics>,
+    #[allow(dead_code)]
+    pub fairplay_handler: Option<Arc<crate::modules::fairplay::FairPlayHandler>>,
 }
 
 // ==================== Request/Response Types ====================
@@ -113,6 +116,7 @@ impl IntoResponse for ErrorResponse {
 // ==================== Helper Functions ====================
 
 /// Detect protocol from request payload
+#[allow(dead_code)]
 fn detect_protocol(payload: &MediaKeyRequest) -> Option<MediaProtocol> {
     if payload.spc_data.is_some() {
         Some(MediaProtocol::FairPlay)
@@ -127,6 +131,7 @@ fn detect_protocol(payload: &MediaKeyRequest) -> Option<MediaProtocol> {
 
 /// POST /media/v1/key-request
 /// Fast path for media segment key delivery (supports both TDF3 and FairPlay)
+#[cfg(feature = "fairplay")]
 pub async fn media_key_request(
     State(state): State<Arc<MediaApiState>>,
     Json(payload): Json<MediaKeyRequest>,
@@ -147,13 +152,64 @@ pub async fn media_key_request(
     // Route to protocol-specific handler
     match protocol {
         MediaProtocol::TDF3 => handle_tdf3_key_request(state, payload, timer).await,
-        MediaProtocol::FairPlay => {
-            Err(ErrorResponse {
-                error: "not_implemented".to_string(),
-                message: "FairPlay protocol not yet implemented in media_key_request".to_string(),
-            })
-        }
+        MediaProtocol::FairPlay => handle_fairplay_key_request_router(state, payload, timer).await,
     }
+}
+
+/// POST /media/v1/key-request (without fairplay feature)
+/// Only supports TDF3 protocol
+#[cfg(not(feature = "fairplay"))]
+pub async fn media_key_request(
+    State(state): State<Arc<MediaApiState>>,
+    Json(payload): Json<MediaKeyRequest>,
+) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
+    let timer = RequestTimer::start();
+
+    // Only TDF3 supported
+    if payload.nanotdf_header.is_none() || payload.client_public_key.is_none() {
+        return Err(ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: "TDF3 requires nanotdf_header and client_public_key".to_string(),
+        });
+    }
+
+    if payload.spc_data.is_some() {
+        return Err(ErrorResponse {
+            error: "not_implemented".to_string(),
+            message: "FairPlay support not compiled in (use --features fairplay)".to_string(),
+        });
+    }
+
+    info!(
+        "Media key request [tdf3]: session={} asset={} segment={:?}",
+        payload.session_id, payload.asset_id, payload.segment_index
+    );
+
+    handle_tdf3_key_request(state, payload, timer).await
+}
+
+/// Router for FairPlay requests (handles feature flag)
+#[cfg(feature = "fairplay")]
+#[allow(dead_code)]
+async fn handle_fairplay_key_request_router(
+    state: Arc<MediaApiState>,
+    payload: MediaKeyRequest,
+    timer: RequestTimer,
+) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
+    handle_fairplay_key_request(state, payload, timer).await
+}
+
+#[cfg(not(feature = "fairplay"))]
+#[allow(dead_code)]
+async fn handle_fairplay_key_request_router(
+    _state: Arc<MediaApiState>,
+    _payload: MediaKeyRequest,
+    _timer: RequestTimer,
+) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
+    Err(ErrorResponse {
+        error: "not_implemented".to_string(),
+        message: "FairPlay support not compiled in (use --features fairplay)".to_string(),
+    })
 }
 
 /// Handle TDF3 key request
@@ -281,6 +337,177 @@ async fn handle_tdf3_key_request(
         metadata: Some(serde_json::json!({
             "latency_ms": latency,
             "segment_index": payload.segment_index,
+        })),
+    }))
+}
+
+/// Handle FairPlay key request
+#[cfg(feature = "fairplay")]
+async fn handle_fairplay_key_request(
+    state: Arc<MediaApiState>,
+    payload: MediaKeyRequest,
+    timer: RequestTimer,
+) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
+    // 1. Verify session exists and update heartbeat
+    let session = match state
+        .session_manager
+        .heartbeat(&payload.session_id, None, payload.segment_index)
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Session not found: {}", e);
+            let latency = timer.elapsed_ms();
+            let event = MediaEvent::KeyRequest {
+                session_id: payload.session_id.clone(),
+                user_id: payload.user_id.clone(),
+                asset_id: payload.asset_id.clone(),
+                segment_index: payload.segment_index,
+                result: KeyRequestResult::InvalidRequest,
+                latency_ms: latency,
+                timestamp: Utc::now().timestamp(),
+            };
+            state.media_metrics.publish_event(event.clone()).await;
+            state.media_metrics.log_event(&event);
+
+            return Err(ErrorResponse {
+                error: "session_not_found".to_string(),
+                message: format!("Session {} not found or expired", payload.session_id),
+            });
+        }
+    };
+
+    // 2. Validate user_id matches session
+    if session.user_id != payload.user_id {
+        error!("User ID mismatch for session {}", payload.session_id);
+        let latency = timer.elapsed_ms();
+        let event = MediaEvent::KeyRequest {
+            session_id: payload.session_id.clone(),
+            user_id: payload.user_id.clone(),
+            asset_id: payload.asset_id.clone(),
+            segment_index: payload.segment_index,
+            result: KeyRequestResult::AuthenticationFailed,
+            latency_ms: latency,
+            timestamp: Utc::now().timestamp(),
+        };
+        state.media_metrics.publish_event(event.clone()).await;
+        state.media_metrics.log_event(&event);
+
+        return Err(ErrorResponse {
+            error: "authentication_failed".to_string(),
+            message: "User ID does not match session".to_string(),
+        });
+    }
+
+    // 3. Validate protocol matches session
+    if session.protocol != MediaProtocol::FairPlay {
+        error!(
+            "Protocol mismatch for session {}: expected FairPlay, got {:?}",
+            payload.session_id, session.protocol
+        );
+        return Err(ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: "Session was created with different protocol".to_string(),
+        });
+    }
+
+    // 4. Extract SPC data
+    let spc_data_base64 = payload.spc_data.as_ref().ok_or_else(|| ErrorResponse {
+        error: "invalid_request".to_string(),
+        message: "Missing spc_data for FairPlay".to_string(),
+    })?;
+
+    let spc_data = base64::decode(spc_data_base64).map_err(|e| {
+        error!("Failed to decode SPC data: {}", e);
+        ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: format!("Invalid base64 SPC data: {}", e),
+        }
+    })?;
+
+    info!(
+        "Processing FairPlay SPC for session {} (SPC size: {} bytes)",
+        payload.session_id,
+        spc_data.len()
+    );
+
+    // 5. TODO: Extract content key (DEK) from policy/storage
+    // For now, use a placeholder 16-byte key (AES-128)
+    // In production, this would come from:
+    // - Policy evaluation (media_policy_contract)
+    // - Key storage (Redis/KMS)
+    // - Content manifest metadata
+    let content_key = vec![0x00u8; 16]; // PLACEHOLDER: Replace with actual DEK retrieval
+
+    // 6. Process SPC using FairPlay SDK
+    let fairplay_handler = state.fairplay_handler.as_ref().ok_or_else(|| ErrorResponse {
+        error: "internal_error".to_string(),
+        message: "FairPlay handler not initialized".to_string(),
+    })?;
+
+    let ckc_data = match fairplay_handler
+        .process_key_request(
+            payload.asset_id.clone(),
+            payload.asset_id.clone(), // content_id = asset_id for simplicity
+            spc_data,
+            content_key,
+        )
+        .await
+    {
+        Ok(data) => data,
+        Err(e) => {
+            error!("FairPlay SDK error: {}", e);
+            let latency = timer.elapsed_ms();
+            let event = MediaEvent::KeyRequest {
+                session_id: payload.session_id.clone(),
+                user_id: payload.user_id.clone(),
+                asset_id: payload.asset_id.clone(),
+                segment_index: payload.segment_index,
+                result: KeyRequestResult::PolicyDenied,
+                latency_ms: latency,
+                timestamp: Utc::now().timestamp(),
+            };
+            state.media_metrics.publish_event(event.clone()).await;
+            state.media_metrics.log_event(&event);
+
+            return Err(ErrorResponse {
+                error: "internal_error".to_string(),
+                message: format!("FairPlay key processing failed: {}", e),
+            });
+        }
+    };
+
+    let latency = timer.elapsed_ms();
+    info!(
+        "FairPlay CKC generated for session {} (CKC size: {} bytes, latency: {}ms)",
+        payload.session_id,
+        ckc_data.len(),
+        latency
+    );
+
+    // 7. Log successful key request
+    let event = MediaEvent::KeyRequest {
+        session_id: payload.session_id.clone(),
+        user_id: payload.user_id.clone(),
+        asset_id: payload.asset_id.clone(),
+        segment_index: payload.segment_index,
+        result: KeyRequestResult::Success,
+        latency_ms: latency,
+        timestamp: Utc::now().timestamp(),
+    };
+    state.media_metrics.publish_event(event.clone()).await;
+    state.media_metrics.log_event(&event);
+
+    // 8. Return CKC to client
+    Ok(Json(MediaKeyResponse {
+        session_public_key: String::new(), // Not used in FairPlay
+        wrapped_key: base64::engine::general_purpose::STANDARD.encode(&ckc_data),
+        status: "success".to_string(),
+        metadata: Some(serde_json::json!({
+            "latency_ms": latency,
+            "segment_index": payload.segment_index,
+            "protocol": "fairplay",
+            "ckc_size": ckc_data.len(),
         })),
     }))
 }

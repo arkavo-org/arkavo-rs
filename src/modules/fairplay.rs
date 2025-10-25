@@ -7,7 +7,6 @@
 #[cfg(feature = "fairplay")]
 use fairplay_wrapper::{FairPlayError, FairPlayKeyServer, SpcRequest};
 use std::path::PathBuf;
-use std::sync::Arc;
 
 /// FairPlay protocol handler
 ///
@@ -15,6 +14,7 @@ use std::sync::Arc;
 pub struct FairPlayHandler {
     #[cfg(feature = "fairplay")]
     key_server: Arc<FairPlayKeyServer>,
+    #[allow(dead_code)]
     enabled: bool,
 }
 
@@ -27,6 +27,7 @@ impl FairPlayHandler {
     /// # Returns
     /// Handler instance, or error if credentials invalid
     #[cfg(feature = "fairplay")]
+    #[allow(dead_code)]
     pub fn new(credentials_path: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
         let key_server = FairPlayKeyServer::new(credentials_path)?;
         log::info!("FairPlay handler initialized (SDK v{})", key_server.version());
@@ -39,12 +40,14 @@ impl FairPlayHandler {
 
     /// Create disabled handler when feature not compiled
     #[cfg(not(feature = "fairplay"))]
+    #[allow(dead_code)]
     pub fn new(_credentials_path: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
         log::warn!("FairPlay feature not enabled at compile time");
         Ok(Self { enabled: false })
     }
 
     /// Check if FairPlay is enabled
+    #[allow(dead_code)]
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
@@ -62,6 +65,7 @@ impl FairPlayHandler {
     /// # Returns
     /// CKC bytes to send to client
     #[cfg(feature = "fairplay")]
+    #[allow(dead_code)]
     pub async fn process_key_request(
         &self,
         content_id: String,
@@ -103,6 +107,7 @@ impl FairPlayHandler {
 
     /// Process key request when feature not compiled
     #[cfg(not(feature = "fairplay"))]
+    #[allow(dead_code)]
     pub async fn process_key_request(
         &self,
         _content_id: String,
@@ -115,11 +120,13 @@ impl FairPlayHandler {
 
     /// Get SDK version (if available)
     #[cfg(feature = "fairplay")]
+    #[allow(dead_code)]
     pub fn version(&self) -> Option<&str> {
         Some(self.key_server.version())
     }
 
     #[cfg(not(feature = "fairplay"))]
+    #[allow(dead_code)]
     pub fn version(&self) -> Option<&str> {
         None
     }

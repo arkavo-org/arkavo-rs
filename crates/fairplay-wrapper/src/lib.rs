@@ -134,8 +134,8 @@ impl FairPlayKeyServer {
                 &mut output_size,
             );
 
-            if status != fpssdk::validate::FPSStatus::noErr {
-                log::error!("fpssdk error status: {:?}", status);
+            if status as i32 != 0 { // noErr = 0
+                log::error!("fpssdk error status: {}", status as i32);
                 return Err(FairPlayError::SdkError(status as i32));
             }
 
@@ -175,7 +175,7 @@ impl FairPlayKeyServer {
             let mut version_ptr: *mut i8 = std::ptr::null_mut();
 
             let status = fpssdk::fpsGetVersion(&mut version_ptr);
-            if status != fpssdk::validate::FPSStatus::noErr {
+            if status as i32 != 0 { // noErr = 0
                 return Err(FairPlayError::SdkError(status as i32));
             }
 

@@ -1879,7 +1879,7 @@ pub mod arkavo {
     /// catch every error, or be maximally performant. For the
     /// previous, unchecked, behavior use
     /// `root_as_metadata_unchecked`.
-    pub fn root_as_metadata(buf: &[u8]) -> Result<Metadata, flatbuffers::InvalidFlatbuffer> {
+    pub fn root_as_metadata(buf: &[u8]) -> Result<Metadata<'_>, flatbuffers::InvalidFlatbuffer> {
         flatbuffers::root::<Metadata>(buf)
     }
     #[inline]
@@ -1891,7 +1891,7 @@ pub mod arkavo {
     /// `size_prefixed_root_as_metadata_unchecked`.
     pub fn size_prefixed_root_as_metadata(
         buf: &[u8],
-    ) -> Result<Metadata, flatbuffers::InvalidFlatbuffer> {
+    ) -> Result<Metadata<'_>, flatbuffers::InvalidFlatbuffer> {
         flatbuffers::size_prefixed_root::<Metadata>(buf)
     }
     #[inline]
@@ -1924,14 +1924,14 @@ pub mod arkavo {
     /// Assumes, without verification, that a buffer of bytes contains a Metadata and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid `Metadata`.
-    pub unsafe fn root_as_metadata_unchecked(buf: &[u8]) -> Metadata {
+    pub unsafe fn root_as_metadata_unchecked(buf: &[u8]) -> Metadata<'_> {
         flatbuffers::root_unchecked::<Metadata>(buf)
     }
     #[inline]
     /// Assumes, without verification, that a buffer of bytes contains a size prefixed Metadata and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid size prefixed `Metadata`.
-    pub unsafe fn size_prefixed_root_as_metadata_unchecked(buf: &[u8]) -> Metadata {
+    pub unsafe fn size_prefixed_root_as_metadata_unchecked(buf: &[u8]) -> Metadata<'_> {
         flatbuffers::size_prefixed_root_unchecked::<Metadata>(buf)
     }
     #[inline]

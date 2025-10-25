@@ -10,13 +10,19 @@ fn main() {
     let os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
 
+    // Get absolute path to prebuilt directory (relative to this crate's root)
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let prebuilt_dir = format!("{}/prebuilt", manifest_dir);
+
     // Set RPATH so executable can find the library in the prebuilt folder
     if os == "macos" {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,./prebuilt/macos");
-        println!("cargo:rustc-link-search=./prebuilt/macos");
+        let lib_path = format!("{}/macos", prebuilt_dir);
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_path);
+        println!("cargo:rustc-link-search={}", lib_path);
     } else {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,./prebuilt/{}-unknown-linux-gnu", arch);
-        println!("cargo:rustc-link-search=./prebuilt/{}-unknown-linux-gnu", arch);
+        let lib_path = format!("{}/{}-unknown-linux-gnu", prebuilt_dir, arch);
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_path);
+        println!("cargo:rustc-link-search={}", lib_path);
     }
 
     // Link to libfpscrypto

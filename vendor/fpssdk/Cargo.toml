@@ -24,10 +24,6 @@ path = "src/bin/server.rs"
 name = "fpssdk_local"
 path = "src/bin/local.rs"
 
-[profile.release]
-lto = true
-strip = true
-
 [dependencies]
 serde = { version = "1.0.104", features = ["derive"] }
 serde_jsonrc = { version = "0.1.0", features = ["preserve_order"] }
