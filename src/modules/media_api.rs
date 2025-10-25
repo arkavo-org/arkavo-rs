@@ -129,6 +129,76 @@ fn detect_protocol(payload: &MediaKeyRequest) -> Option<MediaProtocol> {
     }
 }
 
+/// Validate session exists and user_id matches
+async fn validate_session(
+    state: &MediaApiState,
+    payload: &MediaKeyRequest,
+    timer: &RequestTimer,
+) -> Result<PlaybackSession, ErrorResponse> {
+    // Verify session exists and update heartbeat
+    let session = match state
+        .session_manager
+        .heartbeat(&payload.session_id, None, payload.segment_index)
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Session not found: {}", e);
+            log_key_request_error(
+                state,
+                payload,
+                KeyRequestResult::InvalidRequest,
+                timer.elapsed_ms(),
+            )
+            .await;
+
+            return Err(ErrorResponse {
+                error: "session_not_found".to_string(),
+                message: format!("Session {} not found or expired", payload.session_id),
+            });
+        }
+    };
+
+    // Validate user_id matches session
+    if session.user_id != payload.user_id {
+        error!("User ID mismatch for session {}", payload.session_id);
+        log_key_request_error(
+            state,
+            payload,
+            KeyRequestResult::AuthenticationFailed,
+            timer.elapsed_ms(),
+        )
+        .await;
+
+        return Err(ErrorResponse {
+            error: "authentication_failed".to_string(),
+            message: "User ID does not match session".to_string(),
+        });
+    }
+
+    Ok(session)
+}
+
+/// Log key request error event
+async fn log_key_request_error(
+    state: &MediaApiState,
+    payload: &MediaKeyRequest,
+    result: KeyRequestResult,
+    latency_ms: u64,
+) {
+    let event = MediaEvent::KeyRequest {
+        session_id: payload.session_id.clone(),
+        user_id: payload.user_id.clone(),
+        asset_id: payload.asset_id.clone(),
+        segment_index: payload.segment_index,
+        result,
+        latency_ms,
+        timestamp: Utc::now().timestamp(),
+    };
+    state.media_metrics.publish_event(event.clone()).await;
+    state.media_metrics.log_event(&event);
+}
+
 // ==================== API Handlers ====================
 
 /// POST /media/v1/key-request
@@ -222,56 +292,8 @@ async fn handle_tdf3_key_request(
     payload: MediaKeyRequest,
     timer: RequestTimer,
 ) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
-    // 1. Verify session exists and update heartbeat
-    let session = match state
-        .session_manager
-        .heartbeat(&payload.session_id, None, payload.segment_index)
-        .await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            error!("Session not found: {}", e);
-            let latency = timer.elapsed_ms();
-            let event = MediaEvent::KeyRequest {
-                session_id: payload.session_id.clone(),
-                user_id: payload.user_id.clone(),
-                asset_id: payload.asset_id.clone(),
-                segment_index: payload.segment_index,
-                result: KeyRequestResult::InvalidRequest,
-                latency_ms: latency,
-                timestamp: Utc::now().timestamp(),
-            };
-            state.media_metrics.publish_event(event.clone()).await;
-            state.media_metrics.log_event(&event);
-
-            return Err(ErrorResponse {
-                error: "session_not_found".to_string(),
-                message: format!("Session {} not found or expired", payload.session_id),
-            });
-        }
-    };
-
-    // 2. Validate user_id matches session
-    if session.user_id != payload.user_id {
-        error!("User ID mismatch for session {}", payload.session_id);
-        let latency = timer.elapsed_ms();
-        let event = MediaEvent::KeyRequest {
-            session_id: payload.session_id.clone(),
-            user_id: payload.user_id.clone(),
-            asset_id: payload.asset_id.clone(),
-            segment_index: payload.segment_index,
-            result: KeyRequestResult::AuthenticationFailed,
-            latency_ms: latency,
-            timestamp: Utc::now().timestamp(),
-        };
-        state.media_metrics.publish_event(event.clone()).await;
-        state.media_metrics.log_event(&event);
-
-        return Err(ErrorResponse {
-            error: "authentication_failed".to_string(),
-            message: "User ID does not match session".to_string(),
-        });
-    }
+    // 1. Validate session and user
+    let _session = validate_session(&state, &payload, &timer).await?;
 
     // 3. Parse client public key (unwrap safe: detect_protocol verified it exists)
     let client_public_key_pem = payload.client_public_key.as_ref().ok_or_else(|| ErrorResponse {
@@ -352,56 +374,8 @@ async fn handle_fairplay_key_request(
     payload: MediaKeyRequest,
     timer: RequestTimer,
 ) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
-    // 1. Verify session exists and update heartbeat
-    let session = match state
-        .session_manager
-        .heartbeat(&payload.session_id, None, payload.segment_index)
-        .await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            error!("Session not found: {}", e);
-            let latency = timer.elapsed_ms();
-            let event = MediaEvent::KeyRequest {
-                session_id: payload.session_id.clone(),
-                user_id: payload.user_id.clone(),
-                asset_id: payload.asset_id.clone(),
-                segment_index: payload.segment_index,
-                result: KeyRequestResult::InvalidRequest,
-                latency_ms: latency,
-                timestamp: Utc::now().timestamp(),
-            };
-            state.media_metrics.publish_event(event.clone()).await;
-            state.media_metrics.log_event(&event);
-
-            return Err(ErrorResponse {
-                error: "session_not_found".to_string(),
-                message: format!("Session {} not found or expired", payload.session_id),
-            });
-        }
-    };
-
-    // 2. Validate user_id matches session
-    if session.user_id != payload.user_id {
-        error!("User ID mismatch for session {}", payload.session_id);
-        let latency = timer.elapsed_ms();
-        let event = MediaEvent::KeyRequest {
-            session_id: payload.session_id.clone(),
-            user_id: payload.user_id.clone(),
-            asset_id: payload.asset_id.clone(),
-            segment_index: payload.segment_index,
-            result: KeyRequestResult::AuthenticationFailed,
-            latency_ms: latency,
-            timestamp: Utc::now().timestamp(),
-        };
-        state.media_metrics.publish_event(event.clone()).await;
-        state.media_metrics.log_event(&event);
-
-        return Err(ErrorResponse {
-            error: "authentication_failed".to_string(),
-            message: "User ID does not match session".to_string(),
-        });
-    }
+    // 1. Validate session and user
+    let session = validate_session(&state, &payload, &timer).await?;
 
     // 3. Validate protocol matches session
     if session.protocol != MediaProtocol::FairPlay {
@@ -469,18 +443,13 @@ async fn handle_fairplay_key_request(
         Ok(data) => data,
         Err(error_message) => {
             error!("FairPlay SDK error: {}", error_message);
-            let latency = timer.elapsed_ms();
-            let event = MediaEvent::KeyRequest {
-                session_id: payload.session_id.clone(),
-                user_id: payload.user_id.clone(),
-                asset_id: payload.asset_id.clone(),
-                segment_index: payload.segment_index,
-                result: KeyRequestResult::PolicyDenied,
-                latency_ms: latency,
-                timestamp: Utc::now().timestamp(),
-            };
-            state.media_metrics.publish_event(event.clone()).await;
-            state.media_metrics.log_event(&event);
+            log_key_request_error(
+                &state,
+                &payload,
+                KeyRequestResult::PolicyDenied,
+                timer.elapsed_ms(),
+            )
+            .await;
 
             return Err(ErrorResponse {
                 error: "internal_error".to_string(),

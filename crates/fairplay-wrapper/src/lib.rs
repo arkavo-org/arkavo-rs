@@ -23,6 +23,7 @@
 //! // response.ckc_data contains the encrypted CKC to send to client
 //! ```
 
+use base64::Engine;
 use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 use std::sync::Once;
@@ -33,6 +34,7 @@ static INIT: Once = Once::new();
 ///
 /// Manages FairPlay Streaming content key operations using Apple's SDK.
 pub struct FairPlayKeyServer {
+    #[allow(dead_code)] // Stored for debugging/logging purposes
     credentials_path: PathBuf,
     sdk_version: String,
 }
@@ -111,9 +113,9 @@ impl FairPlayKeyServer {
                 "create-ckc": [{
                     "id": 1,
                     "content-id": request.content_id,
-                    "spc": base64::encode(&request.spc_data),
+                    "spc": base64::engine::general_purpose::STANDARD.encode(&request.spc_data),
                     "asset-id": request.asset_id,
-                    "ck": base64::encode(&request.content_key),
+                    "ck": base64::engine::general_purpose::STANDARD.encode(&request.content_key),
                 }]
             }
         });
@@ -156,7 +158,7 @@ impl FairPlayKeyServer {
                 .and_then(|ckc| ckc.as_str())
                 .ok_or(FairPlayError::InvalidResponse)?;
 
-            base64::decode(ckc_base64)?
+            base64::engine::general_purpose::STANDARD.decode(ckc_base64)?
         };
 
         log::debug!("Successfully generated CKC ({} bytes)", ckc_data.len());

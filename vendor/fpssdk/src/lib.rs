@@ -1,7 +1,7 @@
 //
 // Copyright © 2023-2024 Apple Inc. All rights reserved.
 //
-#![allow(nonstandard_style, unused_variables, unused_assignments, dead_code, unused_mut, unreachable_code, const_item_mutation)]
+#![allow(nonstandard_style, unused_variables, unused_assignments, dead_code, unused_mut, unreachable_code, const_item_mutation, clippy::all)]
 
 use std::env;
 use crate::base::structures::base_fps_structures::Base;
