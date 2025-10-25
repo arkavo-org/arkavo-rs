@@ -59,7 +59,7 @@ pub struct MediaKeyRequest {
     pub client_public_key: Option<String>, // PEM format (for TDF3)
     pub nanotdf_header: Option<String>,    // Base64-encoded (for TDF3)
     // FairPlay fields
-    pub spc_data: Option<String>,          // Base64-encoded (for FairPlay)
+    pub spc_data: Option<String>, // Base64-encoded (for FairPlay)
 }
 
 #[derive(Debug, Serialize)]
@@ -232,7 +232,9 @@ pub fn media_key_request(
         // Route to protocol-specific handler
         match protocol {
             MediaProtocol::TDF3 => handle_tdf3_key_request(state, payload, timer).await,
-            MediaProtocol::FairPlay => handle_fairplay_key_request_router(state, payload, timer).await,
+            MediaProtocol::FairPlay => {
+                handle_fairplay_key_request_router(state, payload, timer).await
+            }
         }
     })
 }
@@ -303,10 +305,13 @@ async fn handle_tdf3_key_request(
     let _session = validate_session(&state, &payload, &timer).await?;
 
     // 3. Validate NanoTDF header size
-    let nanotdf_header = payload.nanotdf_header.as_ref().ok_or_else(|| ErrorResponse {
-        error: "invalid_request".to_string(),
-        message: "Missing nanotdf_header for TDF3".to_string(),
-    })?;
+    let nanotdf_header = payload
+        .nanotdf_header
+        .as_ref()
+        .ok_or_else(|| ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: "Missing nanotdf_header for TDF3".to_string(),
+        })?;
 
     // Check header size before base64 decoding to prevent DoS
     if nanotdf_header.len() > MAX_NANOTDF_HEADER_SIZE * 4 / 3 {
@@ -322,10 +327,14 @@ async fn handle_tdf3_key_request(
     }
 
     // 4. Parse client public key (unwrap safe: detect_protocol verified it exists)
-    let client_public_key_pem = payload.client_public_key.as_ref().ok_or_else(|| ErrorResponse {
-        error: "invalid_request".to_string(),
-        message: "Missing client_public_key for TDF3".to_string(),
-    })?;
+    let client_public_key_pem =
+        payload
+            .client_public_key
+            .as_ref()
+            .ok_or_else(|| ErrorResponse {
+                error: "invalid_request".to_string(),
+                message: "Missing client_public_key for TDF3".to_string(),
+            })?;
     let client_public_key =
         parse_pem_public_key(client_public_key_pem).map_err(|e| ErrorResponse {
             error: "invalid_request".to_string(),
@@ -501,10 +510,13 @@ async fn handle_fairplay_key_request(
     }
 
     // 6. Process SPC using FairPlay SDK
-    let fairplay_handler = state.fairplay_handler.as_ref().ok_or_else(|| ErrorResponse {
-        error: "internal_error".to_string(),
-        message: "FairPlay handler not initialized".to_string(),
-    })?;
+    let fairplay_handler = state
+        .fairplay_handler
+        .as_ref()
+        .ok_or_else(|| ErrorResponse {
+            error: "internal_error".to_string(),
+            message: "FairPlay handler not initialized".to_string(),
+        })?;
 
     // Convert error to String immediately to avoid !Send issues with Box<dyn Error>
     let ckc_data_result: Result<Vec<u8>, String> = match fairplay_handler
@@ -815,7 +827,9 @@ mod tests {
             user_id: "test-user".to_string(),
             asset_id: "test-asset".to_string(),
             segment_index: Some(0),
-            client_public_key: Some("-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----".to_string()),
+            client_public_key: Some(
+                "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----".to_string(),
+            ),
             nanotdf_header: Some("base64header".to_string()),
             spc_data: None,
         };

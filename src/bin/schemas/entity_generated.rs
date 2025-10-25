@@ -2470,7 +2470,9 @@ pub mod arkavo {
     /// catch every error, or be maximally performant. For the
     /// previous, unchecked, behavior use
     /// `root_as_entity_root_unchecked`.
-    pub fn root_as_entity_root(buf: &[u8]) -> Result<EntityRoot<'_>, flatbuffers::InvalidFlatbuffer> {
+    pub fn root_as_entity_root(
+        buf: &[u8],
+    ) -> Result<EntityRoot<'_>, flatbuffers::InvalidFlatbuffer> {
         flatbuffers::root::<EntityRoot>(buf)
     }
     #[inline]

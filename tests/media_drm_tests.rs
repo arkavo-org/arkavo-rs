@@ -164,7 +164,7 @@ async fn test_concurrency_limits() {
             user_id.to_string(),
             format!("test-asset-{}", i),
             MediaProtocol::TDF3,
-        "127.0.0.1".to_string(),
+            "127.0.0.1".to_string(),
         );
 
         session_manager
@@ -444,7 +444,7 @@ async fn test_get_user_sessions() {
             user_id.to_string(),
             format!("test-asset-{}", i),
             MediaProtocol::TDF3,
-        "127.0.0.1".to_string(),
+            "127.0.0.1".to_string(),
         );
         session_manager
             .create_session(session)
@@ -553,7 +553,7 @@ mod benchmarks {
                 user_id.to_string(),
                 format!("bench-asset-{}", i),
                 MediaProtocol::TDF3,
-        "127.0.0.1".to_string(),
+                "127.0.0.1".to_string(),
             );
 
             session_manager
@@ -594,7 +594,7 @@ mod benchmarks {
             user_id.to_string(),
             "bench-heartbeat-asset".to_string(),
             MediaProtocol::TDF3,
-        "127.0.0.1".to_string(),
+            "127.0.0.1".to_string(),
         );
 
         session_manager

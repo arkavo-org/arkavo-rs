@@ -32,7 +32,10 @@ impl FairPlayHandler {
     #[allow(dead_code)]
     pub fn new(credentials_path: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
         let key_server = FairPlayKeyServer::new(credentials_path)?;
-        log::info!("FairPlay handler initialized (SDK v{})", key_server.version());
+        log::info!(
+            "FairPlay handler initialized (SDK v{})",
+            key_server.version()
+        );
 
         Ok(Self {
             key_server: Arc::new(key_server),
@@ -100,7 +103,8 @@ impl FairPlayHandler {
 
         // Process SPC using SDK (blocking operation, run in blocking task)
         let key_server = self.key_server.clone();
-        let response = tokio::task::spawn_blocking(move || key_server.process_spc(request)).await??;
+        let response =
+            tokio::task::spawn_blocking(move || key_server.process_spc(request)).await??;
 
         log::debug!("FairPlay CKC generated ({} bytes)", response.ckc_data.len());
 

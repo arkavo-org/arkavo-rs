@@ -353,14 +353,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize FairPlay handler if feature enabled
     #[cfg(feature = "fairplay")]
     let fairplay_handler = {
-        use std::path::PathBuf;
         use modules::fairplay::FairPlayHandler;
+        use std::path::PathBuf;
 
-        let credentials_path = std::env::var("FAIRPLAY_CREDENTIALS_PATH")
-            .unwrap_or_else(|_| {
-                log::warn!("FAIRPLAY_CREDENTIALS_PATH not set, using default");
-                "./vendor/FairPlay_Streaming_Server_SDK_26/Development/Key_Server_Module/credentials".to_string()
-            });
+        let credentials_path = std::env::var("FAIRPLAY_CREDENTIALS_PATH").unwrap_or_else(|_| {
+            log::warn!("FAIRPLAY_CREDENTIALS_PATH not set, using default");
+            "./vendor/FairPlay_Streaming_Server_SDK_26/Development/Key_Server_Module/credentials"
+                .to_string()
+        });
 
         match FairPlayHandler::new(PathBuf::from(credentials_path)) {
             Ok(handler) => {

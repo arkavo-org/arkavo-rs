@@ -22,7 +22,6 @@
 /// ```
 ///
 /// These tests are marked #[ignore] because they require external services.
-
 use reqwest;
 use serde_json::Value;
 
@@ -195,11 +194,7 @@ async fn test_1_4_session_heartbeat() {
         .await
         .expect("Failed to send heartbeat");
 
-    assert_eq!(
-        response.status(),
-        200,
-        "Expected HTTP 200 for heartbeat"
-    );
+    assert_eq!(response.status(), 200, "Expected HTTP 200 for heartbeat");
 
     let body: Value = response.json().await.expect("Failed to parse JSON");
 
@@ -442,7 +437,5 @@ async fn test_dual_protocol_session_management() {
 
     assert_eq!(fairplay_hb.status(), 200);
 
-    println!(
-        "✅ Dual Protocol Test PASS: Both TDF3 and FairPlay sessions managed successfully"
-    );
+    println!("✅ Dual Protocol Test PASS: Both TDF3 and FairPlay sessions managed successfully");
 }
