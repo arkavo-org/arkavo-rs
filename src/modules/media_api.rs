@@ -28,6 +28,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 // Constants for input validation
+#[cfg(feature = "fairplay")]
 const MAX_SPC_DATA_SIZE: usize = 64 * 1024; // 64KB max for SPC data
 const MAX_NANOTDF_HEADER_SIZE: usize = 16 * 1024; // 16KB max for NanoTDF header
 
