@@ -32,7 +32,10 @@ jobs:
       - name: lint
         run: cargo clippy --lib --bin arkavo --all-features -- -D warnings -A mismatched-lifetime-syntaxes
       - name: format
-        run: cargo fmt --all --check
+        run: |
+          # Format check excluding vendor/ (copyrighted Apple SDK code)
+          cargo fmt --check --package arkavo-rs
+          cargo fmt --check --package fairplay-wrapper
 
   build:
     runs-on: ubuntu-latest

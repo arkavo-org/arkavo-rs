@@ -4,6 +4,7 @@ use chrono::Utc;
 ///
 /// These tests require Redis to be running on localhost:6379
 /// Tests use #[serial] attribute to prevent parallel execution conflicts
+use nanotdf::modules::MediaProtocol;
 use nanotdf::session_manager::{PlaybackSession, SessionManager, SessionState};
 use redis::Client as RedisClient;
 use serial_test::serial;
@@ -92,6 +93,7 @@ async fn test_session_lifecycle() {
         "test-session-1".to_string(),
         user_id.to_string(),
         "test-asset-1".to_string(),
+        MediaProtocol::TDF3,
         "127.0.0.1".to_string(),
     );
 
@@ -161,6 +163,7 @@ async fn test_concurrency_limits() {
             format!("test-session-concurrency-{}", i),
             user_id.to_string(),
             format!("test-asset-{}", i),
+            MediaProtocol::TDF3,
             "127.0.0.1".to_string(),
         );
 
@@ -182,6 +185,7 @@ async fn test_concurrency_limits() {
         "test-session-concurrency-excess".to_string(),
         user_id.to_string(),
         "test-asset-excess".to_string(),
+        MediaProtocol::TDF3,
         "127.0.0.1".to_string(),
     );
 
@@ -199,6 +203,7 @@ async fn test_concurrency_limits() {
         "test-session-concurrency-new".to_string(),
         user_id.to_string(),
         "test-asset-new".to_string(),
+        MediaProtocol::TDF3,
         "127.0.0.1".to_string(),
     );
 
@@ -267,6 +272,7 @@ async fn test_session_heartbeat_timeout() {
         "test-session-timeout".to_string(),
         user_id.to_string(),
         "test-asset-timeout".to_string(),
+        MediaProtocol::TDF3,
         "127.0.0.1".to_string(),
     );
 
@@ -362,6 +368,7 @@ async fn test_session_state_transitions() {
         "test-session-states".to_string(),
         user_id.to_string(),
         "test-asset-states".to_string(),
+        MediaProtocol::TDF3,
         "127.0.0.1".to_string(),
     );
 
@@ -436,6 +443,7 @@ async fn test_get_user_sessions() {
             format!("test-session-multi-{}", i),
             user_id.to_string(),
             format!("test-asset-{}", i),
+            MediaProtocol::TDF3,
             "127.0.0.1".to_string(),
         );
         session_manager
@@ -477,6 +485,7 @@ async fn test_cleanup_expired_sessions() {
         "test-session-cleanup".to_string(),
         user_id.to_string(),
         "test-asset-cleanup".to_string(),
+        MediaProtocol::TDF3,
         "127.0.0.1".to_string(),
     );
 
@@ -543,6 +552,7 @@ mod benchmarks {
                 format!("bench-session-{}", i),
                 user_id.to_string(),
                 format!("bench-asset-{}", i),
+                MediaProtocol::TDF3,
                 "127.0.0.1".to_string(),
             );
 
@@ -583,6 +593,7 @@ mod benchmarks {
             "bench-heartbeat-session".to_string(),
             user_id.to_string(),
             "bench-heartbeat-asset".to_string(),
+            MediaProtocol::TDF3,
             "127.0.0.1".to_string(),
         );
 

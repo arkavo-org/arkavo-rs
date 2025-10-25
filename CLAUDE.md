@@ -159,7 +159,12 @@ export MAX_CONCURRENT_STREAMS=5                    # Max simultaneous streams pe
 export ENABLE_MEDIA_ANALYTICS=true                 # Publish metrics to NATS
 export MEDIA_METRICS_SUBJECT=media.metrics         # NATS subject for analytics events
 export OAUTH_PUBLIC_KEY_PATH=/path/to/oauth_public.pem  # Optional JWT validation
+
+# FairPlay Streaming Configuration (optional, requires --features fairplay)
+export FAIRPLAY_CREDENTIALS_PATH=/path/to/fps/credentials
 ```
+
+**Note:** For FairPlay Streaming integration (Apple DRM), see `docs/fairplay.md`.
 
 ## FlatBuffers Schema Compilation
 
@@ -182,7 +187,10 @@ Generated files are in `src/bin/schemas/`.
 - `src/bin/media_metrics.rs` - Analytics and performance monitoring
 - `src/modules/http_rewrap.rs` - OpenTDF-compatible RESTful rewrap endpoint
 - `src/modules/media_api.rs` - Media DRM-specific API endpoints
+- `src/modules/fairplay.rs` - FairPlay Streaming integration (optional feature)
 - `src/modules/crypto.rs` - Cryptographic primitives
+- `vendor/fpssdk/` - Apple FairPlay SDK Rust module (optional)
+- `crates/fairplay-wrapper/` - Safe Rust wrapper for FairPlay SDK (optional)
 - `tests/` - Integration tests
 - `benches/` - Performance benchmarks
 
@@ -319,3 +327,4 @@ cargo run
 - Self-signed certificates are for development only
 - Session IDs should be treated as secrets (contain user_id + asset_id)
 - Apple App Site Association file (`apple-app-site-association.json`) is served at `/.well-known/apple-app-site-association`
+- put documentation under /docs .  for short-term (status-like) docs don't commit.
