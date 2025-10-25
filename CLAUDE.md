@@ -327,3 +327,4 @@ cargo run
 - Self-signed certificates are for development only
 - Session IDs should be treated as secrets (contain user_id + asset_id)
 - Apple App Site Association file (`apple-app-site-association.json`) is served at `/.well-known/apple-app-site-association`
+- put documentation under /docs .  for short-term (status-like) docs don't commit.
