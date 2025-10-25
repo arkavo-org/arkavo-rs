@@ -11,14 +11,16 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use base64;
+use base64::{self, Engine};
 use chrono::Utc;
 use log::{error, info};
 use nanotdf::BinaryParser;
 use p256::{ecdh::EphemeralSecret, PublicKey as P256PublicKey, SecretKey};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -132,28 +134,30 @@ fn detect_protocol(payload: &MediaKeyRequest) -> Option<MediaProtocol> {
 /// POST /media/v1/key-request
 /// Fast path for media segment key delivery (supports both TDF3 and FairPlay)
 #[cfg(feature = "fairplay")]
-pub async fn media_key_request(
+pub fn media_key_request(
     State(state): State<Arc<MediaApiState>>,
     Json(payload): Json<MediaKeyRequest>,
-) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
-    let timer = RequestTimer::start();
+) -> Pin<Box<dyn Future<Output = Result<Json<MediaKeyResponse>, ErrorResponse>> + Send>> {
+    Box::pin(async move {
+        let timer = RequestTimer::start();
 
-    // Auto-detect protocol from request fields
-    let protocol = detect_protocol(&payload).ok_or_else(|| ErrorResponse {
-        error: "invalid_request".to_string(),
-        message: "Could not detect protocol: provide either (nanotdf_header + client_public_key) for TDF3, or spc_data for FairPlay".to_string(),
-    })?;
+        // Auto-detect protocol from request fields
+        let protocol = detect_protocol(&payload).ok_or_else(|| ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: "Could not detect protocol: provide either (nanotdf_header + client_public_key) for TDF3, or spc_data for FairPlay".to_string(),
+        })?;
 
-    info!(
-        "Media key request [{}]: session={} asset={} segment={:?}",
-        protocol, payload.session_id, payload.asset_id, payload.segment_index
-    );
+        info!(
+            "Media key request [{}]: session={} asset={} segment={:?}",
+            protocol, payload.session_id, payload.asset_id, payload.segment_index
+        );
 
-    // Route to protocol-specific handler
-    match protocol {
-        MediaProtocol::TDF3 => handle_tdf3_key_request(state, payload, timer).await,
-        MediaProtocol::FairPlay => handle_fairplay_key_request_router(state, payload, timer).await,
-    }
+        // Route to protocol-specific handler
+        match protocol {
+            MediaProtocol::TDF3 => handle_tdf3_key_request(state, payload, timer).await,
+            MediaProtocol::FairPlay => handle_fairplay_key_request_router(state, payload, timer).await,
+        }
+    })
 }
 
 /// POST /media/v1/key-request (without fairplay feature)
@@ -417,13 +421,15 @@ async fn handle_fairplay_key_request(
         message: "Missing spc_data for FairPlay".to_string(),
     })?;
 
-    let spc_data = base64::decode(spc_data_base64).map_err(|e| {
-        error!("Failed to decode SPC data: {}", e);
-        ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: format!("Invalid base64 SPC data: {}", e),
-        }
-    })?;
+    let spc_data = base64::engine::general_purpose::STANDARD
+        .decode(spc_data_base64)
+        .map_err(|e| {
+            error!("Failed to decode SPC data: {}", e);
+            ErrorResponse {
+                error: "invalid_request".to_string(),
+                message: format!("Invalid base64 SPC data: {}", e),
+            }
+        })?;
 
     info!(
         "Processing FairPlay SPC for session {} (SPC size: {} bytes)",
@@ -445,7 +451,8 @@ async fn handle_fairplay_key_request(
         message: "FairPlay handler not initialized".to_string(),
     })?;
 
-    let ckc_data = match fairplay_handler
+    // Convert error to String immediately to avoid !Send issues with Box<dyn Error>
+    let ckc_data_result: Result<Vec<u8>, String> = match fairplay_handler
         .process_key_request(
             payload.asset_id.clone(),
             payload.asset_id.clone(), // content_id = asset_id for simplicity
@@ -454,9 +461,14 @@ async fn handle_fairplay_key_request(
         )
         .await
     {
+        Ok(data) => Ok(data),
+        Err(e) => Err(e.to_string()),
+    };
+
+    let ckc_data = match ckc_data_result {
         Ok(data) => data,
-        Err(e) => {
-            error!("FairPlay SDK error: {}", e);
+        Err(error_message) => {
+            error!("FairPlay SDK error: {}", error_message);
             let latency = timer.elapsed_ms();
             let event = MediaEvent::KeyRequest {
                 session_id: payload.session_id.clone(),
@@ -472,7 +484,7 @@ async fn handle_fairplay_key_request(
 
             return Err(ErrorResponse {
                 error: "internal_error".to_string(),
-                message: format!("FairPlay key processing failed: {}", e),
+                message: format!("FairPlay key processing failed: {}", error_message),
             });
         }
     };

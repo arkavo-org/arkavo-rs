@@ -5,8 +5,9 @@
 //! maintaining unified session management and policy enforcement with TDF3.
 
 #[cfg(feature = "fairplay")]
-use fairplay_wrapper::{FairPlayError, FairPlayKeyServer, SpcRequest};
+use fairplay_wrapper::{FairPlayKeyServer, SpcRequest};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// FairPlay protocol handler
 ///
