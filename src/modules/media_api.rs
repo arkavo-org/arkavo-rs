@@ -414,13 +414,47 @@ async fn handle_fairplay_key_request(
         spc_data.len()
     );
 
+    // ⚠️  CRITICAL SECURITY WARNING ⚠️
     // 5. TODO: Extract content key (DEK) from policy/storage
-    // For now, use a placeholder 16-byte key (AES-128)
-    // In production, this would come from:
-    // - Policy evaluation (media_policy_contract)
-    // - Key storage (Redis/KMS)
-    // - Content manifest metadata
+    //
+    // PLACEHOLDER IMPLEMENTATION - NOT PRODUCTION READY!
+    // This uses a hardcoded zero-filled key which provides NO SECURITY.
+    // All FairPlay-protected content would use the same key.
+    //
+    // Production implementation MUST retrieve unique DEKs from:
+    // - Content metadata service (asset_id → DEK mapping)
+    // - Key Management Service (KMS) or Hardware Security Module (HSM)
+    // - Policy evaluation (media_policy_contract) for access control
+    // - Secure key storage (Redis with encryption, Vault, etc.)
+    //
+    // Integration points:
+    // - Add DEK lookup: `let content_key = fetch_content_key(&payload.asset_id).await?;`
+    // - Add policy check: `validate_key_access(&session, &payload).await?;`
+    // - Add key rotation support for long-lived content
     let content_key = vec![0x00u8; 16]; // PLACEHOLDER: Replace with actual DEK retrieval
+
+    // Debug-mode validation: Prevent accidental production deployment
+    // Remove this assertion once real DEK retrieval is implemented
+    #[cfg(debug_assertions)]
+    {
+        log::warn!(
+            "⚠️  USING PLACEHOLDER CONTENT KEY - NOT SECURE FOR PRODUCTION! Asset: {}",
+            payload.asset_id
+        );
+    }
+
+    // Production safety check: Fail fast if placeholder key detected in release builds
+    // TODO: Remove this check once real DEK retrieval is implemented
+    #[cfg(not(debug_assertions))]
+    {
+        if content_key == vec![0x00u8; 16] {
+            error!("SECURITY ERROR: Placeholder content key detected in production build!");
+            return Err(ErrorResponse {
+                error: "internal_error".to_string(),
+                message: "Content key retrieval not implemented".to_string(),
+            });
+        }
+    }
 
     // 6. Process SPC using FairPlay SDK
     let fairplay_handler = state.fairplay_handler.as_ref().ok_or_else(|| ErrorResponse {

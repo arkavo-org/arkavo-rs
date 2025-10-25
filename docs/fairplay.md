@@ -25,7 +25,20 @@ Production deployment requires a valid Apple FairPlay Streaming agreement. Conta
 
 The SDK Rust module is already included in `vendor/fpssdk/` (committed to repository).
 
-For full SDK with credentials:
+**⚠️ Note on Prebuilt Binaries:**
+The `vendor/fpssdk/prebuilt/` directory contains platform-specific libfpscrypto binaries (~2MB total):
+- `macos/libfpscrypto.dylib` (1.0MB) - macOS ARM64/x86_64
+- `x86_64-unknown-linux-gnu/libfpscrypto.so` (492KB)
+- `aarch64-unknown-linux-gnu/libfpscrypto.so` (524KB)
+
+These are currently committed for developer convenience but have limitations:
+- **License**: Apple FairPlay SDK license applies (see THIRD-PARTY-LICENSES.md)
+- **Security**: SHA256 checksums should be verified before use
+- **Git bloat**: Consider using Git LFS or external artifact storage for production
+
+TODO: Move to external artifact repository or use build script to download on demand.
+
+**For full SDK with credentials:**
 1. Download FairPlay Streaming Server SDK 26 from [Apple Developer Portal](https://developer.apple.com/streaming/fps/)
 2. Extract to `vendor/FairPlay_Streaming_Server_SDK_26/` (gitignored)
 3. Credentials are in `Development/Key_Server_Module/credentials/`
