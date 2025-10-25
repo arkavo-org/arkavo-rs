@@ -30,4 +30,6 @@ Cargo.lock
 vendor/FairPlay*/
 # Allow committed FairPlay SDK Rust module
 !vendor/fpssdk/
+# Exclude FairPlay SDK prebuilt binaries (must be installed separately)
+vendor/fpssdk/prebuilt/
 .DS_Store

@@ -23,25 +23,39 @@ Production deployment requires a valid Apple FairPlay Streaming agreement. Conta
 
 ### 2. FairPlay SDK
 
-The SDK Rust module is already included in `vendor/fpssdk/` (committed to repository).
+**SDK Rust Module:**
+The SDK Rust module is included in `vendor/fpssdk/` (committed to repository).
 
-**⚠️ Note on Prebuilt Binaries:**
-The `vendor/fpssdk/prebuilt/` directory contains platform-specific libfpscrypto binaries (~2MB total):
-- `macos/libfpscrypto.dylib` (1.0MB) - macOS ARM64/x86_64
-- `x86_64-unknown-linux-gnu/libfpscrypto.so` (492KB)
-- `aarch64-unknown-linux-gnu/libfpscrypto.so` (524KB)
+**Cryptographic Library (libfpscrypto):**
+The prebuilt binaries are **NOT** included in the repository for license compliance and security reasons. You must install them separately:
 
-These are currently committed for developer convenience but have limitations:
-- **License**: Apple FairPlay SDK license applies (see THIRD-PARTY-LICENSES.md)
-- **Security**: SHA256 checksums should be verified before use
-- **Git bloat**: Consider using Git LFS or external artifact storage for production
+1. **Download FairPlay Streaming Server SDK 26** from [Apple Developer Portal](https://developer.apple.com/streaming/fps/)
+2. **Extract to** `vendor/FairPlay_Streaming_Server_SDK_26/` (gitignored)
+3. **Install libfpscrypto library**:
 
-TODO: Move to external artifact repository or use build script to download on demand.
+   **Option A: System-wide installation (recommended)**
+   ```bash
+   # macOS
+   sudo cp vendor/FairPlay_Streaming_Server_SDK_26/Development/lib/macos/libfpscrypto.dylib /usr/local/lib/
 
-**For full SDK with credentials:**
-1. Download FairPlay Streaming Server SDK 26 from [Apple Developer Portal](https://developer.apple.com/streaming/fps/)
-2. Extract to `vendor/FairPlay_Streaming_Server_SDK_26/` (gitignored)
-3. Credentials are in `Development/Key_Server_Module/credentials/`
+   # Linux x86_64
+   sudo cp vendor/FairPlay_Streaming_Server_SDK_26/Development/lib/linux/x86_64/libfpscrypto.so /usr/local/lib/
+
+   # Linux ARM64
+   sudo cp vendor/FairPlay_Streaming_Server_SDK_26/Development/lib/linux/aarch64/libfpscrypto.so /usr/local/lib/
+   ```
+
+   **Option B: Custom location**
+   ```bash
+   export FPSSDK_LIB_PATH=/path/to/fairplay/lib
+   ```
+
+   **Option C: Temporary build**
+   ```bash
+   LIBRARY_PATH=/path/to/fairplay/lib cargo build --features fairplay
+   ```
+
+4. **Credentials** are in `Development/Key_Server_Module/credentials/`
 
 ### 3. Credentials
 
@@ -52,6 +66,8 @@ TODO: Move to external artifact repository or use build script to download on de
 
 ## Building
 
+**Prerequisites:** Install libfpscrypto as described above.
+
 ```bash
 # Build WITHOUT FairPlay (default)
 cargo build
@@ -59,13 +75,24 @@ cargo build
 # Build WITH FairPlay
 cargo build --features fairplay
 
+# If library not in system path, use LIBRARY_PATH
+LIBRARY_PATH=/usr/local/lib cargo build --features fairplay
+
 # Run with FairPlay
 export FAIRPLAY_CREDENTIALS_PATH=./vendor/FairPlay_Streaming_Server_SDK_26/Development/Key_Server_Module/credentials
+# macOS runtime (if library not in system path)
+export DYLD_LIBRARY_PATH=/usr/local/lib
 cargo run --features fairplay
 
 # Test with FairPlay (when tests are updated)
 cargo test --features fairplay
 ```
+
+**Build Output:**
+You should see one of:
+- `Using FairPlay SDK from system path: /usr/local/lib`
+- `Using FairPlay SDK from FPSSDK_LIB_PATH: /custom/path`
+- `Using FairPlay SDK from prebuilt directory: ...` (legacy, if binaries still present)
 
 ## Configuration
 

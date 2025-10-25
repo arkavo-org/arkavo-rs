@@ -82,6 +82,12 @@ Generate self-signed TLS certificates (for development):
 openssl req -x509 -newkey rsa:4096 -keyout privkey.pem -out fullchain.pem -days 365 -nodes -subj "/CN=localhost"
 ```
 
+### FairPlay SDK Installation (Optional)
+
+**Note:** FairPlay binaries are NOT included in this repository. See `docs/fairplay.md` for installation instructions.
+
+Quick setup: Download SDK from Apple Developer Portal and copy `libfpscrypto` to `/usr/local/lib/`
+
 ## Architecture
 
 ### Core Components
@@ -162,9 +168,13 @@ export OAUTH_PUBLIC_KEY_PATH=/path/to/oauth_public.pem  # Optional JWT validatio
 
 # FairPlay Streaming Configuration (optional, requires --features fairplay)
 export FAIRPLAY_CREDENTIALS_PATH=/path/to/fps/credentials
+# See "FairPlay SDK Installation" section above for library setup
 ```
 
-**Note:** For FairPlay Streaming integration (Apple DRM), see `docs/fairplay.md`.
+**Note:** For FairPlay Streaming integration (Apple DRM):
+- Install libfpscrypto library as described in the "FairPlay SDK Installation" section above
+- Set FAIRPLAY_CREDENTIALS_PATH to your FairPlay credentials directory
+- Build with `cargo build --features fairplay`
 
 ## FlatBuffers Schema Compilation
 
