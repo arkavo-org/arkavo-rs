@@ -1,3 +1,7 @@
+// Suppress deprecation warnings for generic_array 0.x used by aes_gcm dependency
+// TODO: Upgrade to aes_gcm version using generic_array 1.x when available
+#![allow(deprecated)]
+
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::KeyInit;
 use aes_gcm::aead::{Aead, Key};

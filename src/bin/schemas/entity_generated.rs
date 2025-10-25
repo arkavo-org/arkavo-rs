@@ -2470,7 +2470,9 @@ pub mod arkavo {
     /// catch every error, or be maximally performant. For the
     /// previous, unchecked, behavior use
     /// `root_as_entity_root_unchecked`.
-    pub fn root_as_entity_root(buf: &[u8]) -> Result<EntityRoot, flatbuffers::InvalidFlatbuffer> {
+    pub fn root_as_entity_root(
+        buf: &[u8],
+    ) -> Result<EntityRoot<'_>, flatbuffers::InvalidFlatbuffer> {
         flatbuffers::root::<EntityRoot>(buf)
     }
     #[inline]
@@ -2482,7 +2484,7 @@ pub mod arkavo {
     /// `size_prefixed_root_as_entity_root_unchecked`.
     pub fn size_prefixed_root_as_entity_root(
         buf: &[u8],
-    ) -> Result<EntityRoot, flatbuffers::InvalidFlatbuffer> {
+    ) -> Result<EntityRoot<'_>, flatbuffers::InvalidFlatbuffer> {
         flatbuffers::size_prefixed_root::<EntityRoot>(buf)
     }
     #[inline]
@@ -2515,14 +2517,14 @@ pub mod arkavo {
     /// Assumes, without verification, that a buffer of bytes contains a EntityRoot and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid `EntityRoot`.
-    pub unsafe fn root_as_entity_root_unchecked(buf: &[u8]) -> EntityRoot {
+    pub unsafe fn root_as_entity_root_unchecked(buf: &[u8]) -> EntityRoot<'_> {
         flatbuffers::root_unchecked::<EntityRoot>(buf)
     }
     #[inline]
     /// Assumes, without verification, that a buffer of bytes contains a size prefixed EntityRoot and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid size prefixed `EntityRoot`.
-    pub unsafe fn size_prefixed_root_as_entity_root_unchecked(buf: &[u8]) -> EntityRoot {
+    pub unsafe fn size_prefixed_root_as_entity_root_unchecked(buf: &[u8]) -> EntityRoot<'_> {
         flatbuffers::size_prefixed_root_unchecked::<EntityRoot>(buf)
     }
     #[inline]

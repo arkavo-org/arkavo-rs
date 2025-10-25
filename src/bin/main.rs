@@ -350,10 +350,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         enable_media_analytics,
     ));
 
+    // Initialize FairPlay handler if feature enabled
+    #[cfg(feature = "fairplay")]
+    let fairplay_handler = {
+        use modules::fairplay::FairPlayHandler;
+        use std::path::PathBuf;
+
+        let credentials_path = std::env::var("FAIRPLAY_CREDENTIALS_PATH").unwrap_or_else(|_| {
+            log::warn!("FAIRPLAY_CREDENTIALS_PATH not set, using default");
+            "./vendor/FairPlay_Streaming_Server_SDK_26/Development/Key_Server_Module/credentials"
+                .to_string()
+        });
+
+        match FairPlayHandler::new(PathBuf::from(credentials_path)) {
+            Ok(handler) => {
+                log::info!("FairPlay handler initialized successfully");
+                Arc::new(handler)
+            }
+            Err(e) => {
+                log::error!("Failed to initialize FairPlay handler: {}", e);
+                log::error!("FairPlay support will be disabled");
+                Arc::new(FairPlayHandler::new(PathBuf::from(".")).unwrap())
+            }
+        }
+    };
+
     let media_api_state = Arc::new(media_api::MediaApiState {
         rewrap_state: rewrap_state.clone(),
         session_manager: session_manager.clone(),
         media_metrics: media_metrics.clone(),
+        #[cfg(feature = "fairplay")]
+        fairplay_handler: Some(fairplay_handler),
+        #[cfg(not(feature = "fairplay"))]
+        fairplay_handler: None,
     });
 
     use axum::{

@@ -13,6 +13,30 @@ pub mod session_manager;
 // Media metrics for analytics
 pub mod media_metrics;
 
+// Media protocol type
+pub mod modules {
+    /// Media protocol type
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum MediaProtocol {
+        /// OpenTDF NanoTDF protocol
+        #[serde(rename = "tdf3")]
+        TDF3,
+        /// Apple FairPlay Streaming
+        #[serde(rename = "fairplay")]
+        FairPlay,
+    }
+
+    impl std::fmt::Display for MediaProtocol {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                MediaProtocol::TDF3 => write!(f, "tdf3"),
+                MediaProtocol::FairPlay => write!(f, "fairplay"),
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 struct NanoTDFHeader {
     magic_number: u16,

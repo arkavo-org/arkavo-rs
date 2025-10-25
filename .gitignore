@@ -27,4 +27,7 @@ Cargo.lock
 /etc/contracts/*/.idea/
 /apple-app-site-association.json
 /dump.rdb
-/FairPlay_Streaming_Server_SDK_5.1/
+vendor/FairPlay*/
+# Allow committed FairPlay SDK Rust module
+!vendor/fpssdk/
+.DS_Store
