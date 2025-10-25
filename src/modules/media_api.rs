@@ -27,6 +27,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use uuid::Uuid;
 
+// Constants for input validation
+const MAX_SPC_DATA_SIZE: usize = 64 * 1024; // 64KB max for SPC data
+const MAX_NANOTDF_HEADER_SIZE: usize = 16 * 1024; // 16KB max for NanoTDF header
+
 // Re-import session manager types
 use crate::media_metrics::{
     KeyRequestResult, MediaEvent, MediaMetrics, RequestTimer, SessionEndReason,
@@ -298,7 +302,26 @@ async fn handle_tdf3_key_request(
     // 1. Validate session and user
     let _session = validate_session(&state, &payload, &timer).await?;
 
-    // 3. Parse client public key (unwrap safe: detect_protocol verified it exists)
+    // 3. Validate NanoTDF header size
+    let nanotdf_header = payload.nanotdf_header.as_ref().ok_or_else(|| ErrorResponse {
+        error: "invalid_request".to_string(),
+        message: "Missing nanotdf_header for TDF3".to_string(),
+    })?;
+
+    // Check header size before base64 decoding to prevent DoS
+    if nanotdf_header.len() > MAX_NANOTDF_HEADER_SIZE * 4 / 3 {
+        // Base64 encoding is ~4/3 the size of raw data
+        return Err(ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: format!(
+                "NanoTDF header too large: {} bytes (max {} bytes encoded)",
+                nanotdf_header.len(),
+                MAX_NANOTDF_HEADER_SIZE * 4 / 3
+            ),
+        });
+    }
+
+    // 4. Parse client public key (unwrap safe: detect_protocol verified it exists)
     let client_public_key_pem = payload.client_public_key.as_ref().ok_or_else(|| ErrorResponse {
         error: "invalid_request".to_string(),
         message: "Missing client_public_key for TDF3".to_string(),
@@ -322,11 +345,7 @@ async fn handle_tdf3_key_request(
     let session_shared_secret = session_private_key.diffie_hellman(&client_public_key);
     let session_shared_secret_bytes = session_shared_secret.raw_secret_bytes();
 
-    // 6. Process NanoTDF header to rewrap DEK (unwrap safe: detect_protocol verified it exists)
-    let nanotdf_header = payload.nanotdf_header.as_ref().ok_or_else(|| ErrorResponse {
-        error: "invalid_request".to_string(),
-        message: "Missing nanotdf_header for TDF3".to_string(),
-    })?;
+    // 6. Process NanoTDF header to rewrap DEK
     let wrapped_key = process_nanotdf_header(
         nanotdf_header,
         &state.rewrap_state.kas_private_key,
@@ -392,11 +411,24 @@ async fn handle_fairplay_key_request(
         });
     }
 
-    // 4. Extract SPC data
+    // 4. Extract and validate SPC data
     let spc_data_base64 = payload.spc_data.as_ref().ok_or_else(|| ErrorResponse {
         error: "invalid_request".to_string(),
         message: "Missing spc_data for FairPlay".to_string(),
     })?;
+
+    // Check SPC size before base64 decoding to prevent DoS
+    if spc_data_base64.len() > MAX_SPC_DATA_SIZE * 4 / 3 {
+        // Base64 encoding is ~4/3 the size of raw data
+        return Err(ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: format!(
+                "SPC data too large: {} bytes (max {} bytes encoded)",
+                spc_data_base64.len(),
+                MAX_SPC_DATA_SIZE * 4 / 3
+            ),
+        });
+    }
 
     let spc_data = base64::engine::general_purpose::STANDARD
         .decode(spc_data_base64)
@@ -407,6 +439,18 @@ async fn handle_fairplay_key_request(
                 message: format!("Invalid base64 SPC data: {}", e),
             }
         })?;
+
+    // Additional validation: Check decoded size
+    if spc_data.len() > MAX_SPC_DATA_SIZE {
+        return Err(ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: format!(
+                "Decoded SPC data too large: {} bytes (max {} bytes)",
+                spc_data.len(),
+                MAX_SPC_DATA_SIZE
+            ),
+        });
+    }
 
     info!(
         "Processing FairPlay SPC for session {} (SPC size: {} bytes)",
@@ -758,4 +802,115 @@ fn base64_encode(data: &[u8]) -> String {
 
 fn base64_decode(data: &str) -> Result<Vec<u8>, base64::DecodeError> {
     crypto::base64_decode(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_protocol_tdf3() {
+        let request = MediaKeyRequest {
+            session_id: "test-session".to_string(),
+            user_id: "test-user".to_string(),
+            asset_id: "test-asset".to_string(),
+            segment_index: Some(0),
+            client_public_key: Some("-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----".to_string()),
+            nanotdf_header: Some("base64header".to_string()),
+            spc_data: None,
+        };
+
+        assert_eq!(detect_protocol(&request), Some(MediaProtocol::TDF3));
+    }
+
+    #[test]
+    fn test_detect_protocol_fairplay() {
+        let request = MediaKeyRequest {
+            session_id: "test-session".to_string(),
+            user_id: "test-user".to_string(),
+            asset_id: "test-asset".to_string(),
+            segment_index: Some(0),
+            client_public_key: None,
+            nanotdf_header: None,
+            spc_data: Some("base64spc".to_string()),
+        };
+
+        assert_eq!(detect_protocol(&request), Some(MediaProtocol::FairPlay));
+    }
+
+    #[test]
+    fn test_detect_protocol_invalid_missing_all_fields() {
+        let request = MediaKeyRequest {
+            session_id: "test-session".to_string(),
+            user_id: "test-user".to_string(),
+            asset_id: "test-asset".to_string(),
+            segment_index: Some(0),
+            client_public_key: None,
+            nanotdf_header: None,
+            spc_data: None,
+        };
+
+        assert_eq!(detect_protocol(&request), None);
+    }
+
+    #[test]
+    fn test_detect_protocol_invalid_incomplete_tdf3() {
+        // Missing nanotdf_header
+        let request = MediaKeyRequest {
+            session_id: "test-session".to_string(),
+            user_id: "test-user".to_string(),
+            asset_id: "test-asset".to_string(),
+            segment_index: Some(0),
+            client_public_key: Some("pubkey".to_string()),
+            nanotdf_header: None,
+            spc_data: None,
+        };
+
+        assert_eq!(detect_protocol(&request), None);
+    }
+
+    #[test]
+    fn test_error_response_status_codes() {
+        let auth_error = ErrorResponse {
+            error: "authentication_failed".to_string(),
+            message: "Auth failed".to_string(),
+        };
+        let response = auth_error.into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let policy_error = ErrorResponse {
+            error: "policy_denied".to_string(),
+            message: "Policy denied".to_string(),
+        };
+        let response = policy_error.into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let not_found_error = ErrorResponse {
+            error: "session_not_found".to_string(),
+            message: "Not found".to_string(),
+        };
+        let response = not_found_error.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let rate_limit_error = ErrorResponse {
+            error: "concurrency_limit".to_string(),
+            message: "Too many".to_string(),
+        };
+        let response = rate_limit_error.into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let bad_request_error = ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: "Bad request".to_string(),
+        };
+        let response = bad_request_error.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let unknown_error = ErrorResponse {
+            error: "unknown".to_string(),
+            message: "Unknown".to_string(),
+        };
+        let response = unknown_error.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }
