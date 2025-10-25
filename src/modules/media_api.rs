@@ -11,15 +11,18 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use base64::{self, Engine};
+#[cfg(feature = "fairplay")]
+use base64::Engine;
 use chrono::Utc;
 use log::{error, info};
 use nanotdf::BinaryParser;
 use p256::{ecdh::EphemeralSecret, PublicKey as P256PublicKey, SecretKey};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "fairplay")]
 use std::future::Future;
 use std::net::SocketAddr;
+#[cfg(feature = "fairplay")]
 use std::pin::Pin;
 use std::sync::Arc;
 use uuid::Uuid;

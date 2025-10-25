@@ -7,6 +7,7 @@
 #[cfg(feature = "fairplay")]
 use fairplay_wrapper::{FairPlayKeyServer, SpcRequest};
 use std::path::PathBuf;
+#[cfg(feature = "fairplay")]
 use std::sync::Arc;
 
 /// FairPlay protocol handler
