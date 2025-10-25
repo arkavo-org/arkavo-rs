@@ -1,0 +1,50 @@
+#
+# Copyright © 2023-2024 Apple Inc. All rights reserved.
+#
+
+[package]
+name = "fpssdk"
+description = "FairPlay Streaming Key Server Module"
+version = "26.0.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "fpssdk"
+path = "src/lib.rs"
+# Build both C and Rust libraries
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[[bin]]
+name = "fpssdk_server"
+path = "src/bin/server.rs"
+
+[[bin]]
+name = "fpssdk_local"
+path = "src/bin/local.rs"
+
+[profile.release]
+lto = true
+strip = true
+
+[dependencies]
+serde = { version = "1.0.104", features = ["derive"] }
+serde_jsonrc = { version = "0.1.0", features = ["preserve_order"] }
+byteorder = "1.4.3"
+derivative = "2.2.0"
+base64 = "0.21.0"
+openssl = { version = "0.10", features = ["vendored"] }
+chrono = "0.4.21"
+hex = "0.4.3"
+rand = "0.8.5"
+env_logger = "0.10.0"
+cmac = "0.7.2"
+aes = "0.8.4"
+cipher = "0.4.4"
+x509-parser = "0.18.0"
+# Compile out all levels of logs in release builds
+log = { version = "0.4.19", features = ["max_level_trace", "release_max_level_off"] }
+
+[features]
+test_credentials = []

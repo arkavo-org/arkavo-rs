@@ -1,3 +1,4 @@
+use crate::modules::MediaProtocol;
 use chrono::Utc;
 use log::{info, warn};
 use redis::{AsyncCommands, Client as RedisClient};
@@ -58,6 +59,7 @@ pub struct PlaybackSession {
     pub session_id: String,
     pub user_id: String,
     pub asset_id: String,
+    pub protocol: MediaProtocol, // TDF3 or FairPlay
     pub segment_index: Option<u32>,
     pub state: SessionState,
     pub start_timestamp: i64, // Unix timestamp
@@ -69,12 +71,19 @@ pub struct PlaybackSession {
 }
 
 impl PlaybackSession {
-    pub fn new(session_id: String, user_id: String, asset_id: String, client_ip: String) -> Self {
+    pub fn new(
+        session_id: String,
+        user_id: String,
+        asset_id: String,
+        protocol: MediaProtocol,
+        client_ip: String,
+    ) -> Self {
         let now = Utc::now().timestamp();
         Self {
             session_id,
             user_id,
             asset_id,
+            protocol,
             segment_index: None,
             state: SessionState::Starting,
             start_timestamp: now,

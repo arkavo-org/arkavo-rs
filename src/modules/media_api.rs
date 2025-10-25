@@ -1,8 +1,9 @@
-/// Media-specific API endpoints for TDF3-based DRM
+/// Media-specific API endpoints for TDF3-based and FairPlay DRM
 ///
 /// Provides dedicated endpoints optimized for streaming media key delivery,
 /// session management, and rental window tracking.
 use crate::modules::crypto;
+use crate::modules::fairplay::MediaProtocol;
 use crate::modules::http_rewrap::RewrapState;
 use axum::{
     extract::{ConnectInfo, Path, State},
@@ -42,8 +43,11 @@ pub struct MediaKeyRequest {
     pub user_id: String,
     pub asset_id: String,
     pub segment_index: Option<u32>,
-    pub client_public_key: String, // PEM format
-    pub nanotdf_header: String,    // Base64-encoded NanoTDF header
+    // TDF3 fields
+    pub client_public_key: Option<String>, // PEM format (for TDF3)
+    pub nanotdf_header: Option<String>,    // Base64-encoded (for TDF3)
+    // FairPlay fields
+    pub spc_data: Option<String>,          // Base64-encoded (for FairPlay)
 }
 
 #[derive(Debug, Serialize)]
@@ -60,6 +64,7 @@ pub struct MediaKeyResponse {
 pub struct SessionStartRequest {
     pub user_id: String,
     pub asset_id: String,
+    pub protocol: Option<MediaProtocol>, // Auto-detected if not specified
     pub geo_region: Option<String>,
     pub user_agent: Option<String>,
 }
@@ -105,21 +110,58 @@ impl IntoResponse for ErrorResponse {
     }
 }
 
+// ==================== Helper Functions ====================
+
+/// Detect protocol from request payload
+fn detect_protocol(payload: &MediaKeyRequest) -> Option<MediaProtocol> {
+    if payload.spc_data.is_some() {
+        Some(MediaProtocol::FairPlay)
+    } else if payload.nanotdf_header.is_some() && payload.client_public_key.is_some() {
+        Some(MediaProtocol::TDF3)
+    } else {
+        None
+    }
+}
+
 // ==================== API Handlers ====================
 
 /// POST /media/v1/key-request
-/// Fast path for media segment key delivery
+/// Fast path for media segment key delivery (supports both TDF3 and FairPlay)
 pub async fn media_key_request(
     State(state): State<Arc<MediaApiState>>,
     Json(payload): Json<MediaKeyRequest>,
 ) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
     let timer = RequestTimer::start();
 
+    // Auto-detect protocol from request fields
+    let protocol = detect_protocol(&payload).ok_or_else(|| ErrorResponse {
+        error: "invalid_request".to_string(),
+        message: "Could not detect protocol: provide either (nanotdf_header + client_public_key) for TDF3, or spc_data for FairPlay".to_string(),
+    })?;
+
     info!(
-        "Media key request: session={} asset={} segment={:?}",
-        payload.session_id, payload.asset_id, payload.segment_index
+        "Media key request [{}]: session={} asset={} segment={:?}",
+        protocol, payload.session_id, payload.asset_id, payload.segment_index
     );
 
+    // Route to protocol-specific handler
+    match protocol {
+        MediaProtocol::TDF3 => handle_tdf3_key_request(state, payload, timer).await,
+        MediaProtocol::FairPlay => {
+            Err(ErrorResponse {
+                error: "not_implemented".to_string(),
+                message: "FairPlay protocol not yet implemented in media_key_request".to_string(),
+            })
+        }
+    }
+}
+
+/// Handle TDF3 key request
+async fn handle_tdf3_key_request(
+    state: Arc<MediaApiState>,
+    payload: MediaKeyRequest,
+    timer: RequestTimer,
+) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
     // 1. Verify session exists and update heartbeat
     let session = match state
         .session_manager
@@ -171,9 +213,13 @@ pub async fn media_key_request(
         });
     }
 
-    // 3. Parse client public key
+    // 3. Parse client public key (unwrap safe: detect_protocol verified it exists)
+    let client_public_key_pem = payload.client_public_key.as_ref().ok_or_else(|| ErrorResponse {
+        error: "invalid_request".to_string(),
+        message: "Missing client_public_key for TDF3".to_string(),
+    })?;
     let client_public_key =
-        parse_pem_public_key(&payload.client_public_key).map_err(|e| ErrorResponse {
+        parse_pem_public_key(client_public_key_pem).map_err(|e| ErrorResponse {
             error: "invalid_request".to_string(),
             message: format!("Invalid client public key: {}", e),
         })?;
@@ -191,9 +237,13 @@ pub async fn media_key_request(
     let session_shared_secret = session_private_key.diffie_hellman(&client_public_key);
     let session_shared_secret_bytes = session_shared_secret.raw_secret_bytes();
 
-    // 6. Process NanoTDF header to rewrap DEK
+    // 6. Process NanoTDF header to rewrap DEK (unwrap safe: detect_protocol verified it exists)
+    let nanotdf_header = payload.nanotdf_header.as_ref().ok_or_else(|| ErrorResponse {
+        error: "invalid_request".to_string(),
+        message: "Missing nanotdf_header for TDF3".to_string(),
+    })?;
     let wrapped_key = process_nanotdf_header(
-        &payload.nanotdf_header,
+        nanotdf_header,
         &state.rewrap_state.kas_private_key,
         session_shared_secret_bytes.as_ref(),
     )
@@ -252,10 +302,14 @@ pub async fn session_start(
         Uuid::new_v4()
     );
 
+    // Default to TDF3 for backwards compatibility if protocol not specified
+    let protocol = payload.protocol.unwrap_or(MediaProtocol::TDF3);
+
     let session = PlaybackSession {
         session_id: session_id.clone(),
         user_id: payload.user_id.clone(),
         asset_id: payload.asset_id.clone(),
+        protocol,
         segment_index: None,
         state: SessionState::Starting,
         start_timestamp: Utc::now().timestamp(),
