@@ -236,13 +236,9 @@ pub mod c2pa_policy {
             match policy.ai_disclosure_policy {
                 AiDisclosurePolicy::Optional => Ok(()),
                 AiDisclosurePolicy::Required => {
-                    // If AI-generated flag is present and true, require disclosure
-                    if let Some(ai_generated) = manifest.ai_generated {
-                        if ai_generated {
-                            Ok(())
-                        } else {
-                            Ok(()) // Not AI-generated, OK
-                        }
+                    // Require AI disclosure to be present (true or false)
+                    if manifest.ai_generated.is_some() {
+                        Ok(())
                     } else {
                         // Missing disclosure
                         Err(AccessDenialReason::AiDisclosureMissing)
