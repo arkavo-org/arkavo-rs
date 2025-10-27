@@ -331,6 +331,8 @@ pub mod media_policy {
                 hdcp_requirement: HDCPRequirement::Type0,
                 license_type: LicenseType::Subscription,
                 rental_window: None,
+                c2pa_manifest: None,
+                require_c2pa: false,
             };
 
             let device = DeviceCapabilities {
@@ -379,6 +381,8 @@ pub mod media_policy {
                 hdcp_requirement: HDCPRequirement::NotRequired,
                 license_type: LicenseType::Streaming,
                 rental_window: None,
+                c2pa_manifest: None,
+                require_c2pa: false,
             };
 
             let device = DeviceCapabilities {
@@ -433,6 +437,8 @@ pub mod media_policy {
                 hdcp_requirement: HDCPRequirement::Type0,
                 license_type: LicenseType::Rental,
                 rental_window: Some(rental),
+                c2pa_manifest: None,
+                require_c2pa: false,
             };
 
             let device = DeviceCapabilities {
@@ -487,6 +493,8 @@ pub mod media_policy {
                 hdcp_requirement: HDCPRequirement::Type1,
                 license_type: LicenseType::Streaming,
                 rental_window: None,
+                c2pa_manifest: None,
+                require_c2pa: false,
             };
 
             let mut device = DeviceCapabilities {
