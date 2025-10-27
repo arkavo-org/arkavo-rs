@@ -10,10 +10,16 @@ fn find_library_path(os: &str, arch: &str, manifest_dir: &str) -> Option<PathBuf
     if let Ok(custom_path) = env::var("FPSSDK_LIB_PATH") {
         let path = PathBuf::from(&custom_path);
         if path.exists() {
-            println!("cargo:warning=Using FairPlay SDK from FPSSDK_LIB_PATH: {}", custom_path);
+            println!(
+                "cargo:warning=Using FairPlay SDK from FPSSDK_LIB_PATH: {}",
+                custom_path
+            );
             return Some(path);
         }
-        println!("cargo:warning=FPSSDK_LIB_PATH set but directory not found: {}", custom_path);
+        println!(
+            "cargo:warning=FPSSDK_LIB_PATH set but directory not found: {}",
+            custom_path
+        );
     }
 
     // Priority 2: Check prebuilt directory (for backwards compatibility)
@@ -32,28 +38,27 @@ fn find_library_path(os: &str, arch: &str, manifest_dir: &str) -> Option<PathBuf
 
     let prebuilt_lib = Path::new(&platform_dir).join(lib_name);
     if prebuilt_lib.exists() {
-        println!("cargo:warning=Using FairPlay SDK from prebuilt directory: {}", platform_dir);
+        println!(
+            "cargo:warning=Using FairPlay SDK from prebuilt directory: {}",
+            platform_dir
+        );
         return Some(PathBuf::from(platform_dir));
     }
 
     // Priority 3: Check common system locations
     let system_paths = if os == "macos" {
-        vec![
-            "/usr/local/lib",
-            "/opt/homebrew/lib",
-            "/opt/local/lib",
-        ]
+        vec!["/usr/local/lib", "/opt/homebrew/lib", "/opt/local/lib"]
     } else {
-        vec![
-            "/usr/local/lib",
-            "/usr/lib",
-        ]
+        vec!["/usr/local/lib", "/usr/lib"]
     };
 
     for sys_path in system_paths {
         let lib_path = Path::new(sys_path).join(lib_name);
         if lib_path.exists() {
-            println!("cargo:warning=Using FairPlay SDK from system path: {}", sys_path);
+            println!(
+                "cargo:warning=Using FairPlay SDK from system path: {}",
+                sys_path
+            );
             return Some(PathBuf::from(sys_path));
         }
     }
@@ -81,12 +86,14 @@ fn main() {
             }
 
             println!("cargo:rustc-link-search={}", lib_path_str);
-        },
+        }
         None => {
             eprintln!("\n\n==========================================================");
             eprintln!("ERROR: Apple FairPlay SDK library (libfpscrypto) not found!");
             eprintln!("==========================================================");
-            eprintln!("\nThe FairPlay SDK binaries are required to build with --features fairplay.");
+            eprintln!(
+                "\nThe FairPlay SDK binaries are required to build with --features fairplay."
+            );
             eprintln!("\nTo install:");
             eprintln!("  1. Download FairPlay Streaming Server SDK from Apple Developer Portal");
             eprintln!("  2. Extract to vendor/FairPlay_Streaming_Server_SDK_26/");

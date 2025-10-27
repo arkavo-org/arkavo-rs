@@ -9,7 +9,10 @@ use crate::requireAction;
 use crate::validate::{FPSStatus, Result};
 
 impl Base {
-    pub fn parseTagClientCapabilities(tllv: &FPSServerTLLV, clientCapabilities: &mut Vec<u8>) -> Result<()> {
+    pub fn parseTagClientCapabilities(
+        tllv: &FPSServerTLLV,
+        clientCapabilities: &mut Vec<u8>,
+    ) -> Result<()> {
         // Check that size matches expected size exactly
         requireAction!(
             tllv.value.len() == FPS_CAPABILITIES_FLAGS_LENGTH,

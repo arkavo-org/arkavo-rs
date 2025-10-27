@@ -11,9 +11,15 @@ use crate::requireAction;
 use crate::validate::{FPSStatus, Result};
 
 impl Base {
-    pub fn parseTagProtocolVersionUsed(tllv: &FPSServerTLLV, spcContainer: &mut FPSServerSPCContainer) -> Result<()> {
+    pub fn parseTagProtocolVersionUsed(
+        tllv: &FPSServerTLLV,
+        spcContainer: &mut FPSServerSPCContainer,
+    ) -> Result<()> {
         // Check that size matches expected size exactly
-        requireAction!(tllv.value.len() == size_of::<u32>(), return Err(FPSStatus::parserErr));
+        requireAction!(
+            tllv.value.len() == size_of::<u32>(),
+            return Err(FPSStatus::parserErr)
+        );
 
         // 4B Version Used
         spcContainer.spcData.versionUsed = readBigEndianU32(&tllv.value, 0)?;

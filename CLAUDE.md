@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a Rust implementation of a Key Access Service (KAS) from the [OpenTDF specification](https://github.com/opentdf/spec). It provides secure key management, NanoTDF rewrap operations, and policy enforcement over WebSocket connections with NATS messaging and Redis caching.
 
-**Binary name**: `arkavo`
+**Binary name**: `arks` (ARKavo Server - KAS/DRM/C2PA real-time server)
 **Library name**: `nanotdf`
 
 ## Development Commands
@@ -18,7 +18,17 @@ cargo build
 
 # Release build (optimized for native CPU)
 export RUSTFLAGS="-C target-cpu=native"
-cargo build --release
+cargo build --release --bin arks
+
+# Release build with FairPlay Streaming DRM
+./build-release.sh --fairplay
+```
+
+**Quick Build Script:** The `build-release.sh` script automates release builds:
+- Standard build: `./build-release.sh`
+- With FairPlay: `./build-release.sh --fairplay`
+- Automatically detects platform and sets correct library paths
+- Shows build summary with binary size and dependencies
 ```
 
 ### Testing
@@ -33,7 +43,7 @@ cargo test [test_name]
 ### Linting and Formatting
 ```bash
 # Lint with clippy (same as CI)
-cargo clippy --lib --bin arkavo --all-features -- -D warnings
+cargo clippy --lib --bin arks --all-features -- -D warnings
 
 # Check formatting
 cargo fmt --all --check
@@ -55,7 +65,7 @@ nats-server
 redis-server
 
 # Run the server
-cargo run
+cargo run --bin arks
 ```
 
 ## Prerequisites
@@ -82,6 +92,31 @@ Generate self-signed TLS certificates (for development):
 openssl req -x509 -newkey rsa:4096 -keyout privkey.pem -out fullchain.pem -days 365 -nodes -subj "/CN=localhost"
 ```
 
+### C2PA Signing Key Generation (Optional)
+
+**Quick Setup (Recommended):**
+```bash
+./generate-c2pa-certs.sh
+```
+
+This generates:
+- EC private key (P-256 curve, ES256 algorithm)
+- Self-signed X.509 certificate valid for 1 year
+- Proper file permissions (600 for private key)
+- Location: Columbia, Maryland, US
+
+**Manual Setup:**
+```bash
+# Generate EC private key (P-256 curve)
+openssl ecparam -genkey -name prime256v1 -noout -out c2pa_private_key.pem
+
+# Generate self-signed certificate (development only)
+openssl req -new -x509 -key c2pa_private_key.pem -out c2pa_cert.pem -days 365 \
+  -subj "/CN=Arkavo C2PA Signer/O=Arkavo/C=US/ST=Maryland/L=Columbia"
+```
+
+**Production:** Obtain certificates from a recognized CA or use the C2PA certificate infrastructure.
+
 ### FairPlay SDK Installation (Optional)
 
 **Note:** FairPlay binaries are NOT included in this repository. See `docs/fairplay.md` for installation instructions.
@@ -93,7 +128,8 @@ Quick setup: Download SDK from Apple Developer Portal and copy `libfpscrypto` to
 ### Core Components
 
 **Binary** (`src/bin/main.rs`):
-- Multi-threaded WebSocket server with optional TLS
+- Unified Axum server on single port (HTTP REST + WebSocket upgrade)
+- Multi-threaded with optional TLS via rustls
 - NATS integration for pub/sub messaging
 - Redis integration for caching encrypted content
 - Policy enforcement through pluggable contracts
@@ -150,7 +186,7 @@ Each WebSocket connection maintains:
 
 Environment variables:
 ```bash
-export PORT=8443
+export PORT=8443                                   # Unified server port (HTTP + WebSocket)
 export TLS_CERT_PATH=/path/to/fullchain.pem        # Optional, disables TLS if not set
 export TLS_KEY_PATH=/path/to/privkey.pem
 export KAS_KEY_PATH=/path/to/recipient_private_key.pem
@@ -166,10 +202,22 @@ export ENABLE_MEDIA_ANALYTICS=true                 # Publish metrics to NATS
 export MEDIA_METRICS_SUBJECT=media.metrics         # NATS subject for analytics events
 export OAUTH_PUBLIC_KEY_PATH=/path/to/oauth_public.pem  # Optional JWT validation
 
+# C2PA Content Authenticity Configuration (optional)
+export C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem
+export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert.pem
+export C2PA_REQUIRE_VALIDATION=true                # Enforce C2PA manifest validation
+export C2PA_ALLOWED_CREATORS=creator1@example.com,creator2@example.com  # Optional creator whitelist
+
 # FairPlay Streaming Configuration (optional, requires --features fairplay)
 export FAIRPLAY_CREDENTIALS_PATH=/path/to/fps/credentials
 # See "FairPlay SDK Installation" section above for library setup
 ```
+
+**Note:** For C2PA video content authenticity:
+- C2PA signing is optional and disabled if environment variables are not set
+- Generate signing keys as described in the "C2PA Signing Key Generation" section above
+- See `docs/c2pa_video_drm.md` for detailed C2PA integration documentation
+- C2PA works with the existing TDF3 media DRM system for authenticated, encrypted video delivery
 
 **Note:** For FairPlay Streaming integration (Apple DRM):
 - Install libfpscrypto library as described in the "FairPlay SDK Installation" section above
@@ -192,16 +240,22 @@ Generated files are in `src/bin/schemas/`.
 - `src/lib.rs` - NanoTDF parser library
 - `src/bin/main.rs` - WebSocket and HTTP server binary
 - `src/bin/contracts/` - Policy enforcement modules
+  - `c2pa_policy_contract.rs` - C2PA content authenticity validation
+  - `media_policy_contract.rs` - Media DRM policy enforcement (includes C2PA integration)
+  - `content_rating.rs` - Age-gated content filtering
+  - `geo_fence_contract.rs` - Location-based access control
 - `src/bin/schemas/` - FlatBuffers generated code
-- `src/bin/session_manager.rs` - Media playback session tracking
-- `src/bin/media_metrics.rs` - Analytics and performance monitoring
+- `src/session_manager.rs` - Media playback session tracking (includes C2PA metadata)
+- `src/media_metrics.rs` - Analytics and performance monitoring (includes C2PA events)
+- `src/modules/c2pa_signing.rs` - C2PA signing server for video content authenticity
 - `src/modules/http_rewrap.rs` - OpenTDF-compatible RESTful rewrap endpoint
 - `src/modules/media_api.rs` - Media DRM-specific API endpoints
 - `src/modules/fairplay.rs` - FairPlay Streaming integration (optional feature)
 - `src/modules/crypto.rs` - Cryptographic primitives
 - `vendor/fpssdk/` - Apple FairPlay SDK Rust module (optional)
 - `crates/fairplay-wrapper/` - Safe Rust wrapper for FairPlay SDK (optional)
-- `tests/` - Integration tests
+- `docs/c2pa_video_drm.md` - C2PA + TDF3 integration documentation
+- `tests/` - Integration tests (includes `c2pa_video_tests.rs`)
 - `benches/` - Performance benchmarks
 
 ## Media DRM Architecture
@@ -215,6 +269,11 @@ The server implements a TDF3-based DRM system for HLS/DASH streaming media. Each
 **OpenTDF Compatibility:**
 - `GET /kas/v2/kas_public_key` - Retrieve KAS public key
 - `POST /kas/v2/rewrap` - OpenTDF rewrap endpoint (JWT-signed requests)
+
+**C2PA Content Authenticity Endpoints:**
+- `POST /c2pa/v1/sign` - Sign C2PA manifest with pre-computed hash
+- `POST /c2pa/v1/validate` - Validate C2PA manifest
+(See `docs/c2pa_video_drm.md` for detailed API documentation)
 
 **Media DRM Endpoints:**
 - `POST /media/v1/session/start` - Initialize playback session
@@ -321,14 +380,21 @@ Published to NATS topics under `media.metrics.*`:
 nats-server
 redis-server
 
-# Configure media DRM
+# Configure unified server (single port for HTTP + WebSocket)
+export PORT=8443
 export MAX_CONCURRENT_STREAMS=2
 export ENABLE_MEDIA_ANALYTICS=true
 export MEDIA_METRICS_SUBJECT=media.metrics
 
 # Run server
-cargo run
+./run-arks.sh
 ```
+
+**Server Endpoints:**
+- WebSocket: `ws://localhost:8443/ws`
+- HTTP API: `http://localhost:8443/`
+- KAS Public Key: `http://localhost:8443/kas/v2/kas_public_key`
+- Media Key Request: `http://localhost:8443/media/v1/key-request`
 
 ## Security Notes
 

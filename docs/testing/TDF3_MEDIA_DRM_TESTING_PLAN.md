@@ -65,7 +65,7 @@ redis-server
 nats sub "media.metrics.>"
 
 # Terminal 4: Arkavo KAS
-cargo run --bin arkavo
+cargo run --bin arks
 ```
 
 ---
@@ -583,7 +583,7 @@ echo "Running integration tests..."
 cargo test --test media_drm_tests
 
 echo "Starting arkavo server..."
-cargo run --bin arkavo &
+cargo run --bin arks &
 SERVER_PID=$!
 sleep 5
 

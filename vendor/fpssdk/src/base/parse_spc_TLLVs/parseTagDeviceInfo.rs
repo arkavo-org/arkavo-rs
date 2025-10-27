@@ -8,7 +8,10 @@ use crate::base::Utils::FPSServerUtils::{readBigEndianU32, readBigEndianU64};
 use crate::validate::Result;
 
 impl Base {
-    pub fn parseTagDeviceInfo(tllv: &FPSServerTLLV, spcContainer: &mut FPSServerSPCContainer) -> Result<()> {
+    pub fn parseTagDeviceInfo(
+        tllv: &FPSServerTLLV,
+        spcContainer: &mut FPSServerSPCContainer,
+    ) -> Result<()> {
         // 8B Device Type (value is one of FPSAppleDeviceType)
         spcContainer.spcData.deviceInfo.deviceType = readBigEndianU64(&tllv.value, 0)?;
 

@@ -25,7 +25,11 @@ pub fn readBytes(input: &[u8], offset: usize, numberOfBytesToRead: usize) -> Res
         return Err(FPSStatus::paramErr)
     );
 
-    let output = Vec::from_iter(input[offset..(offset + numberOfBytesToRead)].iter().cloned());
+    let output = Vec::from_iter(
+        input[offset..(offset + numberOfBytesToRead)]
+            .iter()
+            .cloned(),
+    );
 
     Ok(output)
 }
@@ -35,7 +39,10 @@ pub fn readBytes(input: &[u8], offset: usize, numberOfBytesToRead: usize) -> Res
 
 /// Reads 8-byte value from input. Returns error if input is not large enough.
 pub fn readU8(input: &[u8], offset: usize) -> Result<u8> {
-    requireAction!(input.len() >= offset + size_of::<u8>(), return Err(FPSStatus::paramErr));
+    requireAction!(
+        input.len() >= offset + size_of::<u8>(),
+        return Err(FPSStatus::paramErr)
+    );
 
     let output = input[offset];
 

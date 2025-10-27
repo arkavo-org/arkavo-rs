@@ -24,7 +24,13 @@ macro_rules! requireAction {
 #[macro_export]
 macro_rules! returnErrorStatus {
     ($err: expr) => {
-        log::debug!("❌ Returning error: {:?} ({}) [{}:{}]", $err, $err, file!(), line!());
+        log::debug!(
+            "❌ Returning error: {:?} ({}) [{}:{}]",
+            $err,
+            $err,
+            file!(),
+            line!()
+        );
         return Err($err);
     };
 }
@@ -58,9 +64,10 @@ impl std::fmt::Display for FPSStatus {
 
 impl serde::Serialize for FPSStatus {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer {
-       serializer.serialize_i32(*self as i32) 
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_i32(*self as i32)
     }
 }
 
@@ -80,7 +87,7 @@ impl std::convert::TryFrom<i64> for FPSStatus {
             -42604 => Ok(FPSStatus::clientSecurityLevelErr),
             -42605 => Ok(FPSStatus::invalidCertificateErr),
             -42612 => Ok(FPSStatus::notImplementedErr),
-            _ => Err(FPSStatus::parserErr)
+            _ => Err(FPSStatus::parserErr),
         }
     }
 }
@@ -88,6 +95,6 @@ impl std::convert::TryFrom<i64> for FPSStatus {
 impl std::convert::TryFrom<i32> for FPSStatus {
     type Error = FPSStatus;
     fn try_from(value: i32) -> std::result::Result<Self, Self::Error> {
-       FPSStatus::try_from(i64::from(value)) 
+        FPSStatus::try_from(i64::from(value))
     }
 }

@@ -7,12 +7,10 @@ use crate::extension::extension_constants::FPSSecurityLevel;
 use std::fmt::Debug;
 
 #[derive(Debug, Clone, Default)]
-pub struct SDKExtension {
-}
+pub struct SDKExtension {}
 
 #[derive(Debug, Clone, Default)]
-pub struct FPSOperationExtension {
-}
+pub struct FPSOperationExtension {}
 
 #[derive(Debug, Clone, Default)]
 pub struct AssetInfoExtension {
@@ -20,32 +18,25 @@ pub struct AssetInfoExtension {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ServerCtxExtension {
-}
+pub struct ServerCtxExtension {}
 
 #[derive(Debug, Clone, Default)]
-pub struct FPSResultsExtension {
-}
+pub struct FPSResultsExtension {}
 
 #[derive(Debug, Clone, Default)]
-pub struct FPSResultExtension {
-}
+pub struct FPSResultExtension {}
 
 #[derive(Debug, Clone, Default)]
-pub struct FPSResultAssetInfoExtension {
-}
+pub struct FPSResultAssetInfoExtension {}
 
 #[derive(Debug, Clone, Default)]
-pub struct SPCDataExtension {
-}
+pub struct SPCDataExtension {}
 
 #[derive(Debug, Clone, Default)]
-pub struct SPCAssetInfoExtension {
-}
+pub struct SPCAssetInfoExtension {}
 
 #[derive(Debug, Clone, Default)]
-pub struct CKCDataExtension {
-}
+pub struct CKCDataExtension {}
 
 #[derive(Debug, Clone, Default)]
 pub struct CKCAssetInfoExtension {
@@ -53,13 +44,10 @@ pub struct CKCAssetInfoExtension {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct SPCContainerExtension {
-}
+pub struct SPCContainerExtension {}
 
 #[derive(Debug, Clone, Default)]
-pub struct ClientFeaturesExtension {
-}
+pub struct ClientFeaturesExtension {}
 
 #[derive(Debug, Clone, Default)]
-pub struct KeyDurationExtension {
-}
+pub struct KeyDurationExtension {}

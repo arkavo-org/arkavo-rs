@@ -3,7 +3,7 @@
 //
 
 use std::cell::RefCell;
-type LogFormat = RefCell<Box< dyn Fn(u32, &str) -> String + Send + Sync>>;
+type LogFormat = RefCell<Box<dyn Fn(u32, &str) -> String + Send + Sync>>;
 thread_local! {pub static LOG_FORMAT: LogFormat = RefCell::new(Box::new(|_line, _file| { String::new() }))}
 
 /// Creates and prints an error to be logged.

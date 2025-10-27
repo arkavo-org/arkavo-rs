@@ -53,6 +53,16 @@ pub enum SessionState {
     Stopped,
 }
 
+/// C2PA content authenticity metadata
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct C2paSessionMetadata {
+    pub validation_status: String, // "valid", "invalid", "missing"
+    pub creator: Option<String>,
+    pub ai_generated: Option<bool>,
+    pub edit_count: Option<u32>,
+    pub validated_timestamp: i64,
+}
+
 /// Playback session information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaybackSession {
@@ -68,6 +78,7 @@ pub struct PlaybackSession {
     pub client_ip: String,
     pub geo_region: Option<String>, // ISO 3166-1 alpha-2
     pub user_agent: Option<String>,
+    pub c2pa_metadata: Option<C2paSessionMetadata>, // C2PA provenance metadata
 }
 
 impl PlaybackSession {
@@ -92,6 +103,7 @@ impl PlaybackSession {
             client_ip,
             geo_region: None,
             user_agent: None,
+            c2pa_metadata: None,
         }
     }
 

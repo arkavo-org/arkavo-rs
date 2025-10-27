@@ -8,6 +8,8 @@ use nanotdf::{media_metrics, session_manager};
 #[path = "../modules/mod.rs"]
 mod modules;
 
+#[cfg(feature = "c2pa_signing")]
+use modules::c2pa_signing;
 use modules::{crypto, http_rewrap, media_api};
 
 use crate::contracts::content_rating::content_rating::{
@@ -21,30 +23,30 @@ use crate::schemas::metadata_generated::arkavo::{root_as_metadata, Metadata};
 use async_nats::Message as NatsMessage;
 use async_nats::{Client as NatsClient, PublishError};
 use aws_sdk_s3 as s3;
+use axum::extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade};
+use axum::extract::State;
+use axum::response::IntoResponse;
 use flatbuffers::root;
 use futures_util::{SinkExt, StreamExt};
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use log::{error, info};
 use nanotdf::{BinaryParser, PolicyType, ProtocolEnum, ResourceLocator};
-use native_tls::{Identity, Protocol, TlsAcceptor as NativeTlsAcceptor};
 use once_cell::sync::OnceCell;
 use p256::ecdh::EphemeralSecret;
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use rand_core::{OsRng, RngCore};
 use redis::AsyncCommands;
 use redis::Client as RedisClient;
+use rustls::ServerConfig;
+use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::fs;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
-use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex};
-use tokio_native_tls::TlsAcceptor;
+use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::Message;
 
 #[allow(dead_code)]
@@ -210,8 +212,6 @@ struct KasKeys {
 }
 
 static KAS_KEYS: OnceCell<Arc<KasKeys>> = OnceCell::new();
-trait AsyncStream: AsyncRead + AsyncWrite + Unpin + Send {}
-impl<T> AsyncStream for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
 
 /// Middleware for logging HTTP requests
 async fn log_request_middleware(
@@ -232,10 +232,146 @@ async fn log_request_middleware(
     response
 }
 
+/// WebSocket upgrade handler for Axum
+async fn ws_handler(
+    State(state): State<Arc<WebSocketState>>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_websocket_axum(socket, state))
+}
+
+/// Handle WebSocket connection using Axum's WebSocket type
+async fn handle_websocket_axum(ws: WebSocket, state: Arc<WebSocketState>) {
+    // Split the WebSocket into sender and receiver
+    let (mut ws_sender, mut ws_receiver) = ws.split();
+
+    // Create channel for outgoing messages
+    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
+
+    // Create ConnectionState with the outgoing channel
+    let connection_state = Arc::new(ConnectionState::new(outgoing_tx));
+
+    // Set up NATS subscription for this connection
+    let nats_task = tokio::spawn(handle_nats_subscription(
+        state.nats_connection.clone(),
+        state.server_state.settings.nats_subject.clone(),
+        connection_state.clone(),
+    ));
+
+    let mut public_id_nats_task: Option<tokio::task::JoinHandle<()>> = None;
+
+    // Spawn task to forward outgoing messages
+    let outgoing_task = tokio::spawn(async move {
+        while let Some(msg) = outgoing_rx.recv().await {
+            // Convert tokio_tungstenite Message to Axum WebSocket message
+            let axum_msg = match msg {
+                Message::Binary(data) => AxumMessage::Binary(data),
+                Message::Text(text) => AxumMessage::Text(text),
+                Message::Close(_) => AxumMessage::Close(None),
+                _ => continue,
+            };
+
+            if ws_sender.send(axum_msg).await.is_err() {
+                eprintln!("Failed to send outgoing message through WebSocket");
+                break;
+            }
+        }
+    });
+
+    // Handle incoming WebSocket messages
+    while let Some(result) = ws_receiver.next().await {
+        match result {
+            Ok(msg) => {
+                match msg {
+                    AxumMessage::Close(_) => {
+                        println!("Received a close message.");
+                        break;
+                    }
+                    AxumMessage::Text(token) => {
+                        // Handle JWT token
+                        println!("token: {}", token);
+                        match verify_token(&token, &state.server_state.settings) {
+                            Ok(claims) => {
+                                println!("Valid JWT received. Claims: {:?}", claims);
+                                // Store the claims
+                                {
+                                    let mut claims_lock =
+                                        connection_state.claims_lock.write().unwrap();
+                                    *claims_lock = Some(claims.clone());
+                                }
+                                // Extract publicID from claims and subscribe to `profile.<publicID>`
+                                let public_id = claims.sub;
+                                let subject = format!("profile.{}", public_id);
+                                // Cancel any existing `publicID`-specific NATS task
+                                if let Some(task) = public_id_nats_task.take() {
+                                    task.abort();
+                                }
+                                // Set up new NATS subscription for `profile.<publicID>`
+                                public_id_nats_task = Some(tokio::spawn(handle_nats_subscription(
+                                    state.nats_connection.clone(),
+                                    subject,
+                                    connection_state.clone(),
+                                )));
+                            }
+                            Err(e) => {
+                                error!("Invalid JWT: {}", e);
+                            }
+                        }
+                    }
+                    AxumMessage::Binary(data) => {
+                        // Handle binary message
+                        if let Some(response) = handle_binary_message(
+                            &connection_state,
+                            &state.server_state,
+                            data,
+                            state.nats_connection.clone(),
+                        )
+                        .await
+                        {
+                            // Convert tokio_tungstenite Message to Axum message and send via channel
+                            let _ = connection_state.outgoing_tx.send(response);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Err(e) => {
+                eprintln!("Error reading message: {}", e);
+                break;
+            }
+        }
+    }
+
+    // Cancel the NATS subscription when the WebSocket connection closes
+    nats_task.abort();
+    if let Some(task) = public_id_nats_task {
+        task.abort();
+    }
+    outgoing_task.abort();
+}
+
+/// Apple App Site Association handler
+async fn apple_app_site_association_handler(
+    State(state): State<Arc<WebSocketState>>,
+) -> impl IntoResponse {
+    let content = {
+        let read_guard = state.apple_app_site_association.read().unwrap();
+        read_guard.clone()
+    };
+
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        content,
+    )
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     env_logger::init();
+
+    // Install default crypto provider for rustls
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     // Load configuration
     let settings = load_config()?;
@@ -297,9 +433,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::time::sleep(NATS_RETRY_INTERVAL).await;
         }
     });
-
-    // Set up HTTP REST API server
-    let http_port = env::var("HTTP_PORT").unwrap_or_else(|_| settings.port.to_string());
 
     // Load OAuth public key from environment if provided
     let oauth_public_key_pem = env::var("OAUTH_PUBLIC_KEY_PATH")
@@ -385,6 +518,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         fairplay_handler: None,
     });
 
+    // Initialize C2PA signing state (optional - only if configured)
+    #[cfg(feature = "c2pa_signing")]
+    let c2pa_signing_state = match c2pa_signing::C2paConfig::from_env() {
+        Ok(config) => {
+            info!("C2PA signing enabled");
+            Some(Arc::new(c2pa_signing::C2paSigningState::new(config)))
+        }
+        Err(e) => {
+            info!("C2PA signing disabled: {}", e);
+            None
+        }
+    };
+
+    #[cfg(not(feature = "c2pa_signing"))]
+    let _c2pa_signing_state: Option<Arc<()>> = None;
+
     use axum::{
         routing::{delete, get, post},
         Router,
@@ -413,75 +562,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_state(media_api_state);
 
-    // Combine routers
+    // C2PA signing router (optional - only if configured)
+    #[cfg(feature = "c2pa_signing")]
+    let c2pa_router = if let Some(c2pa_state) = c2pa_signing_state {
+        Router::new()
+            .route("/c2pa/v1/sign", post(c2pa_signing::sign_manifest))
+            .route("/c2pa/v1/validate", post(c2pa_signing::validate_manifest))
+            .with_state(c2pa_state)
+    } else {
+        Router::new() // Empty router if C2PA not configured
+    };
+
+    #[cfg(not(feature = "c2pa_signing"))]
+    let c2pa_router = Router::new(); // Empty router if C2PA feature disabled
+
+    // Create WebSocket state for /ws route
+    let ws_state = Arc::new(WebSocketState {
+        server_state: server_state.clone(),
+        nats_connection: nats_connection.clone(),
+        apple_app_site_association: apple_app_site_association.clone(),
+    });
+
+    // Combine all routers
     let app = Router::new()
+        .route("/ws", get(ws_handler))
+        .route(
+            "/.well-known/apple-app-site-association",
+            get(apple_app_site_association_handler),
+        )
+        .with_state(ws_state)
         .merge(opentdf_router)
         .merge(media_router)
+        .merge(c2pa_router)
         .layer(
             tower::ServiceBuilder::new().layer(axum::middleware::from_fn(log_request_middleware)),
         );
 
-    let http_addr = format!("0.0.0.0:{}", http_port);
-    info!("Starting HTTP server on {}", http_addr);
+    // Set up unified server on single port
+    let addr = format!("0.0.0.0:{}", settings.port);
+    info!("Starting unified server (HTTP + WebSocket) on {}", addr);
 
-    let http_server = tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(&http_addr)
-            .await
-            .expect("Failed to bind HTTP server");
+    // Serve with or without TLS
+    if tls_acceptor.is_some() {
+        // TLS enabled - use axum-server with rustls
+        info!("TLS enabled - using rustls");
+
+        // Load rustls config for axum-server
+        let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
+            &settings.tls_cert_path,
+            &settings.tls_key_path,
+        )
+        .await?;
+
+        axum_server::bind_rustls(addr.parse()?, tls_config)
+            .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
+            .await?;
+    } else {
+        // TLS disabled - plain HTTP
+        info!("TLS disabled - using plain HTTP");
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
         axum::serve(
             listener,
             app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
-        .await
-        .expect("HTTP server failed");
-    });
-
-    // Set up WebSocket server (existing)
-    let ws_port = env::var("WS_PORT").unwrap_or_else(|_| settings.port.to_string());
-    let ws_addr = format!("0.0.0.0:{}", ws_port);
-    info!("Starting WebSocket server on {}", ws_addr);
-
-    let ws_server = tokio::spawn(async move {
-        let listener = TcpListener::bind(&ws_addr)
-            .await
-            .expect("Failed to bind WebSocket server");
-
-        loop {
-            if let Ok((stream, _)) = listener.accept().await {
-                let tls_acceptor_clone = tls_acceptor.clone();
-                let server_state_clone = server_state.clone();
-                let nats_connection_clone = nats_connection.clone();
-                let apple_app_site_association_clone = apple_app_site_association.clone();
-
-                tokio::spawn(async move {
-                    // Use a trait object to hold either TcpStream or TlsStream<TcpStream>
-                    let stream: Box<dyn AsyncStream> =
-                        if let Some(tls_acceptor) = tls_acceptor_clone {
-                            match tls_acceptor.accept(stream).await {
-                                Ok(tls_stream) => Box::new(tls_stream),
-                                Err(e) => {
-                                    eprintln!("Failed to accept TLS connection: {}", e);
-                                    return;
-                                }
-                            }
-                        } else {
-                            Box::new(stream)
-                        };
-
-                    handle_connection(
-                        stream,
-                        server_state_clone,
-                        nats_connection_clone,
-                        apple_app_site_association_clone,
-                    )
-                    .await;
-                });
-            }
-        }
-    });
-
-    // Run both servers concurrently
-    tokio::try_join!(http_server, ws_server)?;
+        .await?;
+    }
 
     Ok(())
 }
@@ -490,161 +635,55 @@ fn load_tls_config(
     cert_path: &str,
     key_path: &str,
 ) -> Result<TlsAcceptor, Box<dyn std::error::Error>> {
-    let cert = std::fs::read(cert_path)?;
-    let key = std::fs::read(key_path)?;
-
-    let identity = Identity::from_pkcs8(&cert, &key)?;
-    // Create native_tls TlsAcceptor with custom options
-    let mut builder = NativeTlsAcceptor::builder(identity);
-    // Set minimum TLS version to TLS 1.2
-    builder.min_protocol_version(Some(Protocol::Tlsv12));
-    // Build the native_tls acceptor
-    let native_acceptor = builder
-        .build()
-        .map_err(|e| format!("Failed to build TLS acceptor: {}", e))?;
-    // Convert to tokio_native_tls acceptor
-    let acceptor = TlsAcceptor::from(native_acceptor);
+    let config = load_rustls_config(cert_path, key_path)?;
+    let acceptor = TlsAcceptor::from(std::sync::Arc::new(config));
     Ok(acceptor)
 }
 
-async fn handle_websocket(
-    mut ws_stream: tokio_tungstenite::WebSocketStream<impl AsyncRead + AsyncWrite + Unpin>,
-    server_state: Arc<ServerState>,
-    nats_connection: Arc<NatsConnection>,
-) {
-    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
-    // Create ConnectionState with the outgoing channel
-    let connection_state = Arc::new(ConnectionState::new(outgoing_tx));
-    // Set up NATS subscription for this connection
-    let nats_task = tokio::spawn(handle_nats_subscription(
-        nats_connection.clone(),
-        server_state.settings.nats_subject.clone(),
-        connection_state.clone(),
-    ));
-    let mut public_id_nats_task: Option<tokio::task::JoinHandle<()>> = None;
-    // Handle incoming WebSocket messages
-    loop {
-        tokio::select! {
-            incoming = ws_stream.next() => {
-                match incoming {
-                    Some(Ok(msg)) => {
-                        if msg.is_close() {
-                            println!("Received a close message.");
-                            break;
-                        }
-                        if msg.is_text() {
-                            // Handle JWT token
-                            let token = msg.into_text().unwrap();
-                            println!("token: {}", token);
-                            match verify_token(&token, &server_state.settings) {
-                                Ok(claims) => {
-                                    println!("Valid JWT received. Claims: {:?}", claims);
-                                    // store the claims
-                                    {
-                                        let mut claims_lock = connection_state.claims_lock.write().unwrap();
-                                        *claims_lock = Some(claims.clone());
-                                    }
-                                    // Extract publicID from claims and subscribe to `profile.<publicID>`
-                                    let public_id = claims.sub;
-                                    let subject = format!("profile.{}", public_id);
-                                    // Cancel any existing `publicID`-specific NATS task
-                                    if let Some(task) = public_id_nats_task.take() {
-                                        task.abort();
-                                    }
-                                    // Set up new NATS subscription for `profile.<publicID>`
-                                    public_id_nats_task = Some(tokio::spawn(handle_nats_subscription(
-                                        nats_connection.clone(),
-                                        subject,
-                                        connection_state.clone(),
-                                    )));
-                                }
-                                Err(e) => {
-                                    error!("Invalid JWT: {}", e);
-                                }
-                            }
-                        } else if let Some(response) = handle_binary_message(&connection_state, &server_state, msg.into_data(), nats_connection.clone()).await {
-                            if ws_stream.send(response).await.is_err() {
-                                eprintln!("Failed to send response through WebSocket");
-                                break;
-                            }
-                        }
-                    }
-                    Some(Err(e)) => {
-                        eprintln!("Error reading message: {}", e);
-                        break;
-                    }
-                    None => break,
-                }
-            }
-            outgoing = outgoing_rx.recv() => {
-                match outgoing {
-                    Some(message) => {
-                        if ws_stream.send(message).await.is_err() {
-                            eprintln!("Failed to send outgoing message through WebSocket");
-                            break;
-                        }
-                    }
-                    None => break,
-                }
-            }
-        }
+fn load_rustls_config(
+    cert_path: &str,
+    key_path: &str,
+) -> Result<rustls::ServerConfig, Box<dyn std::error::Error>> {
+    use std::io::BufReader;
+
+    info!("Loading TLS configuration...");
+    info!("Certificate path: {}", cert_path);
+    info!("Key path: {}", key_path);
+
+    // Load certificates
+    let cert_file = std::fs::File::open(cert_path)?;
+    let mut cert_reader = BufReader::new(cert_file);
+    let cert_chain: Vec<rustls::pki_types::CertificateDer> =
+        certs(&mut cert_reader).collect::<Result<Vec<_>, _>>()?;
+
+    info!(
+        "Certificate chain loaded: {} certificates",
+        cert_chain.len()
+    );
+
+    // Load private key
+    let key_file = std::fs::File::open(key_path)?;
+    let mut key_reader = BufReader::new(key_file);
+    let mut keys = pkcs8_private_keys(&mut key_reader).collect::<Result<Vec<_>, _>>()?;
+
+    if keys.is_empty() {
+        return Err("No private keys found in key file".into());
     }
-    // Cancel the NATS subscription when the WebSocket connection closes
-    nats_task.abort();
-    if let Some(task) = public_id_nats_task {
-        task.abort();
-    }
+
+    let private_key = rustls::pki_types::PrivateKeyDer::Pkcs8(keys.remove(0));
+    info!("Private key loaded successfully");
+
+    // Create rustls server configuration
+    let config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(cert_chain, private_key)
+        .map_err(|e| format!("Failed to create TLS config: {}", e))?;
+
+    info!("TLS configuration created successfully");
+    Ok(config)
 }
 
-async fn handle_connection(
-    stream: impl AsyncRead + AsyncWrite + Unpin,
-    server_state: Arc<ServerState>,
-    nats_connection: Arc<NatsConnection>,
-    apple_app_site_association: Arc<RwLock<String>>,
-) {
-    let mut rewindable_stream = RewindableStream::new(stream);
-
-    // Read the first line of the request
-    let request_line = match rewindable_stream.read_until(b'\n').await {
-        Ok(line) => line,
-        Err(e) => {
-            eprintln!("Failed to read from stream: {}", e);
-            return;
-        }
-    };
-
-    let request_line_str = String::from_utf8_lossy(&request_line);
-    let mut parts = request_line_str.split_whitespace();
-    let method = parts.next();
-    let path = parts.next();
-
-    if method == Some("GET") && path == Some("/.well-known/apple-app-site-association") {
-        // Handle the apple-app-site-association request
-        let apple_app_site_association_content = {
-            let read_guard = apple_app_site_association.read().unwrap();
-            read_guard.clone()
-        };
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            apple_app_site_association_content.len(),
-            apple_app_site_association_content
-        );
-        if let Err(e) = rewindable_stream.write_all(response.as_bytes()).await {
-            eprintln!("Failed to write response: {}", e);
-        }
-    } else {
-        // Assume it's a WebSocket request and proceed with the upgrade
-        rewindable_stream.rewind();
-        match tokio_tungstenite::accept_async(rewindable_stream).await {
-            Ok(ws_stream) => {
-                handle_websocket(ws_stream, server_state, nats_connection).await;
-            }
-            Err(e) => {
-                eprintln!("Failed to accept websocket: {}", e);
-            }
-        }
-    }
-}
+// Old handle_websocket and handle_connection functions removed - replaced by handle_websocket_axum
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Claims {
@@ -1734,6 +1773,14 @@ struct ServerState {
     s3_client: s3::Client,
 }
 
+/// WebSocket route state - contains all dependencies needed for WebSocket handling
+#[derive(Clone)]
+struct WebSocketState {
+    server_state: Arc<ServerState>,
+    nats_connection: Arc<NatsConnection>,
+    apple_app_site_association: Arc<RwLock<String>>,
+}
+
 impl ServerState {
     async fn new(settings: ServerSettings) -> Result<Self, Box<dyn std::error::Error>> {
         info!("Attempting to connect to Redis at {}", settings.redis_url);
@@ -1749,8 +1796,11 @@ impl ServerState {
         };
 
         // Initialize AWS S3 client
+        info!("Loading AWS configuration...");
         let config = aws_config::load_from_env().await;
+        info!("AWS configuration loaded successfully");
         let s3_client = s3::Client::new(&config);
+        info!("S3 client initialized");
 
         Ok(ServerState {
             settings,
@@ -1937,89 +1987,8 @@ async fn load_apple_app_site_association() -> Arc<RwLock<String>> {
         .expect("Failed to read apple-app-site-association.json");
     Arc::new(RwLock::new(content))
 }
-struct RewindableStream<S> {
-    stream: S,
-    buffer: Vec<u8>,
-    position: usize,
-}
 
-impl<S: AsyncRead + AsyncWrite + Unpin> RewindableStream<S> {
-    fn new(stream: S) -> Self {
-        Self {
-            stream,
-            buffer: Vec::new(),
-            position: 0,
-        }
-    }
-
-    fn rewind(&mut self) {
-        self.position = 0;
-    }
-
-    async fn read_until(&mut self, delimiter: u8) -> std::io::Result<Vec<u8>> {
-        let mut result = Vec::new();
-        loop {
-            if self.position < self.buffer.len() {
-                let byte = self.buffer[self.position];
-                self.position += 1;
-                result.push(byte);
-                if byte == delimiter {
-                    break;
-                }
-            } else {
-                let mut buf = [0u8; 1024];
-                let n = self.stream.read(&mut buf).await?;
-                if n == 0 {
-                    break;
-                }
-                self.buffer.extend_from_slice(&buf[..n]);
-            }
-        }
-        Ok(result)
-    }
-}
-
-impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for RewindableStream<S> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        if self.position < self.buffer.len() {
-            let remaining = self.buffer.len() - self.position;
-            let to_read = buf.remaining().min(remaining);
-            buf.put_slice(&self.buffer[self.position..self.position + to_read]);
-            self.position += to_read;
-            Poll::Ready(Ok(()))
-        } else {
-            Pin::new(&mut self.stream).poll_read(cx, buf)
-        }
-    }
-}
-
-impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for RewindableStream<S> {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<Result<usize, std::io::Error>> {
-        Pin::new(&mut self.stream).poll_write(cx, buf)
-    }
-
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.stream).poll_flush(cx)
-    }
-
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.stream).poll_shutdown(cx)
-    }
-}
+// RewindableStream removed - no longer needed with Axum routing
 
 fn convert_rating_level(level: arkavo::RatingLevel) -> RatingLevel {
     match level.0 {

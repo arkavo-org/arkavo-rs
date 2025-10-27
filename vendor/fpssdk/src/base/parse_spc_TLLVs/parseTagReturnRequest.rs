@@ -6,13 +6,18 @@ use std::mem::size_of;
 
 use crate::base::base_constants::FPS_TLLV_TAG_SZ;
 use crate::base::structures::base_fps_structures::Base;
-use crate::base::structures::base_server_structures::{FPSServerSPCContainer, FPSServerSPCData, FPSServerTLLV};
+use crate::base::structures::base_server_structures::{
+    FPSServerSPCContainer, FPSServerSPCData, FPSServerTLLV,
+};
 use crate::base::Utils::FPSServerUtils::readBigEndianU64;
 use crate::validate::{FPSStatus, Result};
 use crate::{fpsLogError, requireAction, returnErrorStatus};
 
 impl Base {
-    pub fn parseTagReturnRequest(tllv: &FPSServerTLLV, spcContainer: &mut FPSServerSPCContainer) -> Result<()> {
+    pub fn parseTagReturnRequest(
+        tllv: &FPSServerTLLV,
+        spcContainer: &mut FPSServerSPCContainer,
+    ) -> Result<()> {
         // Check that size is a multiple of the tag field size
         requireAction!(
             (tllv.value.len() % FPS_TLLV_TAG_SZ == 0),

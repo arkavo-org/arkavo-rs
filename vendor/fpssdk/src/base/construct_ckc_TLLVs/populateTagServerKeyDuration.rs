@@ -14,13 +14,34 @@ impl Base {
         let mut keyDuration: Vec<u8> = Default::default();
 
         // 4B Lease Duration
-        keyDuration.appendBigEndianU32(serverCtx.ckcContainer.ckcData.ckcAssetInfo.keyDuration.leaseDuration);
+        keyDuration.appendBigEndianU32(
+            serverCtx
+                .ckcContainer
+                .ckcData
+                .ckcAssetInfo
+                .keyDuration
+                .leaseDuration,
+        );
 
         // 4B Rental Duration
-        keyDuration.appendBigEndianU32(serverCtx.ckcContainer.ckcData.ckcAssetInfo.keyDuration.rentalDuration);
+        keyDuration.appendBigEndianU32(
+            serverCtx
+                .ckcContainer
+                .ckcData
+                .ckcAssetInfo
+                .keyDuration
+                .rentalDuration,
+        );
 
         // 4B Key Type
-        keyDuration.appendBigEndianU32(serverCtx.ckcContainer.ckcData.ckcAssetInfo.keyDuration.keyType);
+        keyDuration.appendBigEndianU32(
+            serverCtx
+                .ckcContainer
+                .ckcData
+                .ckcAssetInfo
+                .keyDuration
+                .keyType,
+        );
 
         // 4B Reserved
         keyDuration.appendBigEndianU32(FPS_KEY_DURATION_RESERVED_FIELD_VALUE);

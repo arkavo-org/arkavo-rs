@@ -10,9 +10,15 @@ use crate::requireAction;
 use crate::validate::{FPSStatus, Result};
 
 impl Base {
-    pub fn parseTagAntiReplay(tllv: &FPSServerTLLV, spcContainer: &mut FPSServerSPCContainer) -> Result<()> {
+    pub fn parseTagAntiReplay(
+        tllv: &FPSServerTLLV,
+        spcContainer: &mut FPSServerSPCContainer,
+    ) -> Result<()> {
         // Check that size matches expected size exactly
-        requireAction!(tllv.value.len() == AES128_KEY_SZ, return Err(FPSStatus::parserErr));
+        requireAction!(
+            tllv.value.len() == AES128_KEY_SZ,
+            return Err(FPSStatus::parserErr)
+        );
 
         spcContainer.spcData.antiReplay = readBytes(&tllv.value, 0, AES128_KEY_SZ)?;
 

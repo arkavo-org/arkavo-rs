@@ -1,7 +1,7 @@
-use aws_sdk_s3::primitives::ByteStream;
 use std::error::Error;
 
 // Define ServerSettings similar to the production one
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct ServerSettings {
     port: u16,
@@ -21,9 +21,9 @@ struct ServerSettings {
 async fn test_s3_upload_helper_function() {
     // Create a simple test function to simulate the upload functionality
     async fn upload_to_s3_test(
-        bucket: &str,
+        _bucket: &str,
         target_id: &str,
-        target_payload: &[u8],
+        _target_payload: &[u8],
     ) -> Result<String, Box<dyn Error>> {
         let s3_key = format!("{}/data", target_id);
         // Simulate successful upload by returning the key

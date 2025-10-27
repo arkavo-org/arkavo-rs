@@ -71,6 +71,16 @@ pub mod media_policy {
         pub playback_duration_seconds: i64, // Time from first play
     }
 
+    /// C2PA manifest metadata (optional for content authenticity)
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct C2paManifestInfo {
+        pub is_valid: bool,
+        pub creator: Option<[u8; 64]>,
+        pub ai_generated: Option<bool>,
+        pub edit_count: u32,
+    }
+
     /// Content metadata
     #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
@@ -80,6 +90,8 @@ pub mod media_policy {
         pub hdcp_requirement: HDCPRequirement,
         pub license_type: LicenseType,
         pub rental_window: Option<RentalWindow>,
+        pub c2pa_manifest: Option<C2paManifestInfo>,
+        pub require_c2pa: bool, // Whether C2PA validation is required for this content
     }
 
     /// Device security capabilities
@@ -105,6 +117,8 @@ pub mod media_policy {
         SecurityLevelInsufficient,
         VirtualMachineNotAllowed,
         DeviceNotAuthorized,
+        C2paRequired,
+        C2paValidationFailed,
     }
 
     #[ink(storage)]
@@ -149,6 +163,27 @@ pub mod media_policy {
 
             // 6. HDCP requirements
             self.validate_hdcp(&content, &device)?;
+
+            // 7. C2PA content authenticity (if required)
+            if content.require_c2pa || content.c2pa_manifest.is_some() {
+                self.validate_c2pa(&content)?;
+            }
+
+            Ok(())
+        }
+
+        fn validate_c2pa(&self, content: &ContentMetadata) -> Result<(), Error> {
+            // If C2PA is required, manifest must be present
+            if content.require_c2pa && content.c2pa_manifest.is_none() {
+                return Err(Error::C2paRequired);
+            }
+
+            // If manifest is present, validate it
+            if let Some(ref manifest) = content.c2pa_manifest {
+                if !manifest.is_valid {
+                    return Err(Error::C2paValidationFailed);
+                }
+            }
 
             Ok(())
         }
@@ -296,6 +331,8 @@ pub mod media_policy {
                 hdcp_requirement: HDCPRequirement::Type0,
                 license_type: LicenseType::Subscription,
                 rental_window: None,
+                c2pa_manifest: None,
+                require_c2pa: false,
             };
 
             let device = DeviceCapabilities {
@@ -344,6 +381,8 @@ pub mod media_policy {
                 hdcp_requirement: HDCPRequirement::NotRequired,
                 license_type: LicenseType::Streaming,
                 rental_window: None,
+                c2pa_manifest: None,
+                require_c2pa: false,
             };
 
             let device = DeviceCapabilities {
@@ -398,6 +437,8 @@ pub mod media_policy {
                 hdcp_requirement: HDCPRequirement::Type0,
                 license_type: LicenseType::Rental,
                 rental_window: Some(rental),
+                c2pa_manifest: None,
+                require_c2pa: false,
             };
 
             let device = DeviceCapabilities {
@@ -452,6 +493,8 @@ pub mod media_policy {
                 hdcp_requirement: HDCPRequirement::Type1,
                 license_type: LicenseType::Streaming,
                 rental_window: None,
+                c2pa_manifest: None,
+                require_c2pa: false,
             };
 
             let mut device = DeviceCapabilities {

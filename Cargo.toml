@@ -13,7 +13,7 @@ name = "nanotdf"
 path = "src/lib.rs"
 
 [[bin]]
-name = "arkavo"
+name = "arks"
 path = "src/bin/main.rs"
 
 [profile.release]
@@ -39,8 +39,9 @@ once_cell = "1.19.0"
 rand_core = "0.6.4"
 sha2 = "0.10.8"
 hkdf = "0.12.4"
-tokio-native-tls = "0.3.1"
-native-tls = "0.2.12"
+tokio-rustls = "0.26"
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2.0"
 env_logger = "0.11.5"
 log = "0.4.22"
 ink = "5.0.0"
@@ -51,7 +52,8 @@ flatbuffers = "24.12.23"
 scale = { package = "parity-scale-codec", version = "3.6.12", default-features = false, features = ["derive"] }
 scale-info = { version = "2.11.3", default-features = false, features = ["derive"], optional = true }
 bs58 = "0.5.1"
-axum = "0.7"
+axum = { version = "0.7", features = ["ws"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
 tower = "0.4"
 hyper = "1.0"
 http-body-util = "0.1"
@@ -61,10 +63,13 @@ aws-config = { version = "1.5.13", features = ["behavior-version-latest"] }
 aws-sdk-s3 = "1.68.0"
 uuid = { version = "1.11", features = ["v4"] }
 fairplay-wrapper = { path = "crates/fairplay-wrapper", optional = true }
+c2pa = { version = "0.37.1", features = ["file_io", "unstable_api"], optional = true }
+mp4parse = { version = "0.17", optional = true }
 
 [features]
 default = []
 fairplay = ["fairplay-wrapper"]
+c2pa_signing = ["c2pa", "mp4parse"]
 
 [dev-dependencies]
 criterion = "0.5.1"

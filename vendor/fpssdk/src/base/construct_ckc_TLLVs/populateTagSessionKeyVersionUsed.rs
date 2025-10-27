@@ -20,7 +20,8 @@ impl Base {
         sessionKeyVersion.appendBigEndianU32(0);
 
         // 8B Key Type: which session key was used: generic or video
-        sessionKeyVersion.appendBigEndianU64(serverCtx.ckcContainer.ckcData.ckcAssetInfo.sessionKeyUsed);
+        sessionKeyVersion
+            .appendBigEndianU64(serverCtx.ckcContainer.ckcData.ckcAssetInfo.sessionKeyUsed);
 
         Base::serializeTLLV(
             FPSTLLVTagValue::sessionKeyVersionUsedTag as u64,

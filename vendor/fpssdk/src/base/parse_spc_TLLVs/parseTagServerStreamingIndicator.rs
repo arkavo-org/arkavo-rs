@@ -16,7 +16,10 @@ impl Base {
         spcContainer: &mut FPSServerSPCContainer,
     ) -> Result<()> {
         // Check that size matches expected size exactly
-        requireAction!(tllv.value.len() == size_of::<u64>(), return Err(FPSStatus::parserErr));
+        requireAction!(
+            tllv.value.len() == size_of::<u64>(),
+            return Err(FPSStatus::parserErr)
+        );
 
         // 8B Streaming Indicator
         spcContainer.spcData.streamingIndicator = readBigEndianU64(&tllv.value, 0)?;

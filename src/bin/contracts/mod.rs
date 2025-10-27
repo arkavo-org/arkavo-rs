@@ -1,3 +1,4 @@
+pub mod c2pa_policy_contract;
 pub mod content_rating;
 pub mod contract_simple_abac;
 pub mod geo_fence_contract;

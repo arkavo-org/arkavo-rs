@@ -2,8 +2,12 @@
 // Copyright © 2023-2025 Apple Inc. All rights reserved.
 //
 
-use crate::base::base_constants::{FPSTLLVTagValue, FPS_MAX_STREAM_ID_LENGTH, FPS_MAX_TITLE_ID_LENGTH};
-use crate::base::base_constants::{FPS_TLLV_OFFLINEKEY_TLLV_VERSION, FPS_TLLV_OFFLINEKEY_TLLV_VERSION_2};
+use crate::base::base_constants::{
+    FPSTLLVTagValue, FPS_MAX_STREAM_ID_LENGTH, FPS_MAX_TITLE_ID_LENGTH,
+};
+use crate::base::base_constants::{
+    FPS_TLLV_OFFLINEKEY_TLLV_VERSION, FPS_TLLV_OFFLINEKEY_TLLV_VERSION_2,
+};
 use crate::base::structures::base_server_structures::FPSServerCtx;
 use crate::base::Utils::FPSServerUtils::VectorHelperUtils;
 use crate::fpsLogError;
@@ -18,11 +22,26 @@ impl Base {
         let mut offlineKeyTLLV: Vec<u8> = Default::default();
 
         // Check if we need to send down Stream ID (aka Content ID) and Title ID
-        if (serverCtx.ckcContainer.ckcData.ckcAssetInfo.streamId.is_some()) ||
-            (serverCtx.ckcContainer.ckcData.ckcAssetInfo.titleId.is_some()) {
-
+        if (serverCtx
+            .ckcContainer
+            .ckcData
+            .ckcAssetInfo
+            .streamId
+            .is_some())
+            || (serverCtx
+                .ckcContainer
+                .ckcData
+                .ckcAssetInfo
+                .titleId
+                .is_some())
+        {
             // Verify that the client device actually supports Offline TLLV V2
-            if !serverCtx.spcContainer.spcData.clientFeatures.supportsOfflineKeyTLLVV2 {
+            if !serverCtx
+                .spcContainer
+                .spcData
+                .clientFeatures
+                .supportsOfflineKeyTLLVV2
+            {
                 fpsLogError!(
                     FPSStatus::paramErr,
                     "stream ID and title ID provided on the input but client doesn't support OfflineTLLV V2"
@@ -41,7 +60,13 @@ impl Base {
         offlineKeyTLLV.appendBigEndianU32(0);
 
         // 16B Content ID (Stream ID in V2)
-        if let Some(streamId) = serverCtx.ckcContainer.ckcData.ckcAssetInfo.streamId.as_mut() {
+        if let Some(streamId) = serverCtx
+            .ckcContainer
+            .ckcData
+            .ckcAssetInfo
+            .streamId
+            .as_mut()
+        {
             streamId.resize(FPS_MAX_STREAM_ID_LENGTH, 0);
             offlineKeyTLLV.extend(streamId.iter());
         } else {
@@ -50,16 +75,45 @@ impl Base {
         }
 
         // 4B Storage Duration
-        offlineKeyTLLV.appendBigEndianU32(serverCtx.ckcContainer.ckcData.ckcAssetInfo.keyDuration.rentalDuration);
+        offlineKeyTLLV.appendBigEndianU32(
+            serverCtx
+                .ckcContainer
+                .ckcData
+                .ckcAssetInfo
+                .keyDuration
+                .rentalDuration,
+        );
 
         // 4B Playback Duration
-        offlineKeyTLLV.appendBigEndianU32(serverCtx.ckcContainer.ckcData.ckcAssetInfo.keyDuration.playbackDuration);
+        offlineKeyTLLV.appendBigEndianU32(
+            serverCtx
+                .ckcContainer
+                .ckcData
+                .ckcAssetInfo
+                .keyDuration
+                .playbackDuration,
+        );
 
         // Additional fields for Version 2
         if offlineKeyTLLVVersion == FPS_TLLV_OFFLINEKEY_TLLV_VERSION_2 {
             // 16B Title ID
-            serverCtx.ckcContainer.ckcData.ckcAssetInfo.titleId.as_mut().unwrap().resize(FPS_MAX_TITLE_ID_LENGTH, 0);
-            offlineKeyTLLV.extend(serverCtx.ckcContainer.ckcData.ckcAssetInfo.titleId.as_ref().unwrap());
+            serverCtx
+                .ckcContainer
+                .ckcData
+                .ckcAssetInfo
+                .titleId
+                .as_mut()
+                .unwrap()
+                .resize(FPS_MAX_TITLE_ID_LENGTH, 0);
+            offlineKeyTLLV.extend(
+                serverCtx
+                    .ckcContainer
+                    .ckcData
+                    .ckcAssetInfo
+                    .titleId
+                    .as_ref()
+                    .unwrap(),
+            );
         }
 
         Base::serializeTLLV(
