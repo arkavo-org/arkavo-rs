@@ -11,7 +11,10 @@ use crate::{fpsLogError, returnErrorStatus};
 use std::mem::size_of;
 
 impl Base {
-    pub fn parseTagSupportedKeyFormat(tllv: &FPSServerTLLV, spcContainer: &mut FPSServerSPCContainer) -> Result<()> {
+    pub fn parseTagSupportedKeyFormat(
+        tllv: &FPSServerTLLV,
+        spcContainer: &mut FPSServerSPCContainer,
+    ) -> Result<()> {
         // 4B Version
         let tllvVersion = readBigEndianU32(&tllv.value, 0)?;
 
@@ -38,7 +41,8 @@ impl Base {
             // Key Formats (variable size)
             spcContainer.spcData.numberOfSupportedKeyFormats = numberOfKeyFormats;
             for i in 0..numberOfKeyFormats as usize {
-                spcContainer.spcData.supportedKeyFormats[i] = readBigEndianU64(&tllv.value, offset)?;
+                spcContainer.spcData.supportedKeyFormats[i] =
+                    readBigEndianU64(&tllv.value, offset)?;
                 offset += size_of::<u64>();
 
                 // log::debug!("Client Supported Key Format {}: 0x{:016x}", i, spcContainer.spcData.supportedKeyFormats[i]);

@@ -11,7 +11,10 @@ use crate::requireAction;
 use crate::validate::{FPSStatus, Result};
 
 impl Base {
-    pub fn parseTagMediaPlaybackState(tllv: &FPSServerTLLV, spcContainer: &mut FPSServerSPCContainer) -> Result<()> {
+    pub fn parseTagMediaPlaybackState(
+        tllv: &FPSServerTLLV,
+        spcContainer: &mut FPSServerSPCContainer,
+    ) -> Result<()> {
         // Check that size matches expected size exactly
         requireAction!(
             tllv.value.len() == size_of::<u32>() * 2 + size_of::<u64>(),
@@ -22,7 +25,8 @@ impl Base {
         spcContainer.spcData.spcAssetInfo.playInfo.date = readBigEndianU32(&tllv.value, 0)?;
 
         // 4B Playback State
-        spcContainer.spcData.spcAssetInfo.playInfo.playbackState = readBigEndianU32(&tllv.value, 4)?;
+        spcContainer.spcData.spcAssetInfo.playInfo.playbackState =
+            readBigEndianU32(&tllv.value, 4)?;
 
         // 8B Playback ID
         spcContainer.spcData.spcAssetInfo.playInfo.playbackId = readBigEndianU64(&tllv.value, 8)?;

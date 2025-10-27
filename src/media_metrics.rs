@@ -58,6 +58,28 @@ pub enum MediaEvent {
         action: RentalAction,
         timestamp: i64,
     },
+    C2paValidationSuccess {
+        session_id: Option<String>,
+        user_id: String,
+        asset_id: String,
+        creator: Option<String>,
+        ai_generated: Option<bool>,
+        timestamp: i64,
+    },
+    C2paValidationFailure {
+        session_id: Option<String>,
+        user_id: String,
+        asset_id: String,
+        error: String,
+        timestamp: i64,
+    },
+    C2paPolicyDenial {
+        session_id: Option<String>,
+        user_id: String,
+        asset_id: String,
+        reason: String, // e.g., "creator_not_allowed", "ai_content_prohibited"
+        timestamp: i64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -264,6 +286,40 @@ impl MediaMetrics {
                     user_id, asset_id, action
                 );
             }
+            MediaEvent::C2paValidationSuccess {
+                user_id,
+                asset_id,
+                creator,
+                ai_generated,
+                ..
+            } => {
+                info!(
+                    "C2PA_VALIDATION_SUCCESS user={} asset={} creator={:?} ai_generated={:?}",
+                    user_id, asset_id, creator, ai_generated
+                );
+            }
+            MediaEvent::C2paValidationFailure {
+                user_id,
+                asset_id,
+                error,
+                ..
+            } => {
+                info!(
+                    "C2PA_VALIDATION_FAILURE user={} asset={} error={}",
+                    user_id, asset_id, error
+                );
+            }
+            MediaEvent::C2paPolicyDenial {
+                user_id,
+                asset_id,
+                reason,
+                ..
+            } => {
+                info!(
+                    "C2PA_POLICY_DENIAL user={} asset={} reason={}",
+                    user_id, asset_id, reason
+                );
+            }
         }
     }
 }
@@ -277,6 +333,9 @@ impl MediaEvent {
             Self::PolicyDenial { .. } => "policy_denial",
             Self::ConcurrencyLimit { .. } => "concurrency_limit",
             Self::RentalWindow { .. } => "rental_window",
+            Self::C2paValidationSuccess { .. } => "c2pa_validation_success",
+            Self::C2paValidationFailure { .. } => "c2pa_validation_failure",
+            Self::C2paPolicyDenial { .. } => "c2pa_policy_denial",
         }
     }
 }

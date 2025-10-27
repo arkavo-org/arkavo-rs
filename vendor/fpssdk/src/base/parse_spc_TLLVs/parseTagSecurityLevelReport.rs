@@ -11,11 +11,11 @@ use crate::validate::Result;
 use crate::{fpsLogError, returnErrorStatus};
 
 impl Base {
-    pub fn parseTagSecurityLevelReport(tllv: &FPSServerTLLV,
+    pub fn parseTagSecurityLevelReport(
+        tllv: &FPSServerTLLV,
         supportedSecurityLevel: &mut Option<u64>,
         clientKextDenyListVersion: &mut u32,
     ) -> Result<()> {
-
         if tllv.value.len() == base_constants::FPS_ENCRYPTED_SECURITY_LEVEL_REPORT_TLLV_SIZE {
             return Ok(()); // This is encrypted security level TLLV. Just ignore it for now
         }

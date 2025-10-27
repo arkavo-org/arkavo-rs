@@ -620,6 +620,7 @@ pub async fn session_start(
         client_ip: client_ip.clone(),
         geo_region: payload.geo_region.clone(),
         user_agent: payload.user_agent.clone(),
+        c2pa_metadata: None, // C2PA metadata populated during key requests
     };
 
     match state.session_manager.create_session(session.clone()).await {

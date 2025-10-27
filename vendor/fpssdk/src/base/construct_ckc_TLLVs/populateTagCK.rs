@@ -10,7 +10,12 @@ impl Base {
     pub fn populateTagCK(tag: u64, serverCtx: &mut FPSServerCtx) -> Result<()> {
         Base::serializeTLLV(
             tag,
-            &serverCtx.ckcContainer.ckcData.ckcAssetInfo.contentKeyTLLVPayload.to_owned(),
+            &serverCtx
+                .ckcContainer
+                .ckcData
+                .ckcAssetInfo
+                .contentKeyTLLVPayload
+                .to_owned(),
             &mut serverCtx.ckcContainer,
         )
     }

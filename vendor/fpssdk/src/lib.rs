@@ -1,23 +1,33 @@
 //
 // Copyright © 2023-2024 Apple Inc. All rights reserved.
 //
-#![allow(nonstandard_style, unused_variables, unused_assignments, dead_code, unused_mut, unreachable_code, const_item_mutation, deprecated, clippy::all)]
+#![allow(
+    nonstandard_style,
+    unused_variables,
+    unused_assignments,
+    dead_code,
+    unused_mut,
+    unreachable_code,
+    const_item_mutation,
+    deprecated,
+    clippy::all
+)]
 
-use std::env;
-use crate::base::structures::base_fps_structures::Base;
 use crate::base::base_constants;
+use crate::base::structures::base_fps_structures::Base;
 use crate::extension::extension_constants;
 use crate::validate::{FPSStatus, FPSStatus::noErr};
+use std::env;
 use std::ffi::{c_char, CStr, CString};
 use std::sync::Once;
 pub mod base;
-pub mod logging;
 pub mod extension;
+pub mod logging;
 
-use crate::extension::structures::extension_structures::SDKExtension;
-use crate::extension::structures::extension_structures;
 use crate::extension::extension as Extension; // Using uppercase to avoid conflict with folder name
-use crate::extension::validate as validate;
+use crate::extension::structures::extension_structures;
+use crate::extension::structures::extension_structures::SDKExtension;
+use crate::extension::validate;
 
 static INIT: Once = Once::new();
 
@@ -46,7 +56,6 @@ pub extern "C" fn fpsProcessOperations(
     // Need to return a usize because you cannot set out_json_size within the closure and still have
     // it be able to catch the unwind
     let result = std::panic::catch_unwind(|| -> usize {
-
         let s = unsafe { CStr::from_ptr(in_json).to_string_lossy().into_owned() };
         let s = s.as_str();
 
@@ -73,11 +82,14 @@ pub extern "C" fn fpsProcessOperations(
             *out_json = CString::new(json_fail_str.as_str()).unwrap().into_raw();
         }
         *out_json_size = json_fail_str.len();
-        let s = unsafe {
-            CStr::from_ptr(in_json).to_string_lossy().into_owned()
-        };
+        let s = unsafe { CStr::from_ptr(in_json).to_string_lossy().into_owned() };
         let s = s.as_str();
-        fpsLogError!(FPSStatus::internalErr, "fpssdk panic: {:?}, panic input: {}", result.unwrap_err(), s);
+        fpsLogError!(
+            FPSStatus::internalErr,
+            "fpssdk panic: {:?}, panic input: {}",
+            result.unwrap_err(),
+            s
+        );
         FPSStatus::internalErr
     } else {
         let size = result.unwrap();
@@ -110,7 +122,9 @@ pub extern "C" fn fpsGetVersion(out_version: *mut *mut c_char) -> FPSStatus {
 
     let version = CString::new(env!("CARGO_PKG_VERSION"));
 
-    unsafe { *out_version = version.unwrap().into_raw();}
+    unsafe {
+        *out_version = version.unwrap().into_raw();
+    }
     noErr
 }
 
@@ -118,7 +132,7 @@ pub extern "C" fn fpsGetVersion(out_version: *mut *mut c_char) -> FPSStatus {
 ///
 /// FPSStatus fpsDisposeVersion(char *version)
 #[no_mangle]
-pub extern "C" fn fpsDisposeVersion(version: *mut c_char) -> FPSStatus{
+pub extern "C" fn fpsDisposeVersion(version: *mut c_char) -> FPSStatus {
     requireAction!(!version.is_null(), return FPSStatus::paramErr);
 
     unsafe {
@@ -126,4 +140,3 @@ pub extern "C" fn fpsDisposeVersion(version: *mut c_char) -> FPSStatus{
     }
     noErr
 }
-

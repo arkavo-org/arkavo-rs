@@ -8,9 +8,9 @@ use nanotdf::{media_metrics, session_manager};
 #[path = "../modules/mod.rs"]
 mod modules;
 
-use modules::{crypto, http_rewrap, media_api};
 #[cfg(feature = "c2pa_signing")]
 use modules::c2pa_signing;
+use modules::{crypto, http_rewrap, media_api};
 
 use crate::contracts::content_rating::content_rating::{
     AgeLevel, ContentRating, Rating, RatingLevel,
@@ -23,20 +23,22 @@ use crate::schemas::metadata_generated::arkavo::{root_as_metadata, Metadata};
 use async_nats::Message as NatsMessage;
 use async_nats::{Client as NatsClient, PublishError};
 use aws_sdk_s3 as s3;
+use axum::extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade};
+use axum::extract::State;
+use axum::response::IntoResponse;
 use flatbuffers::root;
 use futures_util::{SinkExt, StreamExt};
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use log::{error, info};
 use nanotdf::{BinaryParser, PolicyType, ProtocolEnum, ResourceLocator};
-use rustls::ServerConfig;
-use rustls_pemfile::{certs, pkcs8_private_keys};
-use tokio_rustls::TlsAcceptor;
 use once_cell::sync::OnceCell;
 use p256::ecdh::EphemeralSecret;
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use rand_core::{OsRng, RngCore};
 use redis::AsyncCommands;
 use redis::Client as RedisClient;
+use rustls::ServerConfig;
+use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
@@ -44,10 +46,8 @@ use std::sync::RwLock;
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::sync::{mpsc, Mutex};
+use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::Message;
-use axum::extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
-use axum::response::IntoResponse;
 
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug)]
@@ -295,7 +295,8 @@ async fn handle_websocket_axum(ws: WebSocket, state: Arc<WebSocketState>) {
                                 println!("Valid JWT received. Claims: {:?}", claims);
                                 // Store the claims
                                 {
-                                    let mut claims_lock = connection_state.claims_lock.write().unwrap();
+                                    let mut claims_lock =
+                                        connection_state.claims_lock.write().unwrap();
                                     *claims_lock = Some(claims.clone());
                                 }
                                 // Extract publicID from claims and subscribe to `profile.<publicID>`
@@ -324,7 +325,9 @@ async fn handle_websocket_axum(ws: WebSocket, state: Arc<WebSocketState>) {
                             &state.server_state,
                             data,
                             state.nats_connection.clone(),
-                        ).await {
+                        )
+                        .await
+                        {
                             // Convert tokio_tungstenite Message to Axum message and send via channel
                             let _ = connection_state.outgoing_tx.send(response);
                         }
@@ -583,7 +586,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Combine all routers
     let app = Router::new()
         .route("/ws", get(ws_handler))
-        .route("/.well-known/apple-app-site-association", get(apple_app_site_association_handler))
+        .route(
+            "/.well-known/apple-app-site-association",
+            get(apple_app_site_association_handler),
+        )
         .with_state(ws_state)
         .merge(opentdf_router)
         .merge(media_router)
@@ -647,16 +653,18 @@ fn load_rustls_config(
     // Load certificates
     let cert_file = std::fs::File::open(cert_path)?;
     let mut cert_reader = BufReader::new(cert_file);
-    let cert_chain: Vec<rustls::pki_types::CertificateDer> = certs(&mut cert_reader)
-        .collect::<Result<Vec<_>, _>>()?;
+    let cert_chain: Vec<rustls::pki_types::CertificateDer> =
+        certs(&mut cert_reader).collect::<Result<Vec<_>, _>>()?;
 
-    info!("Certificate chain loaded: {} certificates", cert_chain.len());
+    info!(
+        "Certificate chain loaded: {} certificates",
+        cert_chain.len()
+    );
 
     // Load private key
     let key_file = std::fs::File::open(key_path)?;
     let mut key_reader = BufReader::new(key_file);
-    let mut keys = pkcs8_private_keys(&mut key_reader)
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut keys = pkcs8_private_keys(&mut key_reader).collect::<Result<Vec<_>, _>>()?;
 
     if keys.is_empty() {
         return Err("No private keys found in key file".into());

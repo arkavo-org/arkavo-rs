@@ -12,10 +12,9 @@ use crate::base::structures::base_fps_structures::Base;
 use crate::base::structures::base_fps_structures::{FPSOperation, FPSOperationType, FPSResult};
 use crate::base::structures::base_server_structures::FPSServerCtx;
 use crate::base::Utils::FPSServerUtils::readBigEndianU32;
+use crate::returnErrorStatus;
 use crate::validate::{FPSStatus, Result};
 use crate::Extension;
-use crate::returnErrorStatus;
-
 
 impl Base {
     /// Fills in `fpsResult` with values that will be returned in the license response
@@ -37,7 +36,10 @@ impl Base {
         let localVersion = readBigEndianU32(&fpsOperation.spc, 0)?;
 
         match localVersion {
-            x if (x == (SPCVersion::v1 as u32) || x == (SPCVersion::v2 as u32) || x == (SPCVersion::v3 as u32)) => {
+            x if (x == (SPCVersion::v1 as u32)
+                || x == (SPCVersion::v2 as u32)
+                || x == (SPCVersion::v3 as u32)) =>
+            {
                 let mut serverCtx: FPSServerCtx = Default::default();
 
                 // Parse SPC
@@ -56,7 +58,9 @@ impl Base {
                 // This also gets the client HU from the request.
                 Extension::createContentKeyPayloadCustom(fpsOperation, &mut serverCtx, fpsResult)?;
 
-                if fpsOperation.operationType == FPSOperationType::createCKC && serverCtx.ckcContainer.returnCKC {
+                if fpsOperation.operationType == FPSOperationType::createCKC
+                    && serverCtx.ckcContainer.returnCKC
+                {
                     // Generate the CKC
                     Base::generateCKC(&mut serverCtx)?;
 
@@ -88,28 +92,69 @@ impl Base {
         // Offline HLS or Online HLS rental
         if assetInfo.licenseType == FPSLicenseType::offlineHLS as u32 {
             if assetInfo.streamId.is_some() {
-                serverCtx.ckcContainer.ckcData.ckcAssetInfo.streamId = assetInfo.streamId.to_owned();
+                serverCtx.ckcContainer.ckcData.ckcAssetInfo.streamId =
+                    assetInfo.streamId.to_owned();
             }
 
             if assetInfo.titleId.is_some() {
                 serverCtx.ckcContainer.ckcData.ckcAssetInfo.titleId = assetInfo.titleId.to_owned();
             }
 
-            serverCtx.ckcContainer.ckcData.ckcAssetInfo.keyDuration.rentalDuration = assetInfo.rentalDuration;
-            serverCtx.ckcContainer.ckcData.ckcAssetInfo.keyDuration.playbackDuration = assetInfo.playbackDuration;
+            serverCtx
+                .ckcContainer
+                .ckcData
+                .ckcAssetInfo
+                .keyDuration
+                .rentalDuration = assetInfo.rentalDuration;
+            serverCtx
+                .ckcContainer
+                .ckcData
+                .ckcAssetInfo
+                .keyDuration
+                .playbackDuration = assetInfo.playbackDuration;
             if (assetInfo.rentalDuration != 0) || (assetInfo.playbackDuration != 0) {
-                serverCtx.ckcContainer.ckcData.ckcAssetInfo.keyDuration.keyType = FPSKeyDurationType::persistenceAndDuration as u32;
+                serverCtx
+                    .ckcContainer
+                    .ckcData
+                    .ckcAssetInfo
+                    .keyDuration
+                    .keyType = FPSKeyDurationType::persistenceAndDuration as u32;
             } else {
-                serverCtx.ckcContainer.ckcData.ckcAssetInfo.keyDuration.keyType = FPSKeyDurationType::persistence as u32;
+                serverCtx
+                    .ckcContainer
+                    .ckcData
+                    .ckcAssetInfo
+                    .keyDuration
+                    .keyType = FPSKeyDurationType::persistence as u32;
             }
         }
 
         // Is lease requested?
         if assetInfo.leaseDuration != NO_LEASE_DURATION {
-            serverCtx.ckcContainer.ckcData.ckcAssetInfo.keyDuration.leaseDuration = assetInfo.leaseDuration;
-            serverCtx.ckcContainer.ckcData.ckcAssetInfo.keyDuration.rentalDuration = assetInfo.rentalDuration;
-            serverCtx.ckcContainer.ckcData.ckcAssetInfo.keyDuration.playbackDuration = assetInfo.playbackDuration;
-            serverCtx.ckcContainer.ckcData.ckcAssetInfo.keyDuration.keyType = FPSKeyDurationType::lease as u32;
+            serverCtx
+                .ckcContainer
+                .ckcData
+                .ckcAssetInfo
+                .keyDuration
+                .leaseDuration = assetInfo.leaseDuration;
+            serverCtx
+                .ckcContainer
+                .ckcData
+                .ckcAssetInfo
+                .keyDuration
+                .rentalDuration = assetInfo.rentalDuration;
+            serverCtx
+                .ckcContainer
+                .ckcData
+                .ckcAssetInfo
+                .keyDuration
+                .playbackDuration = assetInfo.playbackDuration;
+            serverCtx
+                .ckcContainer
+                .ckcData
+                .ckcAssetInfo
+                .keyDuration
+                .keyType = FPSKeyDurationType::lease as u32;
         }
 
         // Required HDCP type for the content
@@ -130,8 +175,7 @@ impl Base {
         // Report if the request came from a virtual machine
         if serverCtx.spcContainer.spcData.vmDeviceInfo.is_some() {
             result.vmDeviceInfo = serverCtx.spcContainer.spcData.vmDeviceInfo.clone();
-        }
-        else {
+        } else {
             result.vmDeviceInfo = None;
         }
 
@@ -141,9 +185,22 @@ impl Base {
 
         if operation.isCheckIn {
             // Report title ID if present
-            if (serverCtx.spcContainer.spcData.offlineSyncData.syncFlags & KD_SYNC_SPC_FLAG_TITLEID_VALID) != 0 {
-                serverCtx.ckcContainer.ckcData.ckcAssetInfo.titleId = Some(serverCtx.spcContainer.spcData.offlineSyncData.syncTitleId.clone());
-                result.offlineSyncData.syncTitleId = serverCtx.spcContainer.spcData.offlineSyncData.syncTitleId[..FPS_MAX_TITLE_ID_LENGTH].to_vec();
+            if (serverCtx.spcContainer.spcData.offlineSyncData.syncFlags
+                & KD_SYNC_SPC_FLAG_TITLEID_VALID)
+                != 0
+            {
+                serverCtx.ckcContainer.ckcData.ckcAssetInfo.titleId = Some(
+                    serverCtx
+                        .spcContainer
+                        .spcData
+                        .offlineSyncData
+                        .syncTitleId
+                        .clone(),
+                );
+                result.offlineSyncData.syncTitleId =
+                    serverCtx.spcContainer.spcData.offlineSyncData.syncTitleId
+                        [..FPS_MAX_TITLE_ID_LENGTH]
+                        .to_vec();
             }
         }
 

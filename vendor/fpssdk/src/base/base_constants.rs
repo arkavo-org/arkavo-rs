@@ -175,10 +175,18 @@ pub const FPS_KEY_DURATION_RESERVED_FIELD_VALUE: u32 = 0x86d34a3a;
 pub const MIN_KDL_VERSION: u32 = 31;
 
 // Video Session Key
-pub const V3_PROTOCOL_VERSION_UUID: &[u8] = &[0x66, 0x44, 0xff, 0x2b, 0xa8, 0x7c, 0x99, 0xb6, 0xff, 0x96, 0x55, 0x27, 0x0c, 0xd0, 0x68, 0xa6];
-pub const V3_PROTOCOL_ENCRYPTION_KEY_SEED: &[u8] = &[0x70, 0xd1, 0xe6, 0xc3, 0x4f, 0x07, 0xe8, 0x49, 0xb3, 0xa6, 0x24, 0x34, 0x0f, 0x4f, 0x17, 0x6d];
-pub const V3_PROTOCOL_INTEGRITY_KEY_SEED: &[u8] = &[0x96, 0xd3, 0x43, 0x5f, 0x6e, 0xf0, 0x8d, 0x7d, 0x12, 0x1f, 0xa8, 0x6b, 0x25, 0x3e, 0x4a, 0xc9];
-pub const V3_PROTOCOL_ENCRYPTION_IV_SEED: &[u8] = &[0xc1, 0x1b, 0x3e, 0xd1, 0xa3, 0x80, 0x3f, 0x4e, 0x13, 0x22, 0xa0, 0x88, 0x03, 0x14, 0x5a, 0xc6];
+pub const V3_PROTOCOL_VERSION_UUID: &[u8] = &[
+    0x66, 0x44, 0xff, 0x2b, 0xa8, 0x7c, 0x99, 0xb6, 0xff, 0x96, 0x55, 0x27, 0x0c, 0xd0, 0x68, 0xa6,
+];
+pub const V3_PROTOCOL_ENCRYPTION_KEY_SEED: &[u8] = &[
+    0x70, 0xd1, 0xe6, 0xc3, 0x4f, 0x07, 0xe8, 0x49, 0xb3, 0xa6, 0x24, 0x34, 0x0f, 0x4f, 0x17, 0x6d,
+];
+pub const V3_PROTOCOL_INTEGRITY_KEY_SEED: &[u8] = &[
+    0x96, 0xd3, 0x43, 0x5f, 0x6e, 0xf0, 0x8d, 0x7d, 0x12, 0x1f, 0xa8, 0x6b, 0x25, 0x3e, 0x4a, 0xc9,
+];
+pub const V3_PROTOCOL_ENCRYPTION_IV_SEED: &[u8] = &[
+    0xc1, 0x1b, 0x3e, 0xd1, 0xa3, 0x80, 0x3f, 0x4e, 0x13, 0x22, 0xa0, 0x88, 0x03, 0x14, 0x5a, 0xc6,
+];
 
 /// Version number of the SPC
 ///
@@ -308,18 +316,18 @@ pub enum FPSDeviceClass {
     partnerUnknown = 255,
 }
 
-impl From::<u32> for FPSDeviceClass{
+impl From<u32> for FPSDeviceClass {
     fn from(value: u32) -> Self {
         match value {
             1 => FPSDeviceClass::appleLivingRoom,
-            2 => FPSDeviceClass::appleMobile, 
-            3 => FPSDeviceClass::appleDesktop, 
-            4 => FPSDeviceClass::appleSpacial, 
-            5 => FPSDeviceClass::appleWearable, 
+            2 => FPSDeviceClass::appleMobile,
+            3 => FPSDeviceClass::appleDesktop,
+            4 => FPSDeviceClass::appleSpacial,
+            5 => FPSDeviceClass::appleWearable,
             127 => FPSDeviceClass::appleUnknown,
             128 => FPSDeviceClass::partnerLivingRoom,
             255 => FPSDeviceClass::partnerUnknown,
-            _ => FPSDeviceClass::unknown
+            _ => FPSDeviceClass::unknown,
         }
     }
 }
@@ -335,7 +343,7 @@ pub enum CKCVersion {
     two = 2,
 }
 
-pub enum KeyPayloadSessionKeyToUse{
+pub enum KeyPayloadSessionKeyToUse {
     generic = 1,
     video = 2,
 }
@@ -353,10 +361,10 @@ pub enum EncryptionScheme {
     cbc_ts,
     cbc1,
     cenc_v1,
-    cenc_v2
+    cenc_v2,
 }
 
-impl From::<&str> for EncryptionScheme {
+impl From<&str> for EncryptionScheme {
     fn from(value: &str) -> Self {
         match value {
             "cbcs" => EncryptionScheme::cbcs,
@@ -364,7 +372,7 @@ impl From::<&str> for EncryptionScheme {
             "cbc1" => EncryptionScheme::cbc1,
             "cenc-v1" => EncryptionScheme::cenc_v1,
             "cenc-v2" => EncryptionScheme::cenc_v2,
-            _ => EncryptionScheme::unknown
+            _ => EncryptionScheme::unknown,
         }
     }
 }
@@ -373,5 +381,5 @@ impl From::<&str> for EncryptionScheme {
 #[serde(untagged)]
 pub enum FPSCertificateStructs {
     certBundle(CertificateBundle),
-    legacyCert(LegacyCertificate)
+    legacyCert(LegacyCertificate),
 }

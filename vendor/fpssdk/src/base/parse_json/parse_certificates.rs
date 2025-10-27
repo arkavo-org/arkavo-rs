@@ -17,13 +17,18 @@ use openssl::sha::{sha1, sha256};
 use openssl::x509::X509;
 use x509_parser::prelude::*;
 
-use crate::base::base_constants::{FPSCertificateStructs, FPS_CERT_PATH, FPS_SDK_MAJOR_VERSION, FPS_SDK_MINOR_VERSION, FPS_SDK_VERSION_CERTIFICATE_OID};
-use crate::base::structures::base_fps_structures::{Base, CertificateList, CertificateBundle, LegacyCertificate};
+use crate::base::base_constants::{
+    FPSCertificateStructs, FPS_CERT_PATH, FPS_SDK_MAJOR_VERSION, FPS_SDK_MINOR_VERSION,
+    FPS_SDK_VERSION_CERTIFICATE_OID,
+};
+use crate::base::structures::base_fps_structures::{
+    Base, CertificateBundle, CertificateList, LegacyCertificate,
+};
 use crate::base::structures::base_server_structures::{CertData, FPSServerSPCContainer};
 use crate::base::Utils::FPSServerUtils::readBigEndianU16;
-use crate::returnErrorStatus;
 use crate::fpsLogError;
-use crate::validate::{Result, FPSStatus};
+use crate::returnErrorStatus;
+use crate::validate::{FPSStatus, Result};
 use crate::Extension;
 
 pub static CERT_MAP: OnceLock<HashMap<String, CertData>> = OnceLock::new();
@@ -33,12 +38,21 @@ pub static CERT_CONVERT_MAP: OnceLock<HashMap<String, String>> = OnceLock::new()
 impl Base {
     pub fn readCertificates() -> Result<()> {
         let fileLocation = std::env::var(FPS_CERT_PATH).unwrap_or(Extension::getDefaultCertPath());
-        let parentPath = Path::new(&fileLocation).parent().unwrap_or(Path::new("")).to_str().unwrap_or_default();
+        let parentPath = Path::new(&fileLocation)
+            .parent()
+            .unwrap_or(Path::new(""))
+            .to_str()
+            .unwrap_or_default();
 
         let fileReader = match std::fs::File::open(&fileLocation) {
             Ok(r) => r,
             Err(e) => {
-                fpsLogError!(FPSStatus::paramErr, "Failed to read certificate file ({}): {}", fileLocation, e);
+                fpsLogError!(
+                    FPSStatus::paramErr,
+                    "Failed to read certificate file ({}): {}",
+                    fileLocation,
+                    e
+                );
                 returnErrorStatus!(FPSStatus::paramErr);
             }
         };
@@ -46,7 +60,12 @@ impl Base {
         let certList: CertificateList = match serde_jsonrc::from_reader(fileReader) {
             Ok(r) => r,
             Err(e) => {
-                fpsLogError!(FPSStatus::paramErr, "Failed to parse certificate file ({}): {}", fileLocation, e);
+                fpsLogError!(
+                    FPSStatus::paramErr,
+                    "Failed to parse certificate file ({}): {}",
+                    fileLocation,
+                    e
+                );
                 returnErrorStatus!(FPSStatus::paramErr);
             }
         };
@@ -57,15 +76,20 @@ impl Base {
             match certificate {
                 FPSCertificateStructs::certBundle(bundle) => {
                     generateCertBundleHashes(parentPath, &mut certMap, &mut conversionMap, bundle)?;
-                },
+                }
                 FPSCertificateStructs::legacyCert(legacyCert) => {
-                    generateLegacyCertHash(parentPath, &mut certMap, &mut conversionMap, legacyCert)?;
+                    generateLegacyCertHash(
+                        parentPath,
+                        &mut certMap,
+                        &mut conversionMap,
+                        legacyCert,
+                    )?;
                 }
             };
         }
 
-        CERT_MAP.get_or_init(|| {certMap});
-        CERT_CONVERT_MAP.get_or_init(|| {conversionMap});
+        CERT_MAP.get_or_init(|| certMap);
+        CERT_CONVERT_MAP.get_or_init(|| conversionMap);
         Ok(())
     }
 
@@ -73,7 +97,10 @@ impl Base {
         let cert_map = match CERT_CONVERT_MAP.get() {
             Some(s) => s,
             None => {
-                fpsLogError!(FPSStatus::invalidCertificateErr, "Failed to get SHA256 conversion hash map");
+                fpsLogError!(
+                    FPSStatus::invalidCertificateErr,
+                    "Failed to get SHA256 conversion hash map"
+                );
                 returnErrorStatus!(FPSStatus::invalidCertificateErr);
             }
         };
@@ -84,16 +111,22 @@ impl Base {
             spcContainer.certificateHash = match hex::decode(hash) {
                 Ok(r) => r,
                 Err(e) => {
-                    fpsLogError!(FPSStatus::invalidCertificateErr, "Failed to decode certificate hash: {}", e);
+                    fpsLogError!(
+                        FPSStatus::invalidCertificateErr,
+                        "Failed to decode certificate hash: {}",
+                        e
+                    );
                     returnErrorStatus!(FPSStatus::invalidCertificateErr);
                 }
             };
-        }
-        else {
-            fpsLogError!(FPSStatus::invalidCertificateErr, "No matching cert hash found");
+        } else {
+            fpsLogError!(
+                FPSStatus::invalidCertificateErr,
+                "No matching cert hash found"
+            );
             returnErrorStatus!(FPSStatus::invalidCertificateErr);
         }
-        
+
         Ok(())
     }
 }
@@ -101,10 +134,10 @@ impl Base {
 fn getFullPath(parentPath: &str, fileName: &String) -> String {
     if fileName.starts_with('/') {
         // fileName is an absolute path. Use it directly.
-        return fileName.clone()
+        return fileName.clone();
     } else {
         // fileName is a relative path. Prepend parentPath.
-        return parentPath.to_string() + "/" + fileName
+        return parentPath.to_string() + "/" + fileName;
     }
 }
 
@@ -112,25 +145,31 @@ fn generateCertBundleHashes(
     parentPath: &str,
     certMap: &mut HashMap<String, CertData>,
     certConversion: &mut HashMap<String, String>,
-    bundle: &CertificateBundle
+    bundle: &CertificateBundle,
 ) -> Result<()> {
-
     //Certificate parsing
     let mut bundleFile = match std::fs::File::open(getFullPath(parentPath, &bundle.certBundle)) {
         Ok(r) => r,
         Err(e) => {
-            fpsLogError!(FPSStatus::paramErr, "Error opening certificate bundle file: {} {}", getFullPath(parentPath, &bundle.certBundle), e);
+            fpsLogError!(
+                FPSStatus::paramErr,
+                "Error opening certificate bundle file: {} {}",
+                getFullPath(parentPath, &bundle.certBundle),
+                e
+            );
             returnErrorStatus!(FPSStatus::paramErr);
         }
     };
 
-
     let mut bundleBytes: Vec<u8> = vec![];
     if let Err(e) = bundleFile.read_to_end(&mut bundleBytes) {
-        fpsLogError!(FPSStatus::paramErr, "Error reading certificate bundle from file: {}", e);
+        fpsLogError!(
+            FPSStatus::paramErr,
+            "Error reading certificate bundle from file: {}",
+            e
+        );
         returnErrorStatus!(FPSStatus::paramErr);
     }
-
 
     let (cert1024, cert2048) = parseCertificateBundle(&bundleBytes)?;
 
@@ -142,14 +181,22 @@ fn generateCertBundleHashes(
     let mut pkey1024File = match std::fs::File::open(getFullPath(parentPath, &bundle.pkey1024)) {
         Ok(r) => r,
         Err(e) => {
-            fpsLogError!(FPSStatus::paramErr, "Error opening 1024 bit private key file: {}", e);
+            fpsLogError!(
+                FPSStatus::paramErr,
+                "Error opening 1024 bit private key file: {}",
+                e
+            );
             returnErrorStatus!(FPSStatus::paramErr);
         }
     };
 
     let mut pkey1024Bytes: Vec<u8> = vec![];
     if let Err(e) = pkey1024File.read_to_end(&mut pkey1024Bytes) {
-        fpsLogError!(FPSStatus::paramErr, "Error reading 1024 bit private key file: {}", e);
+        fpsLogError!(
+            FPSStatus::paramErr,
+            "Error reading 1024 bit private key file: {}",
+            e
+        );
         returnErrorStatus!(FPSStatus::paramErr);
     }
     let pkey1024 = parsePrivateKey(&pkey1024Bytes)?;
@@ -159,14 +206,22 @@ fn generateCertBundleHashes(
     let mut pkey2048File = match std::fs::File::open(getFullPath(parentPath, &bundle.pkey2048)) {
         Ok(r) => r,
         Err(e) => {
-            fpsLogError!(FPSStatus::paramErr, "Error opening 2048 bit private key file: {}", e);
+            fpsLogError!(
+                FPSStatus::paramErr,
+                "Error opening 2048 bit private key file: {}",
+                e
+            );
             returnErrorStatus!(FPSStatus::paramErr);
         }
     };
 
     let mut pkey2048Bytes: Vec<u8> = vec![];
     if let Err(e) = pkey2048File.read_to_end(&mut pkey2048Bytes) {
-        fpsLogError!(FPSStatus::paramErr, "Error reading 2048 bit private key file: {}", e);
+        fpsLogError!(
+            FPSStatus::paramErr,
+            "Error reading 2048 bit private key file: {}",
+            e
+        );
         returnErrorStatus!(FPSStatus::paramErr);
     }
     let pkey2048 = parsePrivateKey(&pkey2048Bytes)?;
@@ -174,17 +229,26 @@ fn generateCertBundleHashes(
     validatePrivateKey(&cert2048, &pkey2048)?;
 
     //Provisioning data parsing
-    let mut provisioningDataFile = match std::fs::File::open(getFullPath(parentPath, &bundle.provisioningData)) {
-        Ok(r) => r,
-        Err(e) => {
-            fpsLogError!(FPSStatus::paramErr, "Error opening 2048 bit private key file: {}", e);
-            returnErrorStatus!(FPSStatus::paramErr);
-        }
-    };
+    let mut provisioningDataFile =
+        match std::fs::File::open(getFullPath(parentPath, &bundle.provisioningData)) {
+            Ok(r) => r,
+            Err(e) => {
+                fpsLogError!(
+                    FPSStatus::paramErr,
+                    "Error opening 2048 bit private key file: {}",
+                    e
+                );
+                returnErrorStatus!(FPSStatus::paramErr);
+            }
+        };
 
     let mut provisioningData: Vec<u8> = vec![];
     if let Err(e) = provisioningDataFile.read_to_end(&mut provisioningData) {
-        fpsLogError!(FPSStatus::paramErr, "Error reading provisioning data file: {}", e);
+        fpsLogError!(
+            FPSStatus::paramErr,
+            "Error reading provisioning data file: {}",
+            e
+        );
         returnErrorStatus!(FPSStatus::paramErr);
     }
 
@@ -192,7 +256,11 @@ fn generateCertBundleHashes(
     let certBytes = match cert1024.to_der() {
         Ok(r) => r,
         Err(e) => {
-            fpsLogError!(FPSStatus::invalidCertificateErr, "Error converting certificate to der format: {}", e);
+            fpsLogError!(
+                FPSStatus::invalidCertificateErr,
+                "Error converting certificate to der format: {}",
+                e
+            );
             returnErrorStatus!(FPSStatus::invalidCertificateErr);
         }
     };
@@ -200,14 +268,25 @@ fn generateCertBundleHashes(
     let sha2 = sha256(&certBytes);
     let shaString = hex::encode(sha);
     let sha256String = hex::encode(sha2);
-    certMap.insert(shaString.clone(), CertData {certificate: cert1024.clone(), privateKey: pkey1024.clone(), provisioningData: provisioningData.clone()});
+    certMap.insert(
+        shaString.clone(),
+        CertData {
+            certificate: cert1024.clone(),
+            privateKey: pkey1024.clone(),
+            provisioningData: provisioningData.clone(),
+        },
+    );
     certConversion.insert(sha256String, shaString);
 
     //Hash of 2048 certificate only
     let certBytes = match cert2048.to_der() {
         Ok(r) => r,
         Err(e) => {
-            fpsLogError!(FPSStatus::invalidCertificateErr, "Error converting certificate to der format: {}", e);
+            fpsLogError!(
+                FPSStatus::invalidCertificateErr,
+                "Error converting certificate to der format: {}",
+                e
+            );
             returnErrorStatus!(FPSStatus::invalidCertificateErr);
         }
     };
@@ -216,7 +295,14 @@ fn generateCertBundleHashes(
     let sha2 = sha256(&certBytes);
     let shaString = hex::encode(sha);
     let sha256String = hex::encode(sha2);
-    certMap.insert(shaString.clone(), CertData {certificate: cert2048, privateKey: pkey2048, provisioningData: provisioningData.clone()});
+    certMap.insert(
+        shaString.clone(),
+        CertData {
+            certificate: cert2048,
+            privateKey: pkey2048,
+            provisioningData: provisioningData.clone(),
+        },
+    );
     certConversion.insert(sha256String, shaString);
 
     //Hash of entire bundle (1024 certificate)
@@ -224,53 +310,68 @@ fn generateCertBundleHashes(
     let bundleSha256 = sha256(&bundleBytes);
     let bundleShaString = hex::encode(bundleSha);
     let bundleSha256String = hex::encode(bundleSha256);
-    certMap.insert(bundleShaString.clone(), CertData {certificate: cert1024, privateKey: pkey1024, provisioningData});
+    certMap.insert(
+        bundleShaString.clone(),
+        CertData {
+            certificate: cert1024,
+            privateKey: pkey1024,
+            provisioningData,
+        },
+    );
     certConversion.insert(bundleSha256String, bundleShaString);
-
 
     Ok(())
 }
-
 
 fn generateLegacyCertHash(
     parentPath: &str,
     certMap: &mut HashMap<String, CertData>,
     certConversion: &mut HashMap<String, String>,
-    legacyCert: &LegacyCertificate
+    legacyCert: &LegacyCertificate,
 ) -> Result<()> {
-
     //Certificate parsing
     let mut certFile = match std::fs::File::open(getFullPath(parentPath, &legacyCert.legacyCert)) {
         Ok(r) => r,
         Err(e) => {
-            fpsLogError!(FPSStatus::paramErr, "Error opening legacy certificate file: {}", e);
+            fpsLogError!(
+                FPSStatus::paramErr,
+                "Error opening legacy certificate file: {}",
+                e
+            );
             returnErrorStatus!(FPSStatus::paramErr);
         }
     };
 
-
     let mut certBytes: Vec<u8> = vec![];
     if let Err(e) = certFile.read_to_end(&mut certBytes) {
-        fpsLogError!(FPSStatus::paramErr, "Error reading legacy certificate from file: {}", e);
+        fpsLogError!(
+            FPSStatus::paramErr,
+            "Error reading legacy certificate from file: {}",
+            e
+        );
         returnErrorStatus!(FPSStatus::paramErr);
     }
 
     let certificate = if let Ok(cert) = X509::from_der(&certBytes) {
         cert
-    }
-    else if let Ok(cert) = X509::from_pem(&certBytes) {
+    } else if let Ok(cert) = X509::from_pem(&certBytes) {
         cert
-    }
-    else {
-        fpsLogError!(FPSStatus::invalidCertificateErr, "Failed to parse legacy certificate");
+    } else {
+        fpsLogError!(
+            FPSStatus::invalidCertificateErr,
+            "Failed to parse legacy certificate"
+        );
         returnErrorStatus!(FPSStatus::invalidCertificateErr);
     };
-
 
     let tempDerCert = match certificate.to_der() {
         Ok(r) => r,
         Err(e) => {
-            fpsLogError!(FPSStatus::invalidCertificateErr, "Failed to re-encode certificate to der: {}", e);
+            fpsLogError!(
+                FPSStatus::invalidCertificateErr,
+                "Failed to re-encode certificate to der: {}",
+                e
+            );
             returnErrorStatus!(FPSStatus::invalidCertificateErr);
         }
     };
@@ -283,14 +384,22 @@ fn generateLegacyCertHash(
     let mut pkeyFile = match std::fs::File::open(getFullPath(parentPath, &legacyCert.pkey1024)) {
         Ok(r) => r,
         Err(e) => {
-            fpsLogError!(FPSStatus::paramErr, "Error opening 1024 bit private key file: {}", e);
+            fpsLogError!(
+                FPSStatus::paramErr,
+                "Error opening 1024 bit private key file: {}",
+                e
+            );
             returnErrorStatus!(FPSStatus::paramErr);
         }
     };
 
     let mut pkeyBytes: Vec<u8> = vec![];
     if let Err(e) = pkeyFile.read_to_end(&mut pkeyBytes) {
-        fpsLogError!(FPSStatus::paramErr, "Error reading 1024 bit private key file: {}", e);
+        fpsLogError!(
+            FPSStatus::paramErr,
+            "Error reading 1024 bit private key file: {}",
+            e
+        );
         returnErrorStatus!(FPSStatus::paramErr);
     }
     let privateKey = parsePrivateKey(&pkeyBytes)?;
@@ -298,21 +407,30 @@ fn generateLegacyCertHash(
     //Provisioning data (ASk) parsing
     let provisioningData = if let Ok(data) = hex::decode(&legacyCert.ask) {
         data
-    }
-    else if let Ok(data) = general_purpose::STANDARD.decode(&legacyCert.ask) {
+    } else if let Ok(data) = general_purpose::STANDARD.decode(&legacyCert.ask) {
         data
-    }
-    else {
-            fpsLogError!(FPSStatus::paramErr, "Error decoding legacy cert ASk");
-            returnErrorStatus!(FPSStatus::paramErr);
+    } else {
+        fpsLogError!(FPSStatus::paramErr, "Error decoding legacy cert ASk");
+        returnErrorStatus!(FPSStatus::paramErr);
     };
 
     if provisioningData.len() != 16 {
-        fpsLogError!(FPSStatus::paramErr, "ASk is invalid length: {}", provisioningData.len());
+        fpsLogError!(
+            FPSStatus::paramErr,
+            "ASk is invalid length: {}",
+            provisioningData.len()
+        );
         returnErrorStatus!(FPSStatus::paramErr);
     }
 
-    certMap.insert(shaString.clone(), CertData {certificate, privateKey, provisioningData});
+    certMap.insert(
+        shaString.clone(),
+        CertData {
+            certificate,
+            privateKey,
+            provisioningData,
+        },
+    );
     certConversion.insert(sha256String, shaString);
     Ok(())
 }
@@ -323,7 +441,11 @@ fn parseCertificateBundle(bundleBytes: &Vec<u8>) -> Result<(X509, X509)> {
     let cert1024 = match X509::from_der(&bundleBytes) {
         Ok(r) => r,
         Err(e) => {
-            fpsLogError!(FPSStatus::invalidCertificateErr, "Failed to parse 1024 cert from certificate bundle: {}", e);
+            fpsLogError!(
+                FPSStatus::invalidCertificateErr,
+                "Failed to parse 1024 cert from certificate bundle: {}",
+                e
+            );
             returnErrorStatus!(FPSStatus::invalidCertificateErr);
         }
     };
@@ -332,7 +454,11 @@ fn parseCertificateBundle(bundleBytes: &Vec<u8>) -> Result<(X509, X509)> {
     bundleOffset += match cert1024.to_der() {
         Ok(r) => r.len(),
         Err(e) => {
-            fpsLogError!(FPSStatus::invalidCertificateErr, "Failed to get 1024 certificate length: {}", e);
+            fpsLogError!(
+                FPSStatus::invalidCertificateErr,
+                "Failed to get 1024 certificate length: {}",
+                e
+            );
             returnErrorStatus!(FPSStatus::invalidCertificateErr);
         }
     };
@@ -340,7 +466,11 @@ fn parseCertificateBundle(bundleBytes: &Vec<u8>) -> Result<(X509, X509)> {
     let cert2048 = match X509::from_der(&bundleBytes[bundleOffset..]) {
         Ok(r) => r,
         Err(e) => {
-            fpsLogError!(FPSStatus::invalidCertificateErr, "Failed to parse 2048 certiciate: {}", e);
+            fpsLogError!(
+                FPSStatus::invalidCertificateErr,
+                "Failed to parse 2048 certiciate: {}",
+                e
+            );
             returnErrorStatus!(FPSStatus::invalidCertificateErr);
         }
     };
@@ -348,17 +478,16 @@ fn parseCertificateBundle(bundleBytes: &Vec<u8>) -> Result<(X509, X509)> {
     Ok((cert1024, cert2048))
 }
 
-
-
 fn parsePrivateKey(keyBytes: &[u8]) -> Result<Rsa<Private>> {
     let privateKey = if let Ok(key) = Rsa::private_key_from_der(keyBytes) {
         key
-    }
-    else if let Ok(key) = Rsa::private_key_from_pem(keyBytes) {
+    } else if let Ok(key) = Rsa::private_key_from_pem(keyBytes) {
         key
-    }
-    else {
-        fpsLogError!(FPSStatus::invalidCertificateErr, "Failed to parse private key");
+    } else {
+        fpsLogError!(
+            FPSStatus::invalidCertificateErr,
+            "Failed to parse private key"
+        );
         returnErrorStatus!(FPSStatus::invalidCertificateErr);
     };
 
@@ -369,7 +498,11 @@ fn validatePrivateKey(certificate: &X509, privateKey: &Rsa<Private>) -> Result<(
     let certPublicKey = match certificate.public_key() {
         Ok(r) => r,
         Err(e) => {
-            fpsLogError!(FPSStatus::invalidCertificateErr, "Failed to get certificate public key: {}", e);
+            fpsLogError!(
+                FPSStatus::invalidCertificateErr,
+                "Failed to get certificate public key: {}",
+                e
+            );
             returnErrorStatus!(FPSStatus::invalidCertificateErr);
         }
     };
@@ -377,16 +510,22 @@ fn validatePrivateKey(certificate: &X509, privateKey: &Rsa<Private>) -> Result<(
     let rsaKey = match certPublicKey.rsa() {
         Ok(r) => r,
         Err(e) => {
-            fpsLogError!(FPSStatus::invalidCertificateErr, "Failed to get rsa key: {}", e);
+            fpsLogError!(
+                FPSStatus::invalidCertificateErr,
+                "Failed to get rsa key: {}",
+                e
+            );
             returnErrorStatus!(FPSStatus::invalidCertificateErr);
         }
     };
 
     if rsaKey.n() == privateKey.n() {
         Ok(())
-    }
-    else {
-        fpsLogError!(FPSStatus::invalidCertificateErr, "private key and public key do not match");
+    } else {
+        fpsLogError!(
+            FPSStatus::invalidCertificateErr,
+            "private key and public key do not match"
+        );
         returnErrorStatus!(FPSStatus::invalidCertificateErr);
     }
 }
@@ -396,7 +535,11 @@ fn checkCertificateVersion(certificate: &X509) -> Result<()> {
     let (_, cert_extensions) = match X509Certificate::from_der(der.as_slice()) {
         Ok(r) => r,
         Err(e) => {
-            fpsLogError!(FPSStatus::invalidCertificateErr, "Unable to read certificate: {}", e);
+            fpsLogError!(
+                FPSStatus::invalidCertificateErr,
+                "Unable to read certificate: {}",
+                e
+            );
             returnErrorStatus!(FPSStatus::invalidCertificateErr);
         }
     };
@@ -405,7 +548,10 @@ fn checkCertificateVersion(certificate: &X509) -> Result<()> {
     for extension in cert_extensions.into_iter() {
         if extension.oid.to_id_string() == FPS_SDK_VERSION_CERTIFICATE_OID {
             if extension.value.len() != 4 || extension.value[0] != 2 || extension.value[1] != 2 {
-                fpsLogError!(FPSStatus::invalidCertificateErr, "Invalid certificate version");
+                fpsLogError!(
+                    FPSStatus::invalidCertificateErr,
+                    "Invalid certificate version"
+                );
                 returnErrorStatus!(FPSStatus::invalidCertificateErr);
             }
 
@@ -414,13 +560,23 @@ fn checkCertificateVersion(certificate: &X509) -> Result<()> {
             let version_minor: u32 = (sdk_version & 0x00FF) as u32;
 
             //Warn when the certificate version is older than the current sdk version
-            if version_major < FPS_SDK_MAJOR_VERSION || (version_major == FPS_SDK_MAJOR_VERSION && version_minor < FPS_SDK_MINOR_VERSION) {
-               fpsLogError!(FPSStatus::noErr, "Certificate is older version than the current SDK version");
+            if version_major < FPS_SDK_MAJOR_VERSION
+                || (version_major == FPS_SDK_MAJOR_VERSION && version_minor < FPS_SDK_MINOR_VERSION)
+            {
+                fpsLogError!(
+                    FPSStatus::noErr,
+                    "Certificate is older version than the current SDK version"
+                );
             }
 
             //Error when the certificate version is newer than the current sdk version
-            if version_major > FPS_SDK_MAJOR_VERSION || (version_major == FPS_SDK_MAJOR_VERSION &&  version_minor > FPS_SDK_MINOR_VERSION) {
-                fpsLogError!(FPSStatus::invalidCertificateErr, "Certificate is newer than the current SDK version");
+            if version_major > FPS_SDK_MAJOR_VERSION
+                || (version_major == FPS_SDK_MAJOR_VERSION && version_minor > FPS_SDK_MINOR_VERSION)
+            {
+                fpsLogError!(
+                    FPSStatus::invalidCertificateErr,
+                    "Certificate is newer than the current SDK version"
+                );
                 returnErrorStatus!(FPSStatus::invalidCertificateErr);
             }
 
@@ -432,5 +588,3 @@ fn checkCertificateVersion(certificate: &X509) -> Result<()> {
     log::warn!("No certificate version found");
     Ok(())
 }
-
-

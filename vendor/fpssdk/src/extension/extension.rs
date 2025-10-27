@@ -6,9 +6,11 @@ use crate::base::base_constants;
 use crate::base::base_constants::{FPSKeyDurationType, FPSTLLVTagValue};
 use crate::base::parse_json::parse_certificates::CERT_MAP;
 use crate::base::structures::base_fps_structures::{
-    AssetInfo, FPSOperation, FPSOperations, FPSOperationType, FPSResult, FPSResults
+    AssetInfo, FPSOperation, FPSOperationType, FPSOperations, FPSResult, FPSResults,
 };
-use crate::base::structures::base_server_structures::{FPSServerCtx, FPSServerSPCContainer, FPSServerTLLV};
+use crate::base::structures::base_server_structures::{
+    FPSServerCtx, FPSServerSPCContainer, FPSServerTLLV,
+};
 use crate::extension::extension_constants::{self, ContentType, DEFAULT_FPS_CERT_PATH};
 use crate::extension::structures::extension_structures::SDKExtension;
 use crate::extension_structures::FPSOperationExtension;
@@ -96,7 +98,10 @@ pub fn parseOperationsCustom(json: &Value, root: &mut Map<String, Value>) -> Res
 ///
 /// Use this function to handle any values outside of what the Base code parses
 /// for json input `offline-hls`.
-pub fn parseOfflineHLSCustom(_ckcObj: &serde_jsonrc::Map<String, Value>, _assetInfo: &mut AssetInfo) -> Result<()> {
+pub fn parseOfflineHLSCustom(
+    _ckcObj: &serde_jsonrc::Map<String, Value>,
+    _assetInfo: &mut AssetInfo,
+) -> Result<()> {
     Ok(())
 }
 
@@ -162,7 +167,10 @@ pub fn processOperationsCustom(
 /// Decrypts `spcContainer.aesWrappedKey` into `aesKey`.
 ///
 /// Uses partner-specific private key for the RSA decyrption.
-pub fn decryptKeyRSACustom(spcContainer: &mut FPSServerSPCContainer, aesKey: &mut Vec<u8>) -> Result<()> {
+pub fn decryptKeyRSACustom(
+    spcContainer: &mut FPSServerSPCContainer,
+    aesKey: &mut Vec<u8>,
+) -> Result<()> {
     let aesWrappedKeySize = spcContainer.aesWrappedKeySize;
     let aesWrappedKey: &Vec<u8> = &spcContainer.aesWrappedKey;
 
@@ -173,7 +181,10 @@ pub fn decryptKeyRSACustom(spcContainer: &mut FPSServerSPCContainer, aesKey: &mu
     *aesKey = vec![0_u8; rsa.size() as usize];
 
     if aesWrappedKeySize == base_constants::FPS_V1_WRAPPED_KEY_SZ {
-        if rsa.private_decrypt(aesWrappedKey, aesKey, openssl::rsa::Padding::PKCS1_OAEP).is_err() {
+        if rsa
+            .private_decrypt(aesWrappedKey, aesKey, openssl::rsa::Padding::PKCS1_OAEP)
+            .is_err()
+        {
             // If decryption failed, it is likely the data was encrypted for another key.
             fpsLogError!(FPSStatus::invalidCertificateErr, "RSA Decryption Failed");
             returnErrorStatus!(FPSStatus::invalidCertificateErr);
@@ -183,7 +194,9 @@ pub fn decryptKeyRSACustom(spcContainer: &mut FPSServerSPCContainer, aesKey: &mu
 
         let mut decrypter = openssl::encrypt::Decrypter::new(&pkey).unwrap();
 
-        decrypter.set_rsa_padding(openssl::rsa::Padding::PKCS1_OAEP).unwrap();
+        decrypter
+            .set_rsa_padding(openssl::rsa::Padding::PKCS1_OAEP)
+            .unwrap();
         decrypter
             .set_rsa_mgf1_md(openssl::hash::MessageDigest::sha256())
             .unwrap();
@@ -230,10 +243,17 @@ pub fn checkSupportedFeaturesCustom(_serverCtx: &mut FPSServerCtx) -> Result<()>
 
 /// Performs extension-specific checks of the request, including checking
 /// that the request meets business rules.
-pub fn validateRequestCustom(fpsOperation: &mut FPSOperation, serverCtx: &mut FPSServerCtx) -> Result<()> {
+pub fn validateRequestCustom(
+    fpsOperation: &mut FPSOperation,
+    serverCtx: &mut FPSServerCtx,
+) -> Result<()> {
     if fpsOperation.operationType == FPSOperationType::createCKC {
         // Check that business rules are satisfied
-        SDKExtension::checkBusinessRules(fpsOperation.isCheckIn, &fpsOperation.assetInfo, serverCtx)?;
+        SDKExtension::checkBusinessRules(
+            fpsOperation.isCheckIn,
+            &fpsOperation.assetInfo,
+            serverCtx,
+        )?;
     }
 
     Ok(())
@@ -244,8 +264,10 @@ pub fn validateRequestCustom(fpsOperation: &mut FPSOperation, serverCtx: &mut FP
 /// If asset information is not provided as part of the JSON input, now is the time
 /// to use the Asset ID found inside the SPC (serverCtx.spcContainer.spcData.spcAssetInfo.id)
 /// to query your database and fill in fpsOperation.assetInfo.
-pub fn queryDatabaseCustom(_fpsOperation: &mut FPSOperation, _serverCtx: &FPSServerCtx) -> Result<()> {
-
+pub fn queryDatabaseCustom(
+    _fpsOperation: &mut FPSOperation,
+    _serverCtx: &FPSServerCtx,
+) -> Result<()> {
     /*
     // Query database using serverCtx.spcContainer.spcData.spcAssetInfo.id to fill in assetInfo structure.
     fpsOperation.assetInfo.id = serverCtx.spcContainer.spcData.spcAssetInfo.id;
@@ -306,7 +328,12 @@ pub fn populateTagSecurityLevelCustom(serverCtx: &mut FPSServerCtx) -> Result<()
 /// because it is not done in Base.
 pub fn populateTagsCustom(serverCtx: &mut FPSServerCtx) -> Result<()> {
     // Construct and serialize either offline key tag or key duration tag
-    let keyType: u32 = serverCtx.ckcContainer.ckcData.ckcAssetInfo.keyDuration.keyType;
+    let keyType: u32 = serverCtx
+        .ckcContainer
+        .ckcData
+        .ckcAssetInfo
+        .keyDuration
+        .keyType;
 
     if serverCtx
         .spcContainer
@@ -318,7 +345,11 @@ pub fn populateTagsCustom(serverCtx: &mut FPSServerCtx) -> Result<()> {
     {
         if ((keyType == FPSKeyDurationType::persistenceAndDuration as u32)
             || (keyType == FPSKeyDurationType::persistence as u32))
-            && serverCtx.spcContainer.spcData.clientFeatures.supportsOfflineKeyTLLV
+            && serverCtx
+                .spcContainer
+                .spcData
+                .clientFeatures
+                .supportsOfflineKeyTLLV
         {
             Base::populateTagServerOfflineKey(serverCtx)?;
         } else {
@@ -330,7 +361,10 @@ pub fn populateTagsCustom(serverCtx: &mut FPSServerCtx) -> Result<()> {
 }
 
 /// Populates Content ID for Offline Key TLLV V1
-pub fn offlineKeyTagPopulateContentIDCustom(_serverCtx: &mut FPSServerCtx, offlineKeyTLLV: &mut Vec<u8>) -> Result<()> {
+pub fn offlineKeyTagPopulateContentIDCustom(
+    _serverCtx: &mut FPSServerCtx,
+    offlineKeyTLLV: &mut Vec<u8>,
+) -> Result<()> {
     // Just add 16B of zeros
     offlineKeyTLLV.append(&mut vec![0; 16]);
 
@@ -343,7 +377,10 @@ pub fn finalizeResultsCustom(_serverCtx: &FPSServerCtx, _fpsResult: &mut FPSResu
 }
 
 /// Adds any custom fields to the 'create-ckc' object of the output JSON
-pub fn serializeCreateCKCNodeCustom(_result: &FPSResult, _ckcNode: &mut Map<String, Value>) -> Result<()> {
+pub fn serializeCreateCKCNodeCustom(
+    _result: &FPSResult,
+    _ckcNode: &mut Map<String, Value>,
+) -> Result<()> {
     Ok(())
 }
 
@@ -355,7 +392,10 @@ pub fn serializeResultsCustom(
 ) -> Result<()> {
     let mut root = Map::new();
 
-    root.insert(base_constants::CREATE_CKC_STR.to_string(), Value::Array(ckcNode));
+    root.insert(
+        base_constants::CREATE_CKC_STR.to_string(),
+        Value::Array(ckcNode),
+    );
 
     // Add into top level response object
     jsonResults.insert(
@@ -379,7 +419,10 @@ impl SDKExtension {
         let certificate_map = match CERT_MAP.get() {
             Some(s) => s,
             None => {
-                fpsLogError!(FPSStatus::invalidCertificateErr, "Failed to get certificate hash map");
+                fpsLogError!(
+                    FPSStatus::invalidCertificateErr,
+                    "Failed to get certificate hash map"
+                );
                 returnErrorStatus!(FPSStatus::invalidCertificateErr);
             }
         };
@@ -387,7 +430,10 @@ impl SDKExtension {
         let certInfo = match certificate_map.get(&certHash) {
             Some(s) => s,
             None => {
-                fpsLogError!(FPSStatus::invalidCertificateErr, "Certificate hash not found");
+                fpsLogError!(
+                    FPSStatus::invalidCertificateErr,
+                    "Certificate hash not found"
+                );
                 returnErrorStatus!(FPSStatus::invalidCertificateErr);
             }
         };
@@ -400,7 +446,10 @@ impl SDKExtension {
         let certificate_map = match CERT_MAP.get() {
             Some(s) => s,
             None => {
-                fpsLogError!(FPSStatus::invalidCertificateErr, "Failed to get certificate hash map");
+                fpsLogError!(
+                    FPSStatus::invalidCertificateErr,
+                    "Failed to get certificate hash map"
+                );
                 returnErrorStatus!(FPSStatus::invalidCertificateErr);
             }
         };
@@ -408,7 +457,10 @@ impl SDKExtension {
         let certInfo = match certificate_map.get(&certHash) {
             Some(s) => s,
             None => {
-                fpsLogError!(FPSStatus::invalidCertificateErr, "Certificate hash not found");
+                fpsLogError!(
+                    FPSStatus::invalidCertificateErr,
+                    "Certificate hash not found"
+                );
                 returnErrorStatus!(FPSStatus::invalidCertificateErr);
             }
         };
