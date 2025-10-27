@@ -31,7 +31,7 @@ jobs:
         run: cargo test --verbose
       - name: lint
         # Exclude fairplay feature: requires Apple SDK binaries not in repository
-        run: cargo clippy --lib --bin arkavo -- -D warnings -A mismatched-lifetime-syntaxes
+        run: cargo clippy --lib --bin arks -- -D warnings -A mismatched-lifetime-syntaxes
       - name: format
         run: |
           # Format check excluding vendor/ (copyrighted Apple SDK code)
@@ -47,13 +47,13 @@ jobs:
           targets: x86_64-unknown-linux-gnu
       - name: Build
         run: |
-          cargo build --release --target x86_64-unknown-linux-gnu
-          strip target/x86_64-unknown-linux-gnu/release/arkavo
+          cargo build --release --target x86_64-unknown-linux-gnu --bin arks
+          strip target/x86_64-unknown-linux-gnu/release/arks
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: x86_64-unknown-linux-gnu-build
-          path: target/x86_64-unknown-linux-gnu/release/arkavo
+          path: target/x86_64-unknown-linux-gnu/release/arks
 
   bench:
     runs-on: ubuntu-latest
