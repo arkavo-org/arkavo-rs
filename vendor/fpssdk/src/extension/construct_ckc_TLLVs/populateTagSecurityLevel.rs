@@ -21,14 +21,7 @@ impl SDKExtension {
         securityLevel.appendBigEndianU32(0);
 
         // 8B Required Security Level
-        securityLevel.appendBigEndianU64(
-            serverCtx
-                .ckcContainer
-                .ckcData
-                .ckcAssetInfo
-                .extension
-                .requiredSecurityLevel as u64,
-        );
+        securityLevel.appendBigEndianU64(serverCtx.ckcContainer.ckcData.ckcAssetInfo.extension.requiredSecurityLevel as u64);
 
         Base::serializeTLLV(
             FPSTLLVTagValue::securityLevelTag as u64,

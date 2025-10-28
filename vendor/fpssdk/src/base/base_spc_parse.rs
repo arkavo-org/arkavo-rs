@@ -4,15 +4,13 @@
 
 use std::mem::size_of;
 
-use aes::Aes128;
-use cipher::KeyInit;
 use cmac::{Cmac, Mac};
+use cipher::KeyInit;
+use aes::Aes128;
 
 use crate::base::base_constants;
 use crate::base::base_constants::{AESEncryptionCipher, AESEncryptionMode, SPCVersion};
-use crate::base::base_constants::{
-    FPS_TLLV_TAG_SZ, FPS_TLLV_TOTAL_LENGTH_SZ, FPS_TLLV_VALUE_LENGTH_SZ,
-};
+use crate::base::base_constants::{FPS_TLLV_TAG_SZ, FPS_TLLV_TOTAL_LENGTH_SZ, FPS_TLLV_VALUE_LENGTH_SZ};
 use crate::base::structures::base_fps_structures::Base;
 use crate::base::structures::base_fps_structures::FPSOperation;
 use crate::base::structures::base_server_structures::{
@@ -55,8 +53,7 @@ impl Base {
             Base::parseSPCV3Header(spc, &mut offset, spcContainer)?;
         } else {
             requireAction!(
-                (spcContainer.version == SPCVersion::v1 as u32)
-                    || (spcContainer.version == SPCVersion::v2 as u32),
+                (spcContainer.version == SPCVersion::v1 as u32) || (spcContainer.version == SPCVersion::v2 as u32),
                 return Err(FPSStatus::spcVersionErr)
             );
 
@@ -87,8 +84,7 @@ impl Base {
             spcContainer.spcDataOffset = offset;
 
             requireAction!(
-                (spcContainer.spcDataSize + spcContainer.spcDataOffset)
-                    >= spcContainer.spcDataOffset,
+                (spcContainer.spcDataSize + spcContainer.spcDataOffset) >= spcContainer.spcDataOffset,
                 return Err(FPSStatus::paramErr)
             );
             requireAction!(
@@ -101,32 +97,25 @@ impl Base {
     }
 
     // Parse SPC v3 Header
-    pub fn parseSPCV3Header(
-        spc: &[u8],
-        offset: &mut usize,
-        spcContainer: &mut FPSServerSPCContainer,
-    ) -> Result<()> {
+    pub fn parseSPCV3Header(spc: &[u8], offset: &mut usize, spcContainer: &mut FPSServerSPCContainer)-> Result<()> {
+
         let mut localOffset: usize = *offset;
         /* SPC v3 Format:
-         * header: 8 bytes (version on 4 bytes + reserved on 4 bytes) : this is already parsed at this point
-         * transport version UUID: 16 bytes
-         * symmetric master key encrypted using certificate public key: 256 bytes
-         * public key UUID aka certificate hash: 32 bytes
-         * encrypted TLLV’s length: 16 bytes
-         * encrypted TLLV’s: variable multiple of 16 bytes
-         * transport level integrity tag: 16 bytes
-         */
+        * header: 8 bytes (version on 4 bytes + reserved on 4 bytes) : this is already parsed at this point
+        * transport version UUID: 16 bytes
+        * symmetric master key encrypted using certificate public key: 256 bytes
+        * public key UUID aka certificate hash: 32 bytes
+        * encrypted TLLV’s length: 16 bytes
+        * encrypted TLLV’s: variable multiple of 16 bytes
+        * transport level integrity tag: 16 bytes
+        */
 
         // protocol version UUID
-        spcContainer.protocolVersionUUID =
-            readBytes(spc, localOffset, base_constants::AES128_IV_SZ)?;
+        spcContainer.protocolVersionUUID = readBytes(spc, localOffset, base_constants::AES128_IV_SZ)?;
         localOffset += base_constants::AES128_IV_SZ;
 
         if spcContainer.protocolVersionUUID != base_constants::V3_PROTOCOL_VERSION_UUID {
-            log::debug!(
-                "Invalid protocol version UUID {:?}",
-                spcContainer.protocolVersionUUID
-            );
+            log::debug!("Invalid protocol version UUID {:?}", spcContainer.protocolVersionUUID);
             return Err(FPSStatus::versionErr);
         }
 
@@ -138,8 +127,7 @@ impl Base {
 
         // certificate hash
         // read sha256 digest
-        spcContainer.certificateHash256 =
-            readBytes(spc, localOffset, base_constants::FPS_V3_HASH_SZ)?;
+        spcContainer.certificateHash256 = readBytes(spc, localOffset, base_constants::FPS_V3_HASH_SZ)?;
         localOffset += base_constants::FPS_V3_HASH_SZ;
 
         // For simplicity, lets find matching sha1 hash for known set of sha256 cert hashes.
@@ -171,11 +159,8 @@ impl Base {
         Ok(())
     }
 
-    pub fn getEncryptionKeyAndIV(
-        spcContainer: &mut FPSServerSPCContainer,
-        masterKey: &Vec<u8>,
-        encryptionKey: &mut Vec<u8>,
-    ) -> Result<()> {
+    pub fn getEncryptionKeyAndIV(spcContainer: &mut FPSServerSPCContainer, masterKey: &Vec<u8>, encryptionKey: &mut Vec<u8>) -> Result<()> {
+   
         // Compute Encryption IV
         Base::encryptDecryptWithAES(
             base_constants::V3_PROTOCOL_ENCRYPTION_IV_SEED,
@@ -185,7 +170,7 @@ impl Base {
             AESEncryptionCipher::aesECB,
             &mut spcContainer.aesKeyIV,
         )?;
-
+        
         // Compute Encryption Key
         Base::encryptDecryptWithAES(
             base_constants::V3_PROTOCOL_ENCRYPTION_KEY_SEED,
@@ -197,11 +182,8 @@ impl Base {
         )
     }
 
-    pub fn verifySPCIntegrity(
-        spcContainer: &mut FPSServerSPCContainer,
-        spc: &[u8],
-        masterKey: &Vec<u8>,
-    ) -> Result<()> {
+    pub fn verifySPCIntegrity(spcContainer: &mut FPSServerSPCContainer, spc: &[u8], masterKey: &Vec<u8>) -> Result<()> {
+
         // Verify Integrity
         let mut localIntegrityKey: Vec<u8> = Vec::new();
 
@@ -213,11 +195,11 @@ impl Base {
             AESEncryptionCipher::aesECB,
             &mut localIntegrityKey,
         )?;
-
+    
         // Integrity tag is computed over the concatenated RSA encrypted AES key, Certificate Hash, length of TLLVs and the encrypted TLLV's,
         // with the integrity key as the key and using CMAC mode
 
-        let mut integrityBuffer: Vec<u8> = Vec::new();
+        let mut integrityBuffer : Vec<u8> = Vec::new();
 
         // AES Key
         integrityBuffer.extend(spcContainer.aesWrappedKey.clone());
@@ -231,21 +213,17 @@ impl Base {
         integrityBuffer.extend(&spcContainer.spcDataSize.to_be_bytes());
 
         // Encrypted TLLVs
-        let spcBuffer = spc
-            [spcContainer.spcDataOffset..(spcContainer.spcDataOffset + spcContainer.spcDataSize)]
-            .to_vec();
+        let spcBuffer = spc[spcContainer.spcDataOffset..(spcContainer.spcDataOffset + spcContainer.spcDataSize)].to_vec();
         integrityBuffer.extend(spcBuffer);
 
         // Parse tag from SPC to compare
         let integrityTagOffset = spcContainer.spcDataOffset + spcContainer.spcDataSize;
-        let integrityTag_parsed =
-            readBytes(spc, integrityTagOffset, base_constants::AES128_KEY_SZ)?;
+        let integrityTag_parsed = readBytes(spc, integrityTagOffset, base_constants::AES128_KEY_SZ)?;
 
         // Verify CMAC
         let mut mac = <Cmac<Aes128> as KeyInit>::new_from_slice(&localIntegrityKey).unwrap();
         Mac::update(&mut mac, &integrityBuffer);
-        let integrity_parsed_tag: &cipher::generic_array::GenericArray<u8, cipher::typenum::U16> =
-            cipher::generic_array::GenericArray::from_slice(&integrityTag_parsed);
+        let integrity_parsed_tag: &cipher::generic_array::GenericArray<u8, cipher::typenum::U16> = cipher::generic_array::GenericArray::from_slice(&integrityTag_parsed);
 
         if let Err(_) = mac.verify(&integrity_parsed_tag) {
             log::debug!("Integrity verification failed for SPC");
@@ -254,6 +232,7 @@ impl Base {
 
         Ok(())
     }
+
 
     /// Decrypts the encrypted SPC payload
     ///
@@ -273,7 +252,7 @@ impl Base {
             Base::getEncryptionKeyAndIV(spcContainer, &masterKey, &mut localKey)?;
             Base::verifySPCIntegrity(spcContainer, spc, &masterKey)?;
         }
-
+        
         // Decrypt the encrypted SPC payload using the decrypted AES key
         Base::encryptDecryptWithAES(
             &spc[spcContainer.spcDataOffset..],
@@ -334,8 +313,7 @@ impl Base {
     ) -> Result<()> {
         requireAction!(!dataToParse.is_empty(), return Err(FPSStatus::paramErr));
         requireAction!(
-            dataToParseSize
-                >= (FPS_TLLV_TAG_SZ + FPS_TLLV_TOTAL_LENGTH_SZ + FPS_TLLV_VALUE_LENGTH_SZ),
+            dataToParseSize >= (FPS_TLLV_TAG_SZ + FPS_TLLV_TOTAL_LENGTH_SZ + FPS_TLLV_VALUE_LENGTH_SZ),
             return Err(FPSStatus::paramErr)
         );
 
@@ -389,41 +367,17 @@ impl Base {
     /// handling knows what the client capabilities are.
     pub fn checkSupportedFeatures(serverCtx: &mut FPSServerCtx) -> Result<()> {
         // Defaults
-        serverCtx
-            .spcContainer
-            .spcData
-            .clientFeatures
-            .supportsOfflineKeyTLLV = false;
-        serverCtx
-            .spcContainer
-            .spcData
-            .clientFeatures
-            .supportsOfflineKeyTLLVV2 = false;
+        serverCtx.spcContainer.spcData.clientFeatures.supportsOfflineKeyTLLV = false;
+        serverCtx.spcContainer.spcData.clientFeatures.supportsOfflineKeyTLLVV2 = false;
         serverCtx
             .spcContainer
             .spcData
             .clientFeatures
             .supportsSecurityLevelBaseline = false;
-        serverCtx
-            .spcContainer
-            .spcData
-            .clientFeatures
-            .supportsSecurityLevelMain = false;
-        serverCtx
-            .spcContainer
-            .spcData
-            .clientFeatures
-            .supportsHDCPTypeOne = false;
-        serverCtx
-            .spcContainer
-            .spcData
-            .clientFeatures
-            .supportsDualExpiry = false;
-        serverCtx
-            .spcContainer
-            .spcData
-            .clientFeatures
-            .supportsCheckIn = false;
+        serverCtx.spcContainer.spcData.clientFeatures.supportsSecurityLevelMain = false;
+        serverCtx.spcContainer.spcData.clientFeatures.supportsHDCPTypeOne = false;
+        serverCtx.spcContainer.spcData.clientFeatures.supportsDualExpiry = false;
+        serverCtx.spcContainer.spcData.clientFeatures.supportsCheckIn = false;
 
         // In case we did not receive client capabilities, fill with zeros
         serverCtx
@@ -432,60 +386,30 @@ impl Base {
             .clientCapabilities
             .resize(base_constants::FPS_CAPABILITIES_FLAGS_LENGTH, 0);
 
-        let capabilitiesLVbits =
-            readBigEndianU64(&serverCtx.spcContainer.spcData.clientCapabilities, 8)?;
+        let capabilitiesLVbits = readBigEndianU64(&serverCtx.spcContainer.spcData.clientCapabilities, 8)?;
 
         if (capabilitiesLVbits & base_constants::FPS_CAPABILITY_OFFLINE_KEY_V2_SUPPORTED) != 0 {
-            serverCtx
-                .spcContainer
-                .spcData
-                .clientFeatures
-                .supportsOfflineKeyTLLVV2 = true;
-            serverCtx
-                .spcContainer
-                .spcData
-                .clientFeatures
-                .supportsOfflineKeyTLLV = true;
+            serverCtx.spcContainer.spcData.clientFeatures.supportsOfflineKeyTLLVV2 = true;
+            serverCtx.spcContainer.spcData.clientFeatures.supportsOfflineKeyTLLV = true;
         }
-        if (capabilitiesLVbits & base_constants::FPS_CAPABILITY_SECURITY_LEVEL_BASELINE_SUPPORTED)
-            != 0
-        {
+        if (capabilitiesLVbits & base_constants::FPS_CAPABILITY_SECURITY_LEVEL_BASELINE_SUPPORTED) != 0 {
             serverCtx
                 .spcContainer
                 .spcData
                 .clientFeatures
                 .supportsSecurityLevelBaseline = true;
         }
-        if (capabilitiesLVbits & base_constants::FPS_CAPABILITY_SECURITY_LEVEL_MAIN_SUPPORTED) != 0
-        {
-            serverCtx
-                .spcContainer
-                .spcData
-                .clientFeatures
-                .supportsSecurityLevelMain = true;
+        if (capabilitiesLVbits & base_constants::FPS_CAPABILITY_SECURITY_LEVEL_MAIN_SUPPORTED) != 0 {
+            serverCtx.spcContainer.spcData.clientFeatures.supportsSecurityLevelMain = true;
         }
-        if (capabilitiesLVbits & base_constants::FPS_CAPABILITY_HDCP_TYPE1_ENFORCEMENT_SUPPORTED)
-            != 0
-        {
-            serverCtx
-                .spcContainer
-                .spcData
-                .clientFeatures
-                .supportsHDCPTypeOne = true;
+        if (capabilitiesLVbits & base_constants::FPS_CAPABILITY_HDCP_TYPE1_ENFORCEMENT_SUPPORTED) != 0 {
+            serverCtx.spcContainer.spcData.clientFeatures.supportsHDCPTypeOne = true;
         }
         if (capabilitiesLVbits & base_constants::FPS_CAPABILITY_OFFLINE_KEY_SUPPORTED) != 0 {
-            serverCtx
-                .spcContainer
-                .spcData
-                .clientFeatures
-                .supportsDualExpiry = true;
+            serverCtx.spcContainer.spcData.clientFeatures.supportsDualExpiry = true;
         }
         if (capabilitiesLVbits & base_constants::FPS_CAPABILITY_CHECK_IN_SUPPORTED) != 0 {
-            serverCtx
-                .spcContainer
-                .spcData
-                .clientFeatures
-                .supportsCheckIn = true;
+            serverCtx.spcContainer.spcData.clientFeatures.supportsCheckIn = true;
         }
 
         // Custom handling (if needed)

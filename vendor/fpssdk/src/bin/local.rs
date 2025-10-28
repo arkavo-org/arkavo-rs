@@ -48,16 +48,13 @@ fn launch_process() -> Result<Value> {
 
     if let Ok(response) = result {
         response
-    } else {
+    }
+    else {
         // Manually create and return a fixed json indicating failure.
         let json_fail = serde_jsonrc::json!({ extension_constants::FAIRPLAY_STREAMING_RESPONSE_STR: { base_constants::CREATE_CKC_STR :[{base_constants::ID_STR :1,base_constants::STATUS_STR:FPSStatus::internalErr as i32}]}});
         println!("Rust panic!!");
         println!("{}", json_fail);
-        fpsLogError!(
-            FPSStatus::internalErr,
-            "fpssdk panic: {:?}",
-            result.unwrap_err()
-        );
+        fpsLogError!(FPSStatus::internalErr, "fpssdk panic: {:?}", result.unwrap_err());
         Ok(json_fail)
     }
 }

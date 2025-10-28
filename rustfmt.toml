@@ -1,0 +1,4 @@
+# Rust formatting configuration
+
+# Exclude vendor code from formatting (Apple FairPlay SDK - copyrighted code)
+ignore = ["vendor/fpssdk"]

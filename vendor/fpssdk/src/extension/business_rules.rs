@@ -13,11 +13,7 @@ use crate::{fpsLogError, returnErrorStatus};
 
 impl SDKExtension {
     /// Verifies that license is allowed to be created based on business rules
-    pub fn checkBusinessRules(
-        isCheckIn: bool,
-        assetInfo: &AssetInfo,
-        serverCtx: &mut FPSServerCtx,
-    ) -> Result<()> {
+    pub fn checkBusinessRules(isCheckIn: bool, assetInfo: &AssetInfo, serverCtx: &mut FPSServerCtx) -> Result<()> {
         //
         // NOTE: These are just suggested default rules. Please feel free to edit as desired.
         //
@@ -25,8 +21,7 @@ impl SDKExtension {
 
         // Verify Kext Deny List version if client reported one
         if serverCtx.spcContainer.spcData.clientKextDenyListVersion > 0
-            && serverCtx.spcContainer.spcData.clientKextDenyListVersion
-                < base_constants::MIN_KDL_VERSION
+            && serverCtx.spcContainer.spcData.clientKextDenyListVersion < base_constants::MIN_KDL_VERSION
         {
             fpsLogError!(
                 FPSStatus::clientSecurityLevelErr,
@@ -38,23 +33,15 @@ impl SDKExtension {
         }
 
         // Lease cannot be used together with Offline HLS
-        if (assetInfo.leaseDuration != base_constants::NO_LEASE_DURATION)
-            && (assetInfo.leaseDuration != 0)
-            && assetInfo.licenseType == FPSLicenseType::offlineHLS as u32
-        {
-            fpsLogError!(
-                FPSStatus::paramErr,
-                "lease is not supported for offline HLS"
-            );
-            returnErrorStatus!(FPSStatus::paramErr);
+        if (assetInfo.leaseDuration != base_constants::NO_LEASE_DURATION) && (assetInfo.leaseDuration != 0) 
+            && assetInfo.licenseType == FPSLicenseType::offlineHLS as u32 {
+                fpsLogError!(FPSStatus::paramErr, "lease is not supported for offline HLS");
+                returnErrorStatus!(FPSStatus::paramErr);
         }
 
         // Verify that if check-in is requested then SPC has syncFlags
         if isCheckIn && (serverCtx.spcContainer.spcData.offlineSyncData.syncFlags == 0) {
-            fpsLogError!(
-                FPSStatus::paramErr,
-                "check-in requested but SPC is missing SyncTLLV"
-            );
+            fpsLogError!(FPSStatus::paramErr, "check-in requested but SPC is missing SyncTLLV");
             returnErrorStatus!(FPSStatus::paramErr);
         }
 
@@ -64,9 +51,7 @@ impl SDKExtension {
                 // UHD content requires security level Main
                 ckcAssetInfoExtension.requiredSecurityLevel = FPSSecurityLevel::main;
 
-                if let Some(supportedSecurityLevel) =
-                    serverCtx.spcContainer.spcData.supportedSecurityLevel
-                {
+                if let Some(supportedSecurityLevel) = serverCtx.spcContainer.spcData.supportedSecurityLevel {
                     if supportedSecurityLevel < FPSSecurityLevel::main as u64 {
                         fpsLogError!(
                             FPSStatus::clientSecurityLevelErr,
@@ -80,11 +65,7 @@ impl SDKExtension {
                     .spcData
                     .clientFeatures
                     .supportsSecurityLevelBaseline
-                    && !serverCtx
-                        .spcContainer
-                        .spcData
-                        .clientFeatures
-                        .supportsSecurityLevelMain
+                    && !serverCtx.spcContainer.spcData.clientFeatures.supportsSecurityLevelMain
                 {
                     // Note: older devices do not send any supported security fields, so only fail here if
                     // supportsSecurityLevelBaseline is set but supportsSecurityLevelMain is not
@@ -106,9 +87,7 @@ impl SDKExtension {
                 // HD content requires security level Baseline or higher
                 ckcAssetInfoExtension.requiredSecurityLevel = FPSSecurityLevel::baseline;
 
-                if let Some(supportedSecurityLevel) =
-                    serverCtx.spcContainer.spcData.supportedSecurityLevel
-                {
+                if let Some(supportedSecurityLevel) = serverCtx.spcContainer.spcData.supportedSecurityLevel {
                     if supportedSecurityLevel < FPSSecurityLevel::baseline as u64 {
                         fpsLogError!(
                             FPSStatus::clientSecurityLevelErr,
@@ -130,9 +109,7 @@ impl SDKExtension {
                 // SD content requires security level Baseline or higher
                 ckcAssetInfoExtension.requiredSecurityLevel = FPSSecurityLevel::baseline;
 
-                if let Some(supportedSecurityLevel) =
-                    serverCtx.spcContainer.spcData.supportedSecurityLevel
-                {
+                if let Some(supportedSecurityLevel) = serverCtx.spcContainer.spcData.supportedSecurityLevel {
                     if supportedSecurityLevel < FPSSecurityLevel::baseline as u64 {
                         fpsLogError!(
                             FPSStatus::clientSecurityLevelErr,
@@ -151,18 +128,17 @@ impl SDKExtension {
 
             ContentType::unknown => {
                 //Content type must be set to determine a security level
-                fpsLogError!(FPSStatus::paramErr, "No content type provided");
+                fpsLogError!(
+                    FPSStatus::paramErr,
+                    "No content type provided"
+                );
                 returnErrorStatus!(FPSStatus::paramErr);
             }
         }
 
         // Verify that if HDCP Type 1 is required then client supports it
         if assetInfo.hdcpReq == FPSHDCPRequirement::hdcpType1 as u64
-            && !serverCtx
-                .spcContainer
-                .spcData
-                .clientFeatures
-                .supportsHDCPTypeOne
+            && !serverCtx.spcContainer.spcData.clientFeatures.supportsHDCPTypeOne
         {
             fpsLogError!(
                 FPSStatus::clientSecurityLevelErr,

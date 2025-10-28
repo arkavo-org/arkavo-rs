@@ -11,15 +11,9 @@ use crate::requireAction;
 use crate::validate::{FPSStatus, Result};
 
 impl Base {
-    pub fn parseTagTransactionID(
-        tllv: &FPSServerTLLV,
-        spcContainer: &mut FPSServerSPCContainer,
-    ) -> Result<()> {
+    pub fn parseTagTransactionID(tllv: &FPSServerTLLV, spcContainer: &mut FPSServerSPCContainer) -> Result<()> {
         // Check that size matches expected size exactly
-        requireAction!(
-            tllv.value.len() == size_of::<u64>(),
-            return Err(FPSStatus::parserErr)
-        );
+        requireAction!(tllv.value.len() == size_of::<u64>(), return Err(FPSStatus::parserErr));
 
         // 8B Transaction ID
         spcContainer.spcData.transactionId = readBigEndianU64(&tllv.value, 0)?;

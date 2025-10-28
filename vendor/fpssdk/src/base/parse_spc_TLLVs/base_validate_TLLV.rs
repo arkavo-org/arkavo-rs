@@ -25,12 +25,7 @@ impl Base {
             FPSTLLVTagValue::sessionKeyR1IntegrityTag as u64,
         ];
         for tag in requiredTags {
-            if !spcContainer
-                .spcData
-                .spcDataParser
-                .parsedTagValues
-                .contains(&tag)
-            {
+            if !spcContainer.spcData.spcDataParser.parsedTagValues.contains(&tag) {
                 returnErrorStatus!(FPSStatus::missingRequiredTagErr);
             }
         }

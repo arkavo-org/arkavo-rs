@@ -9,14 +9,9 @@ use crate::requireAction;
 use crate::validate::{FPSStatus, Result};
 
 impl Base {
-    pub fn parseTagR2_V3(
-        tllv: &FPSServerTLLV,
-        spcContainer: &mut FPSServerSPCContainer,
-    ) -> Result<()> {
-        requireAction!(
-            tllv.value.len() <= FPS_V1_R2_V3_MAX_SZ,
-            return Err(FPSStatus::parserErr)
-        );
+    pub fn parseTagR2_V3(tllv: &FPSServerTLLV, spcContainer: &mut FPSServerSPCContainer) -> Result<()> {
+        
+        requireAction!(tllv.value.len() <= FPS_V1_R2_V3_MAX_SZ, return Err(FPSStatus::parserErr));
 
         spcContainer.spcData.r2_v3 = tllv.value.clone();
         log::debug!("R2 V3: 0x{}", hex::encode(tllv.value.clone()));

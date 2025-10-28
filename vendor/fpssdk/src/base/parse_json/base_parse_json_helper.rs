@@ -57,17 +57,9 @@ impl Base {
         // rental-duration - optional
         // Support parsing as either an integer or string
         if ckcObj.contains_key(base_constants::RENTAL_DURATION_STR) {
-            if let Some(rentalDuration) = ckcObj
-                .get(base_constants::RENTAL_DURATION_STR)
-                .unwrap()
-                .as_u64()
-            {
+            if let Some(rentalDuration) = ckcObj.get(base_constants::RENTAL_DURATION_STR).unwrap().as_u64() {
                 assetInfo.rentalDuration = rentalDuration as u32;
-            } else if let Some(rentalDuration) = ckcObj
-                .get(base_constants::RENTAL_DURATION_STR)
-                .unwrap()
-                .as_str()
-            {
+            } else if let Some(rentalDuration) = ckcObj.get(base_constants::RENTAL_DURATION_STR).unwrap().as_str() {
                 assetInfo.rentalDuration = rentalDuration.parse::<u32>().unwrap_or(0);
             }
         }
@@ -75,17 +67,9 @@ impl Base {
         // playback-duration - optional
         // Support parsing as either an integer or string
         if ckcObj.contains_key(base_constants::PLAYBACK_DURATION_STR) {
-            if let Some(playbackDuration) = ckcObj
-                .get(base_constants::PLAYBACK_DURATION_STR)
-                .unwrap()
-                .as_u64()
-            {
+            if let Some(playbackDuration) = ckcObj.get(base_constants::PLAYBACK_DURATION_STR).unwrap().as_u64() {
                 assetInfo.playbackDuration = playbackDuration as u32;
-            } else if let Some(playbackDuration) = ckcObj
-                .get(base_constants::PLAYBACK_DURATION_STR)
-                .unwrap()
-                .as_str()
-            {
+            } else if let Some(playbackDuration) = ckcObj.get(base_constants::PLAYBACK_DURATION_STR).unwrap().as_str() {
                 assetInfo.playbackDuration = playbackDuration.parse::<u32>().unwrap_or(0);
             }
         }

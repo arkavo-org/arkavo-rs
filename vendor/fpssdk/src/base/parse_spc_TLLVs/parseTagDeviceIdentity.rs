@@ -9,10 +9,8 @@ use crate::base::Utils::FPSServerUtils::{readBigEndianU32, readBytes};
 use crate::validate::Result;
 
 impl Base {
-    pub fn parseTagDeviceIdentity(
-        tllv: &FPSServerTLLV,
-        deviceIdentity: &mut FPSDeviceIdentity,
-    ) -> Result<()> {
+    pub fn parseTagDeviceIdentity(tllv: &FPSServerTLLV, deviceIdentity: &mut FPSDeviceIdentity) -> Result<()> {
+
         // 4B FPDI Version
         deviceIdentity.fpdiVersion = readBigEndianU32(&tllv.value, 0)?;
 

@@ -52,28 +52,16 @@ impl Base {
             if let Some(create_ckc_obj_array) = root[base_constants::CREATE_CKC_STR].as_array() {
                 // Parse create-ckc object array
                 for ckc_obj in create_ckc_obj_array.iter() {
-                    Base::parseOperation(
-                        FPSOperationType::createCKC,
-                        ckc_obj,
-                        fpsOperations,
-                        &mut &root,
-                    )?;
+                    Base::parseOperation(FPSOperationType::createCKC, ckc_obj, fpsOperations, &mut &root)?;
                 }
             } else {
                 returnErrorStatus!(FPSStatus::paramErr);
             }
         } else if root.contains_key(base_constants::GET_CLIENT_INFO_STR) {
-            if let Some(get_client_info_obj_array) =
-                root[base_constants::GET_CLIENT_INFO_STR].as_array()
-            {
+            if let Some(get_client_info_obj_array) = root[base_constants::GET_CLIENT_INFO_STR].as_array() {
                 // Parse get-client-info object array
                 for get_client_info_obj in get_client_info_obj_array.iter() {
-                    Base::parseOperation(
-                        FPSOperationType::getClientInfo,
-                        get_client_info_obj,
-                        fpsOperations,
-                        &mut &root,
-                    )?;
+                    Base::parseOperation(FPSOperationType::getClientInfo, get_client_info_obj, fpsOperations, &mut &root)?;
                 }
             } else {
                 returnErrorStatus!(FPSStatus::paramErr);
@@ -94,10 +82,7 @@ impl Base {
     ) -> Result<()> {
         let mut status: Result<()> = Ok(());
 
-        let mut operation: FPSOperation = FPSOperation {
-            operationType,
-            ..Default::default()
-        };
+        let mut operation: FPSOperation = FPSOperation {operationType,  ..Default::default()};
 
         // ID - optional, defaults to 0
         if let Some(id) = obj[base_constants::ID_STR].as_u64() {
@@ -112,8 +97,7 @@ impl Base {
         // SPC - required
         if let Some(spc) = obj[base_constants::SPC_STR].as_str() {
             let base64Request = spc.to_string();
-            if let Err(e) = general_purpose::STANDARD.decode_vec(base64Request, &mut operation.spc)
-            {
+            if let Err(e) = general_purpose::STANDARD.decode_vec(base64Request, &mut operation.spc) {
                 fpsLogError!(FPSStatus::parserErr, "Error decoding base64 SPC: {}", e);
                 status = Err(FPSStatus::parserErr);
             }
@@ -136,10 +120,7 @@ impl Base {
                     operation.assetInfo = assetInfo;
                 } else {
                     // We currently only expect one entry
-                    fpsLogError!(
-                        FPSStatus::paramErr,
-                        "Unexpected multiple asset-info entries"
-                    );
+                    fpsLogError!(FPSStatus::paramErr, "Unexpected multiple asset-info entries");
                     status = Err(FPSStatus::paramErr);
                 }
             }
@@ -185,11 +166,7 @@ impl Base {
                     if let Ok(key) = hex::decode(tmp) {
                         assetInfo.key = key;
                     } else {
-                        fpsLogError!(
-                            FPSStatus::paramErr,
-                            "unable to decode content key: \"{}\"",
-                            contentKey
-                        );
+                        fpsLogError!(FPSStatus::paramErr, "unable to decode content key: \"{}\"", contentKey);
                         status = Err(FPSStatus::paramErr);
                     }
                 }
@@ -221,11 +198,7 @@ impl Base {
                     if let Ok(iv) = hex::decode(tmp) {
                         assetInfo.iv = iv;
                     } else {
-                        fpsLogError!(
-                            FPSStatus::paramErr,
-                            "unable to decode content iv: \"{}\"",
-                            contentIV
-                        );
+                        fpsLogError!(FPSStatus::paramErr, "unable to decode content iv: \"{}\"", contentIV);
                         status = Err(FPSStatus::paramErr);
                     }
                 }
@@ -299,11 +272,7 @@ impl Base {
         // Parse json and put results into operation
         status = Base::parseOperations(&json, &mut fpsOperations);
 
-        if let Err(e) = Extension::processOperationsCustom(
-            &json,
-            &fpsOperations,
-            &mut fpsResultsWrapper.results,
-        ) {
+        if let Err(e) = Extension::processOperationsCustom(&json, &fpsOperations, &mut fpsResultsWrapper.results) {
             fpsLogError!(e, "processOperationsCustom failed");
             status = Err(e);
         }
@@ -323,10 +292,7 @@ impl Base {
                 fpsResultsWrapper.results.resultPtr.push(fpsResult);
             }
         } else {
-            let fpsResult: FPSResult = FPSResult {
-                status: status.unwrap_err(),
-                ..Default::default()
-            };
+            let fpsResult: FPSResult = FPSResult {status: status.unwrap_err(), ..Default::default()};
             fpsResultsWrapper.results.resultPtr.push(fpsResult);
         }
 

@@ -152,7 +152,7 @@ impl Default for FPSServerSPCData {
 
             numberOfSupportedKeyFormats: 0,
             supportedKeyFormats: [0; FPS_MAX_KEY_FORMATS],
-
+            
             sk_r1_v3: vec![],
             r2_v3: vec![],
 
@@ -236,6 +236,7 @@ pub struct FPSServerCKCAssetInfo {
     // Extension
     pub extension: extension_structures::CKCAssetInfoExtension,
 }
+
 
 /// Contains the tag and value fields for a TLLV.
 #[derive(Debug, Clone, Default)]
