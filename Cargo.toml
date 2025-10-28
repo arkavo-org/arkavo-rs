@@ -65,10 +65,9 @@ uuid = { version = "1.11", features = ["v4"] }
 fairplay-wrapper = { path = "crates/fairplay-wrapper", optional = true }
 c2pa = { version = "0.37.1", features = ["file_io", "unstable_api"], optional = true }
 mp4parse = { version = "0.17", optional = true }
-# Path dependency requires opentdf-rs to be cloned at ../opentdf-rs
+# Git dependency on opentdf-rs for RSA crypto primitives
 # Source: https://github.com/arkavo-org/opentdf-rs
-# TODO: Switch to git dependency or publish to crates.io
-opentdf = { path = "../opentdf-rs" }
+opentdf = { git = "https://github.com/arkavo-org/opentdf-rs", branch = "main" }
 rsa = { version = "0.9", features = ["sha2"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
 sha1 = "0.10"
