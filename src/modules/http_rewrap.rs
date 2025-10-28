@@ -254,7 +254,11 @@ fn process_key_access_object(
         process_rsa_unwrap(kao_wrapper, state, session_shared_secret)
     } else if is_ec {
         // EC unwrap path for NanoTDF
-        process_ec_unwrap(kao_wrapper, &state.kas_ec_private_key, session_shared_secret)
+        process_ec_unwrap(
+            kao_wrapper,
+            &state.kas_ec_private_key,
+            session_shared_secret,
+        )
     } else {
         error!("Unsupported algorithm requested: {}", algorithm);
         Err(format!("Unsupported algorithm: {}", algorithm).into())

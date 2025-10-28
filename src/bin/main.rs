@@ -1793,7 +1793,8 @@ fn load_rsa_key(
 
     // Derive public key and encode as PEM
     let public_key = RsaPublicKey::from(&private_key);
-    let public_key_pem = rsa::pkcs8::EncodePublicKey::to_public_key_pem(&public_key, Default::default())?;
+    let public_key_pem =
+        rsa::pkcs8::EncodePublicKey::to_public_key_pem(&public_key, Default::default())?;
 
     Ok((private_key, public_key_pem))
 }
