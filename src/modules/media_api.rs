@@ -358,7 +358,7 @@ async fn handle_tdf3_key_request(
     // 6. Process NanoTDF header to rewrap DEK
     let wrapped_key = process_nanotdf_header(
         nanotdf_header,
-        &state.rewrap_state.kas_private_key,
+        &state.rewrap_state.kas_ec_private_key,
         session_shared_secret_bytes.as_ref(),
     )
     .map_err(|e| {

@@ -1,6 +1,6 @@
 use crate::modules::crypto;
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -10,13 +10,17 @@ use log::{error, info};
 use nanotdf::BinaryParser;
 use p256::{ecdh::EphemeralSecret, PublicKey as P256PublicKey, SecretKey};
 use rand_core::OsRng;
+use rsa::{Oaep, RsaPrivateKey};
 use serde::{Deserialize, Serialize};
+use sha1::Sha1;
 use std::sync::Arc;
 
 /// Server state shared with rewrap endpoint
 pub struct RewrapState {
-    pub kas_private_key: SecretKey,
-    pub kas_public_key_pem: String,
+    pub kas_ec_private_key: SecretKey,
+    pub kas_ec_public_key_pem: String,
+    pub kas_rsa_private_key: Option<RsaPrivateKey>,
+    pub kas_rsa_public_key_pem: Option<String>,
     pub oauth_public_key_pem: Option<String>, // Optional OAuth public key for JWT validation
 }
 
@@ -125,13 +129,38 @@ impl IntoResponse for ErrorResponse {
     }
 }
 
+/// Query parameters for public key endpoint
+#[derive(Debug, Deserialize)]
+pub struct PublicKeyQuery {
+    pub algorithm: Option<String>, // "ec" or "rsa", defaults to "ec"
+}
+
 /// KAS public key endpoint handler
-/// GET /kas/v2/kas_public_key
+/// GET /kas/v2/kas_public_key?algorithm=rsa
 pub async fn kas_public_key_handler(
     State(state): State<Arc<RewrapState>>,
+    Query(params): Query<PublicKeyQuery>,
 ) -> Result<String, ErrorResponse> {
-    // Return the PEM-encoded KAS public key
-    Ok(state.kas_public_key_pem.clone())
+    // Determine which key to return based on algorithm parameter
+    let algorithm = params.algorithm.as_deref().unwrap_or("ec");
+
+    match algorithm {
+        "rsa" => {
+            if let Some(ref rsa_public_key_pem) = state.kas_rsa_public_key_pem {
+                Ok(rsa_public_key_pem.clone())
+            } else {
+                Err(ErrorResponse {
+                    error: "not_configured".to_string(),
+                    message: "RSA keys not configured on this KAS server".to_string(),
+                })
+            }
+        }
+        "ec" => Ok(state.kas_ec_public_key_pem.clone()),
+        _ => Err(ErrorResponse {
+            error: "invalid_algorithm".to_string(),
+            message: format!("Unsupported algorithm: {}. Use 'ec' or 'rsa'", algorithm),
+        }),
+    }
 }
 
 /// Main rewrap endpoint handler
@@ -169,7 +198,8 @@ pub async fn rewrap_handler(
         for kao_wrapper in request_entry.key_access_objects {
             match process_key_access_object(
                 &kao_wrapper,
-                &state.kas_private_key,
+                &request_entry.algorithm,
+                &state,
                 session_shared_secret_bytes.as_ref(),
             ) {
                 Ok(wrapped_key_base64) => {
@@ -207,6 +237,28 @@ pub async fn rewrap_handler(
 
 /// Process a single key access object
 fn process_key_access_object(
+    kao_wrapper: &KeyAccessObjectWrapper,
+    algorithm: &str,
+    state: &Arc<RewrapState>,
+    session_shared_secret: &[u8],
+) -> Result<String, Box<dyn std::error::Error>> {
+    // Determine algorithm - could be "ec:secp256r1", "rsa:2048", or empty for Standard TDF
+    let is_rsa = algorithm.is_empty() || algorithm.starts_with("rsa");
+    let is_ec = algorithm.starts_with("ec");
+
+    if is_rsa {
+        // RSA unwrap path for Standard TDF
+        process_rsa_unwrap(kao_wrapper, state, session_shared_secret)
+    } else if is_ec {
+        // EC unwrap path for NanoTDF
+        process_ec_unwrap(kao_wrapper, &state.kas_ec_private_key, session_shared_secret)
+    } else {
+        Err(format!("Unsupported algorithm: {}", algorithm).into())
+    }
+}
+
+/// Process EC (NanoTDF) unwrap
+fn process_ec_unwrap(
     kao_wrapper: &KeyAccessObjectWrapper,
     kas_private_key: &SecretKey,
     session_shared_secret: &[u8],
@@ -247,6 +299,39 @@ fn process_key_access_object(
         &nanotdf_salt,
         b"", // Empty info per NanoTDF spec
     )?;
+
+    // Combine nonce + wrapped_dek and encode as base64
+    let mut combined = Vec::new();
+    combined.extend_from_slice(&nonce);
+    combined.extend_from_slice(&wrapped_dek);
+
+    Ok(base64::encode(&combined))
+}
+
+/// Process RSA (Standard TDF) unwrap
+fn process_rsa_unwrap(
+    kao_wrapper: &KeyAccessObjectWrapper,
+    state: &Arc<RewrapState>,
+    session_shared_secret: &[u8],
+) -> Result<String, Box<dyn std::error::Error>> {
+    // Check if RSA key is configured
+    let rsa_private_key = state
+        .kas_rsa_private_key
+        .as_ref()
+        .ok_or("RSA key not configured")?;
+
+    // For Standard TDF, the header might contain the wrapped key directly
+    // Decode base64 wrapped key from the KAO
+    let wrapped_key_bytes = base64::decode(&kao_wrapper.key_access_object.header)?;
+
+    // Unwrap DEK using RSA-OAEP with SHA-1 padding (OpenTDF compatibility)
+    let padding = Oaep::new::<Sha1>();
+    let dek = rsa_private_key
+        .decrypt(padding, &wrapped_key_bytes)
+        .map_err(|e| format!("RSA decryption failed: {}", e))?;
+
+    // Re-wrap DEK with session shared secret using AES-256-GCM
+    let (nonce, wrapped_dek) = crypto::rewrap_dek_simple(&dek, session_shared_secret)?;
 
     // Combine nonce + wrapped_dek and encode as base64
     let mut combined = Vec::new();

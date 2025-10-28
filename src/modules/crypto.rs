@@ -113,6 +113,40 @@ pub fn rewrap_dek(
     Ok((nonce.to_vec(), wrapped_dek))
 }
 
+/// Performs simple rewrap operation for RSA-unwrapped DEKs
+/// Encrypts the DEK (Data Encryption Key) directly with session shared secret
+///
+/// # Arguments
+/// * `dek` - The unwrapped Data Encryption Key (from RSA decryption)
+/// * `session_shared_secret` - The shared secret from session ECDH
+///
+/// # Returns
+/// Tuple of (nonce, wrapped_dek) where wrapped_dek includes ciphertext + tag
+pub fn rewrap_dek_simple(
+    dek: &[u8],
+    session_shared_secret: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), Box<dyn Error>> {
+    // Derive symmetric key using HKDF (no salt, empty info for simplicity)
+    let hkdf = Hkdf::<Sha256>::new(None, session_shared_secret);
+    let mut derived_key = [0u8; 32];
+    hkdf.expand(b"", &mut derived_key)
+        .map_err(|e| format!("HKDF expansion failed: {}", e))?;
+
+    // Generate random nonce (12 bytes for AES-GCM)
+    let mut nonce = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce);
+    let nonce_ga = GenericArray::from_slice(&nonce);
+
+    // Encrypt DEK with AES-256-GCM
+    let key = Key::<Aes256Gcm>::from(derived_key);
+    let cipher = Aes256Gcm::new(&key);
+    let wrapped_dek = cipher
+        .encrypt(nonce_ga, dek)
+        .map_err(|e| format!("AES-GCM encryption failed: {}", e))?;
+
+    Ok((nonce.to_vec(), wrapped_dek))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -445,9 +445,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("OAuth JWT signature validation disabled (development mode)");
     }
 
+    // Load optional RSA key for Standard TDF support
+    let (kas_rsa_private_key, kas_rsa_public_key_pem) =
+        if let Ok(rsa_key_path) = env::var("KAS_RSA_KEY_PATH") {
+            info!("Loading RSA key from: {}", rsa_key_path);
+            match load_rsa_key(&rsa_key_path) {
+                Ok((private_key, public_key_pem)) => {
+                    info!("RSA key loaded successfully");
+                    (Some(private_key), Some(public_key_pem))
+                }
+                Err(e) => {
+                    error!("Failed to load RSA key: {}. RSA support disabled.", e);
+                    (None, None)
+                }
+            }
+        } else {
+            info!("KAS_RSA_KEY_PATH not set. RSA support disabled (EC only).");
+            (None, None)
+        };
+
     let rewrap_state = Arc::new(http_rewrap::RewrapState {
-        kas_private_key,
-        kas_public_key_pem,
+        kas_ec_private_key: kas_private_key,
+        kas_ec_public_key_pem: kas_public_key_pem,
+        kas_rsa_private_key,
+        kas_rsa_public_key_pem,
         oauth_public_key_pem,
     });
 
@@ -1757,6 +1778,24 @@ fn init_kas_keys(key_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     KAS_KEYS
         .set(Arc::new(kas_keys))
         .map_err(|_| "KAS keys already initialized".into())
+}
+
+fn load_rsa_key(
+    key_path: &str,
+) -> Result<(rsa::RsaPrivateKey, String), Box<dyn std::error::Error>> {
+    use rsa::pkcs8::DecodePrivateKey;
+    use rsa::RsaPublicKey;
+
+    let pem_content = std::fs::read_to_string(key_path)?;
+
+    // Try to parse as PKCS#8 RSA private key
+    let private_key = rsa::RsaPrivateKey::from_pkcs8_pem(&pem_content)?;
+
+    // Derive public key and encode as PEM
+    let public_key = RsaPublicKey::from(&private_key);
+    let public_key_pem = rsa::pkcs8::EncodePublicKey::to_public_key_pem(&public_key, Default::default())?;
+
+    Ok((private_key, public_key_pem))
 }
 
 fn get_kas_public_key() -> Option<Vec<u8>> {
