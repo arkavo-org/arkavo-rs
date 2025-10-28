@@ -211,6 +211,20 @@ mod tests {
         // Wrapped should be ciphertext + 16-byte tag
         assert_eq!(wrapped.len(), dek.len() + 16);
     }
+
+    #[test]
+    fn test_rewrap_dek_simple() {
+        let dek = b"test_data_encryption_key_32bytes";
+        let session_secret = b"test_session_shared_secret__32b";
+
+        let result = rewrap_dek_simple(dek, session_secret);
+        assert!(result.is_ok());
+
+        let (nonce, wrapped) = result.unwrap();
+        assert_eq!(nonce.len(), 12);
+        // Wrapped should be ciphertext + 16-byte auth tag
+        assert_eq!(wrapped.len(), dek.len() + 16);
+    }
 }
 
 // ==================== Utility Functions ====================

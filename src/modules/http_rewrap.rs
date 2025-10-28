@@ -151,7 +151,7 @@ pub async fn kas_public_key_handler(
             } else {
                 Err(ErrorResponse {
                     error: "not_configured".to_string(),
-                    message: "RSA keys not configured on this KAS server".to_string(),
+                    message: "RSA keys not configured. Set KAS_RSA_KEY_PATH environment variable to enable RSA support.".to_string(),
                 })
             }
         }
@@ -242,7 +242,10 @@ fn process_key_access_object(
     state: &Arc<RewrapState>,
     session_shared_secret: &[u8],
 ) -> Result<String, Box<dyn std::error::Error>> {
-    // Determine algorithm - could be "ec:secp256r1", "rsa:2048", or empty for Standard TDF
+    // Determine algorithm type based on request
+    // Per OpenTDF spec: empty algorithm indicates Standard TDF with RSA-OAEP
+    // NanoTDF explicitly uses "ec:secp256r1" format
+    // Valid values: "" (Standard TDF/RSA), "ec:secp256r1" (NanoTDF), "rsa:2048" (Standard TDF)
     let is_rsa = algorithm.is_empty() || algorithm.starts_with("rsa");
     let is_ec = algorithm.starts_with("ec");
 
@@ -253,6 +256,7 @@ fn process_key_access_object(
         // EC unwrap path for NanoTDF
         process_ec_unwrap(kao_wrapper, &state.kas_ec_private_key, session_shared_secret)
     } else {
+        error!("Unsupported algorithm requested: {}", algorithm);
         Err(format!("Unsupported algorithm: {}", algorithm).into())
     }
 }
@@ -320,9 +324,17 @@ fn process_rsa_unwrap(
         .as_ref()
         .ok_or("RSA key not configured")?;
 
-    // For Standard TDF, the header might contain the wrapped key directly
-    // Decode base64 wrapped key from the KAO
+    // Standard TDF KAO header contains the RSA-OAEP wrapped DEK (base64-encoded)
     let wrapped_key_bytes = base64::decode(&kao_wrapper.key_access_object.header)?;
+
+    // Validate wrapped key size (RSA-2048 produces 256-byte ciphertext)
+    if wrapped_key_bytes.len() != 256 {
+        return Err(format!(
+            "Invalid RSA-wrapped key size: {} bytes (expected 256 for RSA-2048)",
+            wrapped_key_bytes.len()
+        )
+        .into());
+    }
 
     // Unwrap DEK using RSA-OAEP with SHA-1 padding (OpenTDF compatibility)
     let padding = Oaep::new::<Sha1>();
