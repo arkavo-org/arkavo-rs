@@ -4,7 +4,7 @@
 
 use std::ffi::{c_char, CString};
 use std::{
-    io::{prelude::*, BufReader, Read, Write},
+    io::{Read, Write, BufReader, prelude::*},
     net::{TcpListener, TcpStream},
 };
 

@@ -31,7 +31,8 @@ jobs:
         run: cargo test --verbose
       - name: lint
         # Exclude fairplay feature: requires Apple SDK binaries not in repository
-        run: cargo clippy --lib --bin arks -- -D warnings -A mismatched-lifetime-syntaxes
+        # Only lint arkavo-rs package: excludes fpssdk (Apple copyrighted vendor code)
+        run: cargo clippy --package arkavo-rs --lib --bin arks -- -D warnings -A mismatched-lifetime-syntaxes
       - name: format
         run: |
           # Format check excluding vendor/ (copyrighted Apple SDK code)

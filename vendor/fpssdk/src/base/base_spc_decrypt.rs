@@ -25,7 +25,7 @@ impl Base {
 
         let mode = match opMode {
             AESEncryptionMode::aesEncrypt => Mode::Encrypt,
-            AESEncryptionMode::aesDecrypt => Mode::Decrypt,
+            AESEncryptionMode::aesDecrypt => Mode::Decrypt
         };
 
         match opCipher {
@@ -33,20 +33,14 @@ impl Base {
                 cipher = Cipher::aes_128_cbc();
 
                 requireAction!(!input.is_empty(), return Err(FPSStatus::paramErr));
-                requireAction!(
-                    input.len() % AES128_BLOCK_SIZE == 0,
-                    return Err(FPSStatus::paramErr)
-                );
+                requireAction!(input.len() % AES128_BLOCK_SIZE == 0, return Err(FPSStatus::paramErr));
                 requireAction!(key.len() == AES128_KEY_SZ, return Err(FPSStatus::paramErr));
                 requireAction!(iv.len() == AES128_IV_SZ, return Err(FPSStatus::paramErr));
             }
             AESEncryptionCipher::aesECB => {
                 cipher = Cipher::aes_128_ecb();
 
-                requireAction!(
-                    input.len() == AES128_BLOCK_SIZE,
-                    return Err(FPSStatus::paramErr)
-                );
+                requireAction!(input.len() == AES128_BLOCK_SIZE, return Err(FPSStatus::paramErr));
                 requireAction!(key.len() == AES128_KEY_SZ, return Err(FPSStatus::paramErr));
                 // IV can be empty
             }

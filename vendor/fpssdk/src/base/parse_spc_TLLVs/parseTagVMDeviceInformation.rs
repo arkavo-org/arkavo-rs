@@ -2,18 +2,15 @@
 // Copyright © 2025 Apple Inc. All rights reserved.
 //
 
-use crate::base::structures::base_server_structures::{
-    FPSServerSPCContainer, FPSServerTLLV, VMDeviceInfo,
-};
-use crate::base::Utils::FPSServerUtils::readBigEndianU32;
+use crate::base::structures::base_server_structures::{FPSServerTLLV, FPSServerSPCContainer, VMDeviceInfo};
 use crate::validate::Result;
 use crate::Base;
+use crate::base::Utils::FPSServerUtils::readBigEndianU32;
 
-impl Base {
-    pub fn parseTagVMDeviceInformation(
-        tllv: &FPSServerTLLV,
-        spcContainer: &mut FPSServerSPCContainer,
-    ) -> Result<()> {
+
+impl Base{
+
+    pub fn parseTagVMDeviceInformation(tllv: &FPSServerTLLV, spcContainer: &mut FPSServerSPCContainer) -> Result<()> {
         let mut offset = 0;
         let tllvVersion = readBigEndianU32(&tllv.value, offset)?;
         offset += 4;
@@ -45,7 +42,8 @@ impl Base {
             vmDeviceInfo.guestVMProtocolVersion = readBigEndianU32(&tllv.value, offset)?;
 
             spcContainer.spcData.vmDeviceInfo = Some(vmDeviceInfo);
-        } else {
+        }
+        else {
             spcContainer.spcData.vmDeviceInfo = None;
         }
 

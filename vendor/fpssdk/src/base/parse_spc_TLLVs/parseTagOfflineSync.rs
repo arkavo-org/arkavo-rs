@@ -5,18 +5,13 @@
 use crate::base::base_constants::FPS_MAX_TITLE_ID_LENGTH;
 use crate::base::base_constants::FPS_OFFLINE_CONTENTID_LENGTH;
 use crate::base::structures::base_fps_structures::Base;
-use crate::base::structures::base_server_structures::{
-    FPSOfflineSyncData, FPSServerSPCContainer, FPSServerTLLV,
-};
+use crate::base::structures::base_server_structures::{FPSOfflineSyncData, FPSServerSPCContainer, FPSServerTLLV};
 use crate::base::Utils::FPSServerUtils::{readBigEndianU32, readBigEndianU64, readBytes};
 use crate::validate::{FPSStatus, Result};
 use crate::{fpsLogError, returnErrorStatus};
 
 impl Base {
-    pub fn parseTagOfflineSync(
-        tllv: &FPSServerTLLV,
-        spcContainer: &mut FPSServerSPCContainer,
-    ) -> Result<()> {
+    pub fn parseTagOfflineSync(tllv: &FPSServerTLLV, spcContainer: &mut FPSServerSPCContainer) -> Result<()> {
         let mut offlineSyncData: FPSOfflineSyncData = Default::default();
 
         // 4B Version
@@ -29,10 +24,7 @@ impl Base {
             // TLLV v1 should not be used anymore, but keep support for now
 
             if reserved != 0 {
-                fpsLogError!(
-                    FPSStatus::paramErr,
-                    "Invalid reserved field in Sync Rental TLLV"
-                );
+                fpsLogError!(FPSStatus::paramErr, "Invalid reserved field in Sync Rental TLLV");
                 returnErrorStatus!(FPSStatus::paramErr);
             }
 
@@ -79,8 +71,7 @@ impl Base {
                 );
                 returnErrorStatus!(FPSStatus::internalErr);
             } else if offlineSyncData.recordsDeleted > 0 {
-                let recordsSizeToRead: usize =
-                    offlineSyncData.recordsDeleted * FPS_OFFLINE_CONTENTID_LENGTH;
+                let recordsSizeToRead: usize = offlineSyncData.recordsDeleted * FPS_OFFLINE_CONTENTID_LENGTH;
 
                 // Invalidated Stream IDs (variable size)
                 offlineSyncData.deletedStreamIDs = readBytes(&tllv.value, 48, recordsSizeToRead)?;

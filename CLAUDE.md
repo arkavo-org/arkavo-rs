@@ -77,6 +77,8 @@ brew install nats-server redis flatbuffers
 
 ### Key Generation (First Time Setup)
 
+#### EC Key (Required - for NanoTDF)
+
 Generate KAS EC private key:
 ```bash
 openssl ecparam -genkey -name prime256v1 -noout -out recipient_private_key.pem
@@ -86,6 +88,30 @@ Validate the key:
 ```bash
 openssl ec -in recipient_private_key.pem -text -noout
 ```
+
+#### RSA Key (Optional - for Standard TDF / OpenTDFKit compatibility)
+
+Generate KAS RSA-2048 private key:
+```bash
+openssl genrsa -out kas_rsa_private.pem 2048
+```
+
+Convert to PKCS#8 format (required for arks):
+```bash
+openssl pkcs8 -topk8 -inform PEM -outform PEM -in kas_rsa_private.pem -out kas_rsa_private_pkcs8.pem -nocrypt
+```
+
+Validate the key:
+```bash
+openssl rsa -in kas_rsa_private_pkcs8.pem -text -noout
+```
+
+Extract public key:
+```bash
+openssl rsa -in kas_rsa_private_pkcs8.pem -pubout -out kas_rsa_public.pem
+```
+
+#### TLS Certificates
 
 Generate self-signed TLS certificates (for development):
 ```bash
@@ -189,7 +215,8 @@ Environment variables:
 export PORT=8443                                   # Unified server port (HTTP + WebSocket)
 export TLS_CERT_PATH=/path/to/fullchain.pem        # Optional, disables TLS if not set
 export TLS_KEY_PATH=/path/to/privkey.pem
-export KAS_KEY_PATH=/path/to/recipient_private_key.pem
+export KAS_KEY_PATH=/path/to/recipient_private_key.pem  # EC key for NanoTDF (required)
+export KAS_RSA_KEY_PATH=/path/to/kas_rsa_private_pkcs8.pem  # RSA key for Standard TDF (optional)
 export NATS_URL=nats://localhost:4222
 export NATS_SUBJECT=nanotdf.messages
 export REDIS_URL=redis://localhost:6379
@@ -212,6 +239,13 @@ export C2PA_ALLOWED_CREATORS=creator1@example.com,creator2@example.com  # Option
 export FAIRPLAY_CREDENTIALS_PATH=/path/to/fps/credentials
 # See "FairPlay SDK Installation" section above for library setup
 ```
+
+**Note:** For RSA key support (Standard TDF / OpenTDFKit compatibility):
+- RSA support is optional - server works with EC keys only if `KAS_RSA_KEY_PATH` is not set
+- When configured, the server supports both EC (NanoTDF) and RSA (Standard TDF) rewrap operations
+- Public key endpoint supports algorithm parameter: `/kas/v2/kas_public_key?algorithm=rsa`
+- RSA keys must be in PKCS#8 PEM format (use `openssl pkcs8` command to convert)
+- Compatible with OpenTDFKit iOS SDK and other Standard TDF clients
 
 **Note:** For C2PA video content authenticity:
 - C2PA signing is optional and disabled if environment variables are not set

@@ -39,9 +39,7 @@ fn regression_tests() -> () {
             }
 
             let result_json: Value = from_str(&result).expect("Failed to load result JSON");
-            let root_obj = result_json["fairplay-streaming-response"]
-                .as_object()
-                .unwrap();
+            let root_obj = result_json["fairplay-streaming-response"].as_object().unwrap();
             if let Some(obj) = root_obj.get("create-ckc") {
                 if let Some(ckc_obj) = obj.as_array() {
                     let status = ckc_obj[0]["status"].as_i64().unwrap();

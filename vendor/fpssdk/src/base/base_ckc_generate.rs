@@ -19,6 +19,7 @@ use openssl::symm::{Cipher, Crypter, Mode};
 use super::base_constants;
 
 impl Base {
+
     ///base version of log init that is externally visible
     pub fn logInit() {
         Extension::logInitCustom(None);
@@ -26,6 +27,7 @@ impl Base {
 
     /// Serializes and encrypts the TLLVs into a CKC container
     pub fn generateCKC(serverCtx: &mut FPSServerCtx) -> Result<()> {
+
         // Generate the CKC container (AR) IV
         Extension::genRandom(&mut serverCtx.ckcContainer.aesKeyIV, 16);
 
@@ -107,7 +109,7 @@ impl Base {
         localCKC.appendBigEndianU32(ckcContainer.version);
 
         // 4B Reserved
-        let mut reserved: u32 = 0;
+        let mut reserved : u32 = 0;
         Base::reportServerInformation(&mut reserved)?;
         localCKC.appendBigEndianU32(reserved);
 
@@ -138,15 +140,15 @@ impl Base {
         let platform = match arch {
             "x86_64" => 1,
             "aarch64" => 2,
-            _ => 0,
+            _ => 0
         };
 
         // Language (Swift = 1, Rust = 2)
-        let language: u32 = 2;
+        let language : u32 = 2;
 
         // Project version
-        let major: u32 = base_constants::FPS_SDK_MAJOR_VERSION;
-        let minor: u32 = base_constants::FPS_SDK_MINOR_VERSION;
+        let major : u32 = base_constants::FPS_SDK_MAJOR_VERSION;
+        let minor : u32 = base_constants::FPS_SDK_MINOR_VERSION;
 
         reserved_bits |= major; // 7 bits
 

@@ -12,15 +12,9 @@ use crate::requireAction;
 use crate::validate::{FPSStatus, Result};
 
 impl Base {
-    pub fn parseTagKDLVersionReport(
-        tllv: &FPSServerTLLV,
-        spcContainer: &mut FPSServerSPCContainer,
-    ) -> Result<()> {
+    pub fn parseTagKDLVersionReport(tllv: &FPSServerTLLV, spcContainer: &mut FPSServerSPCContainer) -> Result<()> {
         // Check that size matches expected size exactly
-        requireAction!(
-            tllv.value.len() == size_of::<u32>(),
-            return Err(FPSStatus::parserErr)
-        );
+        requireAction!(tllv.value.len() == size_of::<u32>(), return Err(FPSStatus::parserErr));
 
         // 4B Kext Deny List Version
         spcContainer.spcData.clientKextDenyListVersion = readBigEndianU32(&tllv.value, 0)?;

@@ -13,14 +13,7 @@ impl Base {
     /// Populates TLLVs in the CKC.
     pub fn populateCKCTLLVs(serverCtx: &mut FPSServerCtx) -> Result<()> {
         // Populate common TLLVs
-        Base::populateTagCK(
-            serverCtx
-                .ckcContainer
-                .ckcData
-                .ckcAssetInfo
-                .contentKeyTLLVTag,
-            serverCtx,
-        )?;
+        Base::populateTagCK(serverCtx.ckcContainer.ckcData.ckcAssetInfo.contentKeyTLLVTag, serverCtx)?;
         Base::populateTagR1(serverCtx)?;
         Base::populateTagServerReturnTags(serverCtx)?;
         Base::populateTagSessionKeyVersionUsed(serverCtx)?;
@@ -38,11 +31,7 @@ impl Base {
     ///
     /// Adds random bytes of padding to the end, so that total length is a
     /// multiple of `AES128_BLOCK_SIZE`.
-    pub fn serializeTLLV(
-        tag: u64,
-        value: &Vec<u8>,
-        ckcContainer: &mut FPSServerCKCContainer,
-    ) -> Result<()> {
+    pub fn serializeTLLV(tag: u64, value: &Vec<u8>, ckcContainer: &mut FPSServerCKCContainer) -> Result<()> {
         let valueSize = value.len();
 
         // Determine minimum padding size to complete a block

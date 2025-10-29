@@ -1,0 +1,2 @@
+# Mark vendor code as vendored for GitHub language statistics
+vendor/fpssdk/** linguist-vendored

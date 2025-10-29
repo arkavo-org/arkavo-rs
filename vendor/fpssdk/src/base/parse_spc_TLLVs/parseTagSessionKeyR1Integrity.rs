@@ -10,10 +10,7 @@ use crate::requireAction;
 use crate::validate::{FPSStatus, Result};
 
 impl Base {
-    pub fn parseTagSessionKeyR1Integrity(
-        tllv: &FPSServerTLLV,
-        spcContainer: &mut FPSServerSPCContainer,
-    ) -> Result<()> {
+    pub fn parseTagSessionKeyR1Integrity(tllv: &FPSServerTLLV, spcContainer: &mut FPSServerSPCContainer) -> Result<()> {
         // Check that size matches expected size exactly
         requireAction!(
             tllv.value.len() == FPS_V1_SKR1_INTEGRITY_SZ,
@@ -21,8 +18,7 @@ impl Base {
         );
 
         // Entire TLLV value is the SK R1 Integrity value
-        spcContainer.spcData.skR1IntegrityTag =
-            readBytes(&tllv.value, 0, FPS_V1_SKR1_INTEGRITY_SZ)?;
+        spcContainer.spcData.skR1IntegrityTag = readBytes(&tllv.value, 0, FPS_V1_SKR1_INTEGRITY_SZ)?;
 
         Ok(())
     }
