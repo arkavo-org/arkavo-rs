@@ -1,8 +1,8 @@
-# Terminal Link - NanoTDF Authentication Tokens
+# NTDF Tokens - NanoTDF Authentication
 
 ## Overview
 
-**Terminal Link** replaces traditional JWT Bearer tokens with NanoTDF-wrapped authentication tokens for:
+**NTDF tokens** replace traditional JWT Bearer tokens with NanoTDF-wrapped authentication tokens for:
 - **Policy binding** - Cryptographic policy enforcement
 - **Provenance tracking** - Verifiable token origin
 - **Optional confidentiality** - Encrypted payload
@@ -285,33 +285,21 @@ Ed25519 signature over the entire token ensures:
 - `exp` enforces expiration
 - `session_id` enables server-side revocation via Redis
 
-## Migration from JWT
+## Advantages Over JWT Bearer Tokens
 
-### Old (JWT Bearer)
-
-```
-Authorization: Bearer eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0...
-```
-
-**Vulnerabilities:**
-- ❌ No proof-of-possession (easily stolen)
+**Traditional JWT Bearer tokens had:**
+- ❌ No proof-of-possession (easily stolen and replayed)
 - ❌ No policy binding
 - ❌ No confidentiality
-- ❌ Signature only validates issuer, not binding
+- ❌ Signature only validates issuer, not binding to client
 
-### New (Terminal Link)
-
-```
-Authorization: NTDF rGN.bK+V#7c@{h...}
-DPoP: eyJhbGciOiJFUzI1NiIsInR5cCI6ImRwb3Aran...
-```
-
-**Improvements:**
+**NTDF tokens provide:**
 - ✅ DPoP proof-of-possession prevents theft
-- ✅ Policy binding enforced at KAS
-- ✅ Optional payload confidentiality
+- ✅ Policy binding enforced cryptographically at KAS
+- ✅ Optional payload confidentiality (encrypted claims)
 - ✅ Provenance tracking with Ed25519 signature
 - ✅ Server-side revocation via session_id
+- ✅ NanoTDF format consistency with content encryption
 
 ## Implementation Status
 

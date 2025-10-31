@@ -1,6 +1,6 @@
-/// NTDF Token - NanoTDF-based authentication token
+/// NTDF Token - NanoTDF-based authentication
 ///
-/// Replaces JWT Bearer tokens with NanoTDF format for:
+/// Replaces JWT Bearer tokens entirely with NanoTDF format for:
 /// - Policy binding
 /// - Provenance tracking
 /// - Optional confidentiality

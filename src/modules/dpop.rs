@@ -1,5 +1,9 @@
 /// DPoP (Demonstrating Proof-of-Possession) validation per RFC 9449
 /// https://datatracker.ietf.org/doc/html/rfc9449
+///
+/// Used with NTDF tokens (Z85-encoded NanoTDF) for proof-of-possession.
+/// The `access_token` parameter should be the Z85-encoded NTDF token string.
+/// The `ath` claim is validated against SHA-256(Z85_bytes).
 
 use chrono::Utc;
 use ecdsa::VerifyingKey;
