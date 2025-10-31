@@ -1,12 +1,14 @@
 use crate::modules::crypto;
+use crate::modules::dpop;
+use crate::modules::terminal_link;
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
-use log::{error, info};
+use log::{error, info, warn};
 use nanotdf::BinaryParser;
 use p256::{ecdh::EphemeralSecret, PublicKey as P256PublicKey, SecretKey};
 use rand_core::OsRng;
@@ -22,6 +24,9 @@ pub struct RewrapState {
     pub kas_rsa_private_key: Option<RsaPrivateKey>,
     pub kas_rsa_public_key_pem: Option<String>,
     pub oauth_public_key_pem: Option<String>, // Optional OAuth public key for JWT validation
+    pub terminal_link_public_key_pem: Option<Vec<u8>>, // Public key for Terminal Link validation
+    pub enable_terminal_link: bool,                     // Enable Terminal Link auth
+    pub enable_dpop: bool,                              // Enable DPoP validation
 }
 
 /// Signed rewrap request wrapper (outer envelope)
@@ -167,11 +172,126 @@ pub async fn kas_public_key_handler(
 /// POST /kas/v2/rewrap
 pub async fn rewrap_handler(
     State(state): State<Arc<RewrapState>>,
+    headers: HeaderMap,
     Json(payload): Json<SignedRewrapRequest>,
 ) -> Result<Json<RewrapResponse>, ErrorResponse> {
     info!("Received rewrap request");
 
-    // 1. Verify and decode JWT
+    // 0a. Validate Terminal Link if enabled
+    let validated_claims = if state.enable_terminal_link {
+        if let Some(auth_header) = headers.get("X-Auth-Token") {
+            if let Ok(token) = auth_header.to_str() {
+                if let Some(ref public_key_pem) = state.terminal_link_public_key_pem {
+                    match terminal_link::validate_terminal_link(token, public_key_pem, "authnz-rs") {
+                        Ok(terminal_link::ValidationResult::Valid(claims)) => {
+                            info!(
+                                "Terminal Link valid for user: {} session: {}",
+                                claims.user_id, claims.session_id
+                            );
+                            Some(claims)
+                        }
+                        Ok(result) => {
+                            warn!("Terminal Link validation failed: {:?}", result);
+                            return Err(ErrorResponse {
+                                error: "authentication_failed".to_string(),
+                                message: format!("Terminal Link validation failed: {:?}", result),
+                            });
+                        }
+                        Err(e) => {
+                            error!("Terminal Link validation error: {}", e);
+                            return Err(ErrorResponse {
+                                error: "authentication_failed".to_string(),
+                                message: format!("Terminal Link validation error: {}", e),
+                            });
+                        }
+                    }
+                } else {
+                    warn!("Terminal Link enabled but no public key configured");
+                    return Err(ErrorResponse {
+                        error: "invalid_request".to_string(),
+                        message: "Terminal Link public key not configured".to_string(),
+                    });
+                }
+            } else {
+                warn!("Invalid X-Auth-Token header");
+                return Err(ErrorResponse {
+                    error: "authentication_failed".to_string(),
+                    message: "Invalid X-Auth-Token header".to_string(),
+                });
+            }
+        } else {
+            warn!("Missing X-Auth-Token header");
+            return Err(ErrorResponse {
+                error: "authentication_failed".to_string(),
+                message: "Missing X-Auth-Token header".to_string(),
+            });
+        }
+    } else {
+        None
+    };
+
+    // 0b. Validate DPoP if enabled
+    if state.enable_dpop {
+        if let Some(dpop_header) = headers.get("DPoP") {
+            if let Ok(dpop_proof) = dpop_header.to_str() {
+                // Get HTTP method and URI from request context
+                let http_method = "POST"; // Rewrap is always POST
+                let http_uri = "/kas/v2/rewrap"; // Standard rewrap URI
+
+                // Extract access token from X-Auth-Token if present
+                let access_token = headers
+                    .get("X-Auth-Token")
+                    .and_then(|h| h.to_str().ok());
+
+                match dpop::validate_dpop_proof(dpop_proof, http_method, http_uri, access_token, 60) {
+                    Ok(dpop::DPoPValidationResult::Valid { jti, jwk_thumbprint }) => {
+                        info!("DPoP proof valid: jti={}, thumbprint={}", jti, jwk_thumbprint);
+
+                        // TODO: Verify JWK thumbprint matches Terminal Link dpop_jti if present
+                        if let Some(ref claims) = validated_claims {
+                            if let Some(ref expected_jti) = claims.dpop_jti {
+                                if &jti != expected_jti {
+                                    warn!("DPoP JTI mismatch: expected={}, actual={}", expected_jti, jti);
+                                    return Err(ErrorResponse {
+                                        error: "authentication_failed".to_string(),
+                                        message: "DPoP JTI mismatch".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    Ok(result) => {
+                        warn!("DPoP validation failed: {:?}", result);
+                        return Err(ErrorResponse {
+                            error: "authentication_failed".to_string(),
+                            message: format!("DPoP validation failed: {:?}", result),
+                        });
+                    }
+                    Err(e) => {
+                        error!("DPoP validation error: {}", e);
+                        return Err(ErrorResponse {
+                            error: "authentication_failed".to_string(),
+                            message: format!("DPoP validation error: {}", e),
+                        });
+                    }
+                }
+            } else {
+                warn!("Invalid DPoP header");
+                return Err(ErrorResponse {
+                    error: "authentication_failed".to_string(),
+                    message: "Invalid DPoP header".to_string(),
+                });
+            }
+        } else {
+            warn!("Missing DPoP header");
+            return Err(ErrorResponse {
+                error: "authentication_failed".to_string(),
+                message: "Missing DPoP header".to_string(),
+            });
+        }
+    }
+
+    // 1. Verify and decode JWT (legacy support)
     let unsigned_request = verify_and_decode_jwt(
         &payload.signed_request_token,
         state.oauth_public_key_pem.as_deref(),

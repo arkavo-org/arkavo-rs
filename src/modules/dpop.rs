@@ -2,14 +2,12 @@
 /// https://datatracker.ietf.org/doc/html/rfc9449
 
 use chrono::Utc;
-use ecdsa::signature::Verifier;
-use ecdsa::{Signature, VerifyingKey};
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Header, Validation};
+use ecdsa::VerifyingKey;
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use log::{error, info, warn};
 use p256::NistP256;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 
 /// DPoP JWT header
 #[derive(Debug, Serialize, Deserialize)]
@@ -239,12 +237,6 @@ fn extract_jwk_from_jwt(dpop_proof: &str) -> Result<JWK, Box<dyn std::error::Err
             .ok_or("Missing y")?
             .to_string(),
     })
-}
-
-/// Extract JWK from JWT header
-fn extract_jwk_from_header(_header: &Header) -> Result<JWK, Box<dyn std::error::Error>> {
-    // This is a placeholder - we use extract_jwk_from_jwt instead
-    Err("Use extract_jwk_from_jwt instead".into())
 }
 
 /// Construct PEM-encoded public key from JWK
