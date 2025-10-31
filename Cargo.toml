@@ -26,6 +26,7 @@ lto = true
 
 [dependencies]
 elliptic-curve = "0.13.8"
+ecdsa = { version = "0.16.9", features = ["signing", "verifying"] }
 tokio = { version = "1.39.2", features = ["full"] }
 tokio-tungstenite = "0.24.0"
 futures-util = "0.3.30"
