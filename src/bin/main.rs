@@ -539,25 +539,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("OAuth JWT signature validation disabled (development mode)");
     }
 
-    // Load Terminal Link configuration
-    let terminal_link_public_key_pem = env::var("TERMINAL_LINK_PUBLIC_KEY_PATH")
-        .ok()
-        .and_then(|path| std::fs::read(path).ok());
-
-    let enable_terminal_link = env::var("ENABLE_TERMINAL_LINK")
-        .map(|v| v.to_lowercase() == "true" || v == "1")
-        .unwrap_or(false);
-
-    if enable_terminal_link {
-        if terminal_link_public_key_pem.is_some() {
-            info!("Terminal Link validation enabled");
-        } else {
-            warn!("ENABLE_TERMINAL_LINK set but TERMINAL_LINK_PUBLIC_KEY_PATH not configured");
-        }
-    } else {
-        info!("Terminal Link validation disabled");
-    }
-
     // Load DPoP configuration
     let enable_dpop = env::var("ENABLE_DPOP")
         .map(|v| v.to_lowercase() == "true" || v == "1")
