@@ -72,6 +72,7 @@ opentdf = { git = "https://github.com/arkavo-org/opentdf-rs", branch = "main" }
 rsa = { version = "0.9", features = ["sha2"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
 sha1 = "0.10"
+z85 = "3.0.6"
 
 [features]
 default = []
