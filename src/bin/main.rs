@@ -494,15 +494,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             (None, None)
         };
 
+    // Load NTDF token configuration
+    let ntdf_expected_audience = env::var("NTDF_EXPECTED_AUDIENCE")
+        .unwrap_or_else(|_| "https://localhost:8443".to_string());
+
+    info!("NTDF expected audience: {}", ntdf_expected_audience);
+
     let rewrap_state = Arc::new(http_rewrap::RewrapState {
         kas_ec_private_key: kas_private_key,
         kas_ec_public_key_pem: kas_public_key_pem,
         kas_rsa_private_key,
         kas_rsa_public_key_pem,
-        oauth_public_key_pem,
-        terminal_link_public_key_pem,
-        enable_terminal_link,
         enable_dpop,
+        ntdf_expected_audience,
     });
 
     // Initialize media DRM components
