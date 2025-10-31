@@ -1,6 +1,7 @@
 #[cfg(feature = "c2pa_signing")]
 pub mod c2pa_signing;
 pub mod crypto;
+pub mod dpop;
 pub mod fairplay;
 pub mod http_rewrap;
 pub mod media_api;
