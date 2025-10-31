@@ -1,12 +1,13 @@
 use crate::modules::crypto;
+use crate::modules::dpop;
+use crate::modules::terminal_link_ntdf;
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
-use log::{error, info};
+use log::{error, info, warn};
 use nanotdf::BinaryParser;
 use p256::{ecdh::EphemeralSecret, PublicKey as P256PublicKey, SecretKey};
 use rand_core::OsRng;
@@ -21,26 +22,17 @@ pub struct RewrapState {
     pub kas_ec_public_key_pem: String,
     pub kas_rsa_private_key: Option<RsaPrivateKey>,
     pub kas_rsa_public_key_pem: Option<String>,
-    pub oauth_public_key_pem: Option<String>, // Optional OAuth public key for JWT validation
+    pub enable_dpop: bool, // Enable DPoP validation
+    pub ntdf_expected_audience: String, // Expected audience for NTDF token validation
 }
 
-/// Signed rewrap request wrapper (outer envelope)
+/// Rewrap request wrapper
 #[derive(Debug, Deserialize)]
 pub struct SignedRewrapRequest {
-    pub signed_request_token: String,
+    pub signed_request_token: String, // JSON string of UnsignedRewrapRequest (no JWT wrapping)
 }
 
-/// JWT claims structure for the signed request
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct JWTClaims {
-    #[serde(rename = "requestBody")]
-    pub request_body: String, // JSON string of UnsignedRewrapRequest
-    pub iat: i64,
-    pub exp: i64,
-}
-
-/// Unsigned rewrap request structure (inner payload)
+/// Unwrapped rewrap request structure
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnsignedRewrapRequest {
@@ -167,15 +159,126 @@ pub async fn kas_public_key_handler(
 /// POST /kas/v2/rewrap
 pub async fn rewrap_handler(
     State(state): State<Arc<RewrapState>>,
+    headers: HeaderMap,
     Json(payload): Json<SignedRewrapRequest>,
 ) -> Result<Json<RewrapResponse>, ErrorResponse> {
     info!("Received rewrap request");
 
-    // 1. Verify and decode JWT
-    let unsigned_request = verify_and_decode_jwt(
-        &payload.signed_request_token,
-        state.oauth_public_key_pem.as_deref(),
-    )?;
+    // 0a. Validate NTDF token from Authorization header
+    let auth_header = headers
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .ok_or(ErrorResponse {
+            error: "authentication_failed".to_string(),
+            message: "Missing Authorization header".to_string(),
+        })?;
+
+    let z85_token = auth_header
+        .strip_prefix("NTDF ")
+        .ok_or(ErrorResponse {
+            error: "authentication_failed".to_string(),
+            message: "Invalid Authorization scheme (expected 'NTDF')".to_string(),
+        })?;
+
+    // Convert KAS private key to PEM for validation
+    use p256::pkcs8::EncodePrivateKey;
+    let kas_private_key_pem = state
+        .kas_ec_private_key
+        .to_pkcs8_pem(p256::pkcs8::LineEnding::LF)
+        .map_err(|e| ErrorResponse {
+            error: "internal_error".to_string(),
+            message: format!("Failed to encode KAS private key: {}", e),
+        })?;
+
+    let validated_ntdf_claims =
+        match terminal_link_ntdf::validate_ntdf_token(z85_token, kas_private_key_pem.as_bytes(), &state.ntdf_expected_audience) {
+            Ok(terminal_link_ntdf::ValidationResult::Valid(claims)) => {
+                info!(
+                    "NTDF token valid for user: {:?}",
+                    hex::encode(claims.sub_id)
+                );
+                claims
+            }
+            Ok(result) => {
+                warn!("NTDF token validation failed: {:?}", result);
+                return Err(ErrorResponse {
+                    error: "authentication_failed".to_string(),
+                    message: format!("NTDF token validation failed: {:?}", result),
+                });
+            }
+            Err(e) => {
+                error!("NTDF token validation error: {}", e);
+                return Err(ErrorResponse {
+                    error: "authentication_failed".to_string(),
+                    message: format!("NTDF token validation error: {}", e),
+                });
+            }
+        };
+
+    // 0b. Validate DPoP if enabled
+    if state.enable_dpop {
+        if let Some(dpop_header) = headers.get("DPoP") {
+            if let Ok(dpop_proof) = dpop_header.to_str() {
+                // Get HTTP method and URI from request context
+                let http_method = "POST"; // Rewrap is always POST
+                let http_uri = "/kas/v2/rewrap"; // Standard rewrap URI
+
+                // Use Z85-encoded NTDF token for ath validation
+                let access_token = Some(z85_token);
+
+                match dpop::validate_dpop_proof(dpop_proof, http_method, http_uri, access_token, 60) {
+                    Ok(dpop::DPoPValidationResult::Valid { jti, jwk_thumbprint }) => {
+                        info!("DPoP proof valid: jti={}, thumbprint={}", jti, jwk_thumbprint);
+
+                        // Verify JTI matches NTDF token dpop_jti if present
+                        if let Some(ref expected_jti) = validated_ntdf_claims.dpop_jti {
+                            let jti_bytes = jti.as_bytes();
+                            if jti_bytes.len() != 16 || jti_bytes != expected_jti {
+                                warn!("DPoP JTI mismatch");
+                                return Err(ErrorResponse {
+                                    error: "authentication_failed".to_string(),
+                                    message: "DPoP JTI mismatch".to_string(),
+                                });
+                            }
+                        }
+                    }
+                    Ok(result) => {
+                        warn!("DPoP validation failed: {:?}", result);
+                        return Err(ErrorResponse {
+                            error: "authentication_failed".to_string(),
+                            message: format!("DPoP validation failed: {:?}", result),
+                        });
+                    }
+                    Err(e) => {
+                        error!("DPoP validation error: {}", e);
+                        return Err(ErrorResponse {
+                            error: "authentication_failed".to_string(),
+                            message: format!("DPoP validation error: {}", e),
+                        });
+                    }
+                }
+            } else {
+                warn!("Invalid DPoP header");
+                return Err(ErrorResponse {
+                    error: "authentication_failed".to_string(),
+                    message: "Invalid DPoP header".to_string(),
+                });
+            }
+        } else {
+            warn!("Missing DPoP header");
+            return Err(ErrorResponse {
+                error: "authentication_failed".to_string(),
+                message: "Missing DPoP header".to_string(),
+            });
+        }
+    }
+
+    // 1. Parse unsigned request directly (no OAuth JWT wrapping)
+    let unsigned_request: UnsignedRewrapRequest = serde_json::from_str(&payload.signed_request_token)
+        .map_err(|e| ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: format!("Failed to parse rewrap request: {}", e),
+        })?;
 
     // 2. Parse client public key from PEM
     let client_public_key = parse_pem_public_key(&unsigned_request.client_public_key)?;
@@ -355,46 +458,6 @@ fn process_rsa_unwrap(
     combined.extend_from_slice(&wrapped_dek);
 
     Ok(base64::encode(&combined))
-}
-
-/// Verify JWT signature and decode to UnsignedRewrapRequest
-fn verify_and_decode_jwt(
-    token: &str,
-    oauth_public_key_pem: Option<&str>,
-) -> Result<UnsignedRewrapRequest, ErrorResponse> {
-    let mut validation = Validation::new(Algorithm::ES256);
-    validation.validate_exp = true;
-
-    let token_data = if let Some(pem) = oauth_public_key_pem {
-        // Validate signature with provided public key
-        let decoding_key = DecodingKey::from_ec_pem(pem.as_bytes()).map_err(|e| ErrorResponse {
-            error: "configuration_error".to_string(),
-            message: format!("Failed to load OAuth public key: {}", e),
-        })?;
-
-        decode::<JWTClaims>(token, &decoding_key, &validation).map_err(|e| ErrorResponse {
-            error: "authentication_failed".to_string(),
-            message: format!("JWT validation failed: {}", e),
-        })?
-    } else {
-        // Development mode: skip signature validation
-        validation.insecure_disable_signature_validation();
-        decode::<JWTClaims>(token, &DecodingKey::from_secret(&[]), &validation).map_err(|e| {
-            ErrorResponse {
-                error: "authentication_failed".to_string(),
-                message: format!("Invalid JWT: {}", e),
-            }
-        })?
-    };
-
-    // Parse the requestBody JSON string
-    let unsigned_request: UnsignedRewrapRequest =
-        serde_json::from_str(&token_data.claims.request_body).map_err(|e| ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: format!("Failed to parse request body: {}", e),
-        })?;
-
-    Ok(unsigned_request)
 }
 
 /// Parse PEM-encoded P-256 public key
