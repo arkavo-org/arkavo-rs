@@ -81,6 +81,8 @@ p384 = { version = "0.13", features = ["ecdsa"] }
 moka = { version = "0.12", features = ["future"] }
 thiserror = "1.0"
 async-trait = "0.1"
+ciborium = "0.2"
+serde_bytes = "0.11"
 
 [features]
 default = []
