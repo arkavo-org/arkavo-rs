@@ -49,10 +49,11 @@ pub struct UnsignedRewrapRequest {
     pub client_public_key: String, // PEM format
     pub requests: Vec<RewrapRequestEntry>,
     // Chain validation fields (optional for backward compatibility)
-    pub chain_session_id: Option<String>,   // Chain session ID (hex-encoded)
-    pub chain_signature: Option<String>,    // ECDSA signature (base64)
-    pub chain_nonce: Option<u64>,           // Replay prevention nonce
-    pub chain_algorithm: Option<String>,    // "ES256", "ES384", defaults to "ES256"
+    pub chain_session_id: Option<String>, // Chain session ID (hex-encoded)
+    pub chain_header_hash: Option<String>, // SHA256 of header bytes (hex-encoded, DPoP binding)
+    pub chain_signature: Option<String>,  // ECDSA signature (base64)
+    pub chain_nonce: Option<u64>,         // Replay prevention nonce
+    pub chain_algorithm: Option<String>,  // "ES256", "ES384", defaults to "ES256"
 }
 
 /// Individual rewrap request entry
@@ -211,14 +212,74 @@ pub async fn rewrap_handler(
             }
         })?;
 
-        // Build validation request
+        // DPoP Header Binding: require header_hash
+        let client_header_hash_hex =
+            unsigned_request.chain_header_hash.as_ref().ok_or_else(|| {
+                warn!("Chain validation enabled but no header_hash provided");
+                ErrorResponse {
+                    error: "invalid_request".to_string(),
+                    message: "chain_header_hash is required for DPoP binding".to_string(),
+                }
+            })?;
+
+        // Decode client-provided header_hash
+        let client_header_hash_bytes =
+            hex::decode(client_header_hash_hex).map_err(|e| ErrorResponse {
+                error: "invalid_request".to_string(),
+                message: format!("Invalid header_hash hex encoding: {}", e),
+            })?;
+
+        if client_header_hash_bytes.len() != 32 {
+            return Err(ErrorResponse {
+                error: "invalid_request".to_string(),
+                message: format!(
+                    "header_hash must be 32 bytes, got {}",
+                    client_header_hash_bytes.len()
+                ),
+            });
+        }
+
+        // Get the actual header bytes from the first request
+        let header_bytes = unsigned_request
+            .requests
+            .first()
+            .and_then(|r| r.key_access_objects.first())
+            .map(|kao| base64::decode(&kao.key_access_object.header))
+            .transpose()
+            .map_err(|e| ErrorResponse {
+                error: "invalid_request".to_string(),
+                message: format!("Invalid header base64 encoding: {}", e),
+            })?
+            .ok_or_else(|| ErrorResponse {
+                error: "invalid_request".to_string(),
+                message: "No key access object found".to_string(),
+            })?;
+
+        // Compute server-side header hash
+        let server_header_hash: [u8; 32] = {
+            use sha2::{Digest, Sha256};
+            Sha256::digest(&header_bytes).into()
+        };
+
+        // DPoP binding check: verify client's header_hash matches
+        let client_header_hash: [u8; 32] = client_header_hash_bytes.try_into().unwrap();
+        if client_header_hash != server_header_hash {
+            warn!(
+                "Header hash mismatch: client={} server={}",
+                hex::encode(client_header_hash),
+                hex::encode(server_header_hash)
+            );
+            return Err(ErrorResponse {
+                error: "authentication_failed".to_string(),
+                message: "header_hash does not match actual header content".to_string(),
+            });
+        }
+
+        // Build validation request with verified header_hash
         let validation_request = ChainValidationRequest {
             session_id: session_id.clone(),
-            resource_id: unsigned_request
-                .requests
-                .first()
-                .map(|r| r.policy.id.clone())
-                .unwrap_or_default(),
+            header_hash: server_header_hash, // Use server-computed (verified) hash
+            resource_id: hex::encode(server_header_hash), // Keep for logging
             signature: base64::decode(signature).map_err(|e| ErrorResponse {
                 error: "invalid_request".to_string(),
                 message: format!("Invalid signature encoding: {}", e),
@@ -246,7 +307,10 @@ pub async fn rewrap_handler(
                         error: "policy_denied".to_string(),
                         message: format!("Session not found: {}", session_id),
                     },
-                    ValidationError::SessionExpired { expired_at, current } => ErrorResponse {
+                    ValidationError::SessionExpired {
+                        expired_at,
+                        current,
+                    } => ErrorResponse {
                         error: "policy_denied".to_string(),
                         message: format!(
                             "Session expired at block {} (current: {})",
@@ -267,9 +331,13 @@ pub async fn rewrap_handler(
                     },
                     ValidationError::ScopeMismatch { resource_id } => ErrorResponse {
                         error: "policy_denied".to_string(),
+                        message: format!("Resource {} not in session scope", resource_id),
+                    },
+                    ValidationError::HeaderHashMismatch { client, server } => ErrorResponse {
+                        error: "authentication_failed".to_string(),
                         message: format!(
-                            "Resource {} not in session scope",
-                            resource_id
+                            "Header hash mismatch: client={}, server={}",
+                            client, server
                         ),
                     },
                     ValidationError::Chain(chain_err) => ErrorResponse {

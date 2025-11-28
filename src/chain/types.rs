@@ -38,10 +38,14 @@ pub struct ChainValidationRequest {
     /// Session ID (hex-encoded 32 bytes).
     pub session_id: String,
 
-    /// Resource ID being accessed (hex-encoded).
+    /// Client-computed SHA256 of the header bytes (DPoP binding).
+    /// This binds the signature to the actual resource content being accessed.
+    pub header_hash: [u8; 32],
+
+    /// Resource ID being accessed (hex-encoded, kept for logging/debugging).
     pub resource_id: String,
 
-    /// ECDSA signature over the message: Hash(session_id || resource_id || nonce).
+    /// ECDSA signature over the message: Hash(session_id || header_hash || nonce).
     pub signature: Vec<u8>,
 
     /// Signing algorithm: "ES256", "ES384", or "ES512".
@@ -54,17 +58,20 @@ pub struct ChainValidationRequest {
 impl ChainValidationRequest {
     /// Compute the message that should be signed.
     ///
-    /// Message format: SHA256(session_id || resource_id || nonce_le_bytes)
+    /// Message format: SHA256(session_id || header_hash || nonce_le_bytes)
+    ///
+    /// This binds the signature to:
+    /// - The session ID (identifies the authorized session)
+    /// - The header hash (cryptographically binds to the actual header content)
+    /// - The nonce (prevents replay attacks)
     pub fn compute_signing_message(&self) -> Result<[u8; 32], &'static str> {
         use sha2::{Digest, Sha256};
 
         let session_bytes = hex::decode(&self.session_id).map_err(|_| "Invalid session_id hex")?;
-        let resource_bytes =
-            hex::decode(&self.resource_id).map_err(|_| "Invalid resource_id hex")?;
 
         let mut hasher = Sha256::new();
         hasher.update(&session_bytes);
-        hasher.update(&resource_bytes);
+        hasher.update(self.header_hash); // Use header_hash directly (DPoP binding)
         hasher.update(self.nonce.to_le_bytes());
 
         Ok(hasher.finalize().into())
@@ -73,9 +80,7 @@ impl ChainValidationRequest {
     /// Parse session_id as 32-byte array.
     pub fn session_id_bytes(&self) -> Result<[u8; 32], &'static str> {
         let bytes = hex::decode(&self.session_id).map_err(|_| "Invalid session_id hex")?;
-        bytes
-            .try_into()
-            .map_err(|_| "session_id must be 32 bytes")
+        bytes.try_into().map_err(|_| "session_id must be 32 bytes")
     }
 }
 
@@ -97,6 +102,7 @@ mod tests {
     fn test_compute_signing_message() {
         let request = ChainValidationRequest {
             session_id: "0".repeat(64), // 32 zero bytes
+            header_hash: [0x11; 32],    // Mock header hash
             resource_id: "1".repeat(64),
             signature: vec![],
             algorithm: "ES256".to_string(),
@@ -108,9 +114,64 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_signing_message_deterministic() {
+        // Same inputs should produce same output
+        let request1 = ChainValidationRequest {
+            session_id: "ab".repeat(32),
+            header_hash: [0x22; 32],
+            resource_id: String::new(),
+            signature: vec![],
+            algorithm: "ES256".to_string(),
+            nonce: 100,
+        };
+
+        let request2 = ChainValidationRequest {
+            session_id: "ab".repeat(32),
+            header_hash: [0x22; 32],
+            resource_id: String::new(),
+            signature: vec![],
+            algorithm: "ES256".to_string(),
+            nonce: 100,
+        };
+
+        assert_eq!(
+            request1.compute_signing_message().unwrap(),
+            request2.compute_signing_message().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_compute_signing_message_different_header_hash() {
+        // Different header_hash should produce different signing message
+        let request1 = ChainValidationRequest {
+            session_id: "ab".repeat(32),
+            header_hash: [0x11; 32],
+            resource_id: String::new(),
+            signature: vec![],
+            algorithm: "ES256".to_string(),
+            nonce: 100,
+        };
+
+        let request2 = ChainValidationRequest {
+            session_id: "ab".repeat(32),
+            header_hash: [0x22; 32], // Different header hash
+            resource_id: String::new(),
+            signature: vec![],
+            algorithm: "ES256".to_string(),
+            nonce: 100,
+        };
+
+        assert_ne!(
+            request1.compute_signing_message().unwrap(),
+            request2.compute_signing_message().unwrap()
+        );
+    }
+
+    #[test]
     fn test_session_id_bytes() {
         let request = ChainValidationRequest {
             session_id: "ab".repeat(32), // 32 bytes of 0xAB
+            header_hash: [0; 32],
             resource_id: String::new(),
             signature: vec![],
             algorithm: "ES256".to_string(),

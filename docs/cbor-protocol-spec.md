@@ -58,6 +58,7 @@ Requests DEK rewrap with chain validation.
 ```cddl
 chain_validation = {
   session_id: bstr,          ; 32-byte chain session ID
+  header_hash: bstr,         ; 32-byte SHA256 of header bytes (DPoP binding)
   signature: bstr,           ; ECDSA signature (64 or 96 bytes)
   nonce: uint,               ; Replay prevention nonce
   ? algorithm: tstr,         ; "ES256" (default), "ES384"
@@ -198,6 +199,7 @@ error_response = {
   "header": h'18010001...',  ; NanoTDF header
   "chain": {
     "session_id": h'abcd1234...',  ; 32 bytes
+    "header_hash": h'e3b0c442...',  ; SHA256(header), 32 bytes (DPoP binding)
     "signature": h'3045022100...',  ; DER or raw r||s
     "nonce": 12345,
     "algorithm": "ES256"
@@ -266,6 +268,7 @@ enum Message {
 #[derive(Serialize, Deserialize)]
 struct ChainValidation {
     session_id: Vec<u8>,
+    header_hash: Vec<u8>,  // SHA256 of header bytes (DPoP binding)
     signature: Vec<u8>,
     nonce: u64,
     #[serde(default = "default_algorithm")]
@@ -309,6 +312,7 @@ struct ChainRewrapRequest: CBOREncodable {
 
 struct ChainValidation: CBOREncodable {
     let sessionId: Data
+    let headerHash: Data  // SHA256 of header bytes (DPoP binding)
     let signature: Data
     let nonce: UInt64
     let algorithm: String
@@ -316,6 +320,7 @@ struct ChainValidation: CBOREncodable {
     func encode() -> CBOR {
         return .map([
             "session_id": .byteString(Array(sessionId)),
+            "header_hash": .byteString(Array(headerHash)),
             "signature": .byteString(Array(signature)),
             "nonce": .unsignedInt(nonce),
             "algorithm": .utf8String(algorithm)
@@ -334,6 +339,7 @@ interface ChainRewrapRequest {
   header: Uint8Array;
   chain: {
     session_id: Uint8Array;
+    header_hash: Uint8Array;  // SHA256 of header bytes (DPoP binding)
     signature: Uint8Array;
     nonce: bigint;
     algorithm?: string;
@@ -341,11 +347,15 @@ interface ChainRewrapRequest {
 }
 
 // Encoding
+const headerHash = new Uint8Array(
+  await crypto.subtle.digest('SHA-256', nanotdfHeader)
+);
 const request: ChainRewrapRequest = {
   type: 'chain_rewrap',
   header: nanotdfHeader,
   chain: {
     session_id: sessionId,
+    header_hash: headerHash,  // DPoP binding
     signature: signature,
     nonce: BigInt(nextNonce()),
     algorithm: 'ES256',
@@ -382,3 +392,7 @@ For breaking changes, introduce a new message type rather than modifying existin
 3. **String validation**: Validate UTF-8 strings
 4. **Binary validation**: Validate expected lengths for cryptographic material
 5. **Replay prevention**: Nonce must be monotonically increasing per session
+6. **DPoP Header Binding**: The `header_hash` field in `chain_validation` MUST be the SHA256 of the actual header bytes. The server verifies this matches before signature validation. This prevents header substitution attacks where an attacker might try to reuse a valid signature with a different header. Clients MUST:
+   - Compute `header_hash = SHA256(header_bytes)` locally
+   - Include `header_hash` in the signature: `SIGN(SHA256(session_id || header_hash || nonce))`
+   - Send both `header` and `header_hash` in the request

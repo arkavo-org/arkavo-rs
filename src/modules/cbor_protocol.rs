@@ -15,6 +15,11 @@ pub struct ChainValidation {
     #[serde(with = "hex_bytes")]
     pub session_id: Vec<u8>,
 
+    /// Client-computed SHA256 of header bytes (DPoP binding).
+    /// This binds the signature to the actual header content.
+    #[serde(with = "serde_bytes")]
+    pub header_hash: Vec<u8>,
+
     /// ECDSA signature over the signing message.
     #[serde(with = "serde_bytes")]
     pub signature: Vec<u8>,
@@ -324,10 +329,18 @@ mod tests {
 
     #[test]
     fn test_chain_rewrap_roundtrip() {
+        let header = vec![0x18, 0x01, 0x00, 0x01];
+        // Compute header_hash as SHA256 of header
+        let header_hash = {
+            use sha2::{Digest, Sha256};
+            Sha256::digest(&header).to_vec()
+        };
+
         let request = CborRequest::ChainRewrap {
-            header: vec![0x18, 0x01, 0x00, 0x01],
+            header: header.clone(),
             chain: ChainValidation {
                 session_id: vec![0xAB; 32],
+                header_hash: header_hash.clone(),
                 signature: vec![0xCD; 64],
                 nonce: 12345,
                 algorithm: "ES256".to_string(),
@@ -342,9 +355,11 @@ mod tests {
         let decoded: CborRequest = ciborium::de::from_reader(&encoded[..]).unwrap();
 
         match decoded {
-            CborRequest::ChainRewrap { header, chain } => {
-                assert_eq!(header, vec![0x18, 0x01, 0x00, 0x01]);
+            CborRequest::ChainRewrap { header: h, chain } => {
+                assert_eq!(h, header);
                 assert_eq!(chain.session_id.len(), 32);
+                assert_eq!(chain.header_hash.len(), 32);
+                assert_eq!(chain.header_hash, header_hash);
                 assert_eq!(chain.nonce, 12345);
                 assert_eq!(chain.algorithm, "ES256");
             }

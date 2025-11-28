@@ -390,10 +390,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Successfully connected to Redis server");
 
     // Initialize chain client for blockchain-driven session validation
-    info!(
-        "Initializing chain client for {}",
-        settings.chain_rpc_url
-    );
+    info!("Initializing chain client for {}", settings.chain_rpc_url);
     let chain_client = Arc::new(chain::ChainClient::new(settings.chain_rpc_url.clone()));
 
     // Generate server secret for cache integrity (random 32 bytes)
@@ -407,13 +404,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     // Create chain validator
-    let chain_validator: Arc<dyn chain::SessionValidator> =
-        Arc::new(chain::ChainValidator::new(chain_client.clone(), session_cache));
+    let chain_validator: Arc<dyn chain::SessionValidator> = Arc::new(chain::ChainValidator::new(
+        chain_client.clone(),
+        session_cache,
+    ));
 
     info!("Chain validation initialized (cache TTL: 6s)");
 
     let server_state = Arc::new(
-        ServerState::new(settings.clone(), redis_client, Some(chain_validator.clone())).await?,
+        ServerState::new(
+            settings.clone(),
+            redis_client,
+            Some(chain_validator.clone()),
+        )
+        .await?,
     );
     // Load and cache the apple-app-site-association.json file
     let apple_app_site_association = load_apple_app_site_association().await;
@@ -1433,7 +1437,10 @@ async fn handle_cbor_message(
         }
     };
 
-    info!("Received CBOR message: {:?}", std::mem::discriminant(&request));
+    info!(
+        "Received CBOR message: {:?}",
+        std::mem::discriminant(&request)
+    );
 
     match request {
         CborRequest::ChainRewrap { header, chain } => {
@@ -1514,18 +1521,44 @@ async fn handle_chain_rewrap(
         ));
     }
 
-    // Extract resource_id from NanoTDF header policy (simplified - use first 32 bytes of header hash)
-    let resource_id = {
+    // DPoP Header Binding: Verify client-provided header_hash matches server computation
+    let server_header_hash: [u8; 32] = {
         use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(header);
-        let hash: [u8; 32] = hasher.finalize().into();
-        hex::encode(hash)
+        Sha256::digest(header).into()
     };
 
+    // Verify header_hash is correct length
+    if chain.header_hash.len() != 32 {
+        error!(
+            "Invalid header_hash length: {} (expected 32)",
+            chain.header_hash.len()
+        );
+        return Some(cbor_error_response(
+            "invalid_request",
+            "header_hash must be exactly 32 bytes",
+        ));
+    }
+    let client_header_hash: [u8; 32] = chain.header_hash.clone().try_into().unwrap();
+
+    // Critical security check: client's header_hash must match server-computed hash
+    // This binds the signature to the actual header content (DPoP-style binding)
+    if client_header_hash != server_header_hash {
+        error!(
+            "Header hash mismatch: client={} server={}",
+            hex::encode(client_header_hash),
+            hex::encode(server_header_hash)
+        );
+        return Some(cbor_error_response(
+            "authentication_failed",
+            "header_hash does not match actual header content",
+        ));
+    }
+
+    // Build validation request with verified header_hash
     let validation_request = ChainValidationRequest {
         session_id: hex::encode(&chain.session_id),
-        resource_id,
+        header_hash: server_header_hash, // Use server-computed (verified) hash
+        resource_id: hex::encode(server_header_hash), // Keep for logging
         signature: chain.signature.clone(),
         algorithm: chain.algorithm.clone(),
         nonce: chain.nonce,
@@ -1542,12 +1575,19 @@ async fn handle_chain_rewrap(
         Err(e) => {
             log::warn!("Chain validation failed: {:?}", e);
             let (code, message) = match e {
-                ValidationError::SessionNotFound { session_id } => {
-                    ("policy_denied", format!("Session not found: {}", session_id))
-                }
-                ValidationError::SessionExpired { expired_at, current } => (
+                ValidationError::SessionNotFound { session_id } => (
                     "policy_denied",
-                    format!("Session expired at block {} (current: {})", expired_at, current),
+                    format!("Session not found: {}", session_id),
+                ),
+                ValidationError::SessionExpired {
+                    expired_at,
+                    current,
+                } => (
+                    "policy_denied",
+                    format!(
+                        "Session expired at block {} (current: {})",
+                        expired_at, current
+                    ),
                 ),
                 ValidationError::SessionRevoked => {
                     ("policy_denied", "Session has been revoked".to_string())
@@ -1564,9 +1604,14 @@ async fn handle_chain_rewrap(
                     "policy_denied",
                     format!("Resource {} not in session scope", resource_id),
                 ),
-                ValidationError::Chain(chain_err) => {
-                    ("internal_error", format!("Chain query failed: {}", chain_err))
-                }
+                ValidationError::HeaderHashMismatch { client, server } => (
+                    "authentication_failed",
+                    format!("Header hash mismatch: client={}, server={}", client, server),
+                ),
+                ValidationError::Chain(chain_err) => (
+                    "internal_error",
+                    format!("Chain query failed: {}", chain_err),
+                ),
                 ValidationError::Crypto(err) => {
                     ("internal_error", format!("Crypto error: {}", err))
                 }
@@ -1648,16 +1693,17 @@ async fn handle_chain_rewrap(
         }
     };
 
-    let dek_shared_secret_bytes = match crypto::custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
-        Ok(secret) => secret,
-        Err(e) => {
-            error!("ECDH failed: {:?}", e);
-            return Some(cbor_error_response(
-                "internal_error",
-                &format!("Key agreement failed: {}", e),
-            ));
-        }
-    };
+    let dek_shared_secret_bytes =
+        match crypto::custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
+            Ok(secret) => secret,
+            Err(e) => {
+                error!("ECDH failed: {:?}", e);
+                return Some(cbor_error_response(
+                    "internal_error",
+                    &format!("Key agreement failed: {}", e),
+                ));
+            }
+        };
 
     // Determine HKDF salt based on NanoTDF version
     let nanotdf_salt = if let Some(version) = crypto::detect_nanotdf_version(header) {
@@ -1730,10 +1776,7 @@ async fn handle_cbor_key_exchange(
     }
 
     if public_key.len() != 33 && public_key.len() != 65 {
-        error!(
-            "Invalid client public key size: {} bytes",
-            public_key.len()
-        );
+        error!("Invalid client public key size: {} bytes", public_key.len());
         return Some(cbor_error_response(
             "invalid_format",
             &format!(

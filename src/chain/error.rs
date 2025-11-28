@@ -17,6 +17,9 @@ pub enum ValidationError {
     #[error("Resource scope mismatch: resource {resource_id} not in session scope")]
     ScopeMismatch { resource_id: String },
 
+    #[error("Header hash mismatch: client provided {client}, server computed {server}")]
+    HeaderHashMismatch { client: String, server: String },
+
     #[error("Invalid signature: {reason}")]
     SignatureInvalid { reason: String },
 

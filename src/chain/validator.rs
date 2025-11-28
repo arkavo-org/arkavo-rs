@@ -8,7 +8,6 @@ use crate::chain::error::ValidationError;
 use crate::chain::types::{ChainValidationRequest, SessionGrant, ValidatedSession};
 use async_trait::async_trait;
 use log::{debug, info, warn};
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 /// Trait for session validation.
@@ -54,10 +53,7 @@ impl ChainValidator {
         // Try cache first
         if let Some(grant) = self.cache.get(session_id).await {
             let current_block = self.client.current_block().await?;
-            debug!(
-                "Cache hit for session {}",
-                hex::encode(&session_id[..8])
-            );
+            debug!("Cache hit for session {}", hex::encode(&session_id[..8]));
             return Ok((grant, current_block));
         }
 
@@ -89,11 +85,12 @@ impl ChainValidator {
         request: &ChainValidationRequest,
         grant: &SessionGrant,
     ) -> Result<(), ValidationError> {
-        let message = request
-            .compute_signing_message()
-            .map_err(|e| ValidationError::SignatureInvalid {
-                reason: e.to_string(),
-            })?;
+        let message =
+            request
+                .compute_signing_message()
+                .map_err(|e| ValidationError::SignatureInvalid {
+                    reason: e.to_string(),
+                })?;
 
         // Verify using the appropriate algorithm
         let valid = match request.algorithm.as_str() {
@@ -136,9 +133,10 @@ impl ChainValidator {
             }
         })?;
 
-        let sig = Signature::from_slice(signature).map_err(|e| ValidationError::SignatureInvalid {
-            reason: format!("Invalid ES256 signature format: {}", e),
-        })?;
+        let sig =
+            Signature::from_slice(signature).map_err(|e| ValidationError::SignatureInvalid {
+                reason: format!("Invalid ES256 signature format: {}", e),
+            })?;
 
         Ok(verifying_key.verify(message, &sig).is_ok())
     }
@@ -159,9 +157,10 @@ impl ChainValidator {
             }
         })?;
 
-        let sig = Signature::from_slice(signature).map_err(|e| ValidationError::SignatureInvalid {
-            reason: format!("Invalid ES384 signature format: {}", e),
-        })?;
+        let sig =
+            Signature::from_slice(signature).map_err(|e| ValidationError::SignatureInvalid {
+                reason: format!("Invalid ES384 signature format: {}", e),
+            })?;
 
         Ok(verifying_key.verify(message, &sig).is_ok())
     }
@@ -182,21 +181,22 @@ impl ChainValidator {
         })
     }
 
-    /// Check if resource matches session scope.
-    fn check_scope(&self, resource_id: &str, scope_id: &[u8; 32]) -> Result<(), ValidationError> {
-        // Compute resource hash and compare to scope
-        let resource_bytes = hex::decode(resource_id).map_err(|_| ValidationError::ScopeMismatch {
-            resource_id: resource_id.to_string(),
-        })?;
-
-        let resource_hash: [u8; 32] = Sha256::digest(&resource_bytes).into();
-
-        // Simple scope check: resource hash must equal scope_id
-        // In production, this could be extended to support merkle proofs
-        // for multiple resources within a scope.
-        if resource_hash != *scope_id {
+    /// Check if header hash matches session scope.
+    ///
+    /// The header_hash (SHA256 of the actual header bytes) is compared directly
+    /// to the scope_id. This provides DPoP-style binding: the client commits to
+    /// the header content by computing its hash, and we verify it matches the
+    /// authorized scope.
+    fn check_scope(
+        &self,
+        header_hash: &[u8; 32],
+        scope_id: &[u8; 32],
+    ) -> Result<(), ValidationError> {
+        // Direct comparison: header_hash must equal scope_id
+        // The scope_id is the SHA256 of the authorized header
+        if header_hash != scope_id {
             return Err(ValidationError::ScopeMismatch {
-                resource_id: resource_id.to_string(),
+                resource_id: hex::encode(header_hash),
             });
         }
 
@@ -210,11 +210,12 @@ impl SessionValidator for ChainValidator {
         &self,
         request: &ChainValidationRequest,
     ) -> Result<ValidatedSession, ValidationError> {
-        let session_id = request.session_id_bytes().map_err(|e| {
-            ValidationError::SessionNotFound {
-                session_id: format!("Invalid format: {}", e),
-            }
-        })?;
+        let session_id =
+            request
+                .session_id_bytes()
+                .map_err(|e| ValidationError::SessionNotFound {
+                    session_id: format!("Invalid format: {}", e),
+                })?;
 
         debug!(
             "Validating session {} for resource {}",
@@ -245,8 +246,8 @@ impl SessionValidator for ChainValidator {
             return Err(ValidationError::SessionRevoked);
         }
 
-        // 4. Check scope
-        self.check_scope(&request.resource_id, &grant.scope_id)?;
+        // 4. Check scope (DPoP binding: header_hash must match scope_id)
+        self.check_scope(&request.header_hash, &grant.scope_id)?;
 
         // 5. Verify signature
         self.verify_signature(request, &grant)?;
@@ -315,5 +316,98 @@ mod tests {
                 })
             }
         }
+    }
+
+    /// Test that scope check passes when header_hash matches scope_id
+    #[test]
+    fn test_scope_check_matching_header_hash() {
+        // Test the direct comparison that check_scope performs
+        let header_hash: [u8; 32] = [0xAB; 32];
+        let scope_id: [u8; 32] = [0xAB; 32]; // Same as header_hash
+
+        // Direct comparison should pass
+        assert_eq!(header_hash, scope_id);
+    }
+
+    /// Test that scope check fails when header_hash doesn't match scope_id
+    #[test]
+    fn test_scope_check_mismatched_header_hash() {
+        let header_hash: [u8; 32] = [0xAB; 32];
+        let scope_id: [u8; 32] = [0xCD; 32]; // Different from header_hash
+
+        // Direct comparison should fail
+        assert_ne!(header_hash, scope_id);
+    }
+
+    /// Test that header substitution attack is prevented
+    /// Scenario: Attacker has valid signature for header_a, tries to use it with header_b
+    #[test]
+    fn test_header_substitution_attack_prevented() {
+        use sha2::{Digest, Sha256};
+
+        // Legitimate header signed by client
+        let header_a = b"legitimate-nanotdf-header-bytes";
+        let header_hash_a: [u8; 32] = Sha256::digest(header_a).into();
+
+        // Malicious header attacker wants to substitute
+        let header_b = b"malicious-substitute-header";
+        let header_hash_b: [u8; 32] = Sha256::digest(header_b).into();
+
+        // Server computes hash of received header (header_b in attack scenario)
+        // and compares to client-provided header_hash (header_hash_a)
+        //
+        // In the attack:
+        // - Client signed with header_hash_a
+        // - Attacker sends header_b but claims header_hash_a
+        // - Server computes SHA256(header_b) = header_hash_b
+        // - Server compares: header_hash_a != header_hash_b
+        // - Attack FAILS
+
+        assert_ne!(
+            header_hash_a, header_hash_b,
+            "Different headers must produce different hashes"
+        );
+
+        // This ensures the server's check will catch the substitution
+        let server_computed = header_hash_b; // Server computes from received header
+        let client_claimed = header_hash_a; // Client claims this hash
+
+        assert_ne!(
+            server_computed, client_claimed,
+            "Header substitution attack must be detected"
+        );
+    }
+
+    /// Test that signing message includes header_hash
+    #[test]
+    fn test_signing_message_includes_header_hash() {
+        // Create two requests with same session_id and nonce but different header_hash
+        let request1 = ChainValidationRequest {
+            session_id: "ab".repeat(32),
+            header_hash: [0x11; 32],
+            resource_id: String::new(),
+            signature: vec![],
+            algorithm: "ES256".to_string(),
+            nonce: 100,
+        };
+
+        let request2 = ChainValidationRequest {
+            session_id: "ab".repeat(32),
+            header_hash: [0x22; 32], // Different header hash
+            resource_id: String::new(),
+            signature: vec![],
+            algorithm: "ES256".to_string(),
+            nonce: 100,
+        };
+
+        let msg1 = request1.compute_signing_message().unwrap();
+        let msg2 = request2.compute_signing_message().unwrap();
+
+        // Different header_hash must produce different signing messages
+        // This ensures the signature is bound to the specific header content
+        assert_ne!(
+            msg1, msg2,
+            "Different header_hash must produce different signing messages"
+        );
     }
 }

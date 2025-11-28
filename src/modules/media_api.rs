@@ -65,10 +65,11 @@ pub struct MediaKeyRequest {
     // FairPlay fields
     pub spc_data: Option<String>, // Base64-encoded (for FairPlay)
     // Chain validation fields (optional for backward compatibility)
-    pub chain_session_id: Option<String>,   // Chain session ID (hex-encoded)
-    pub chain_signature: Option<String>,    // ECDSA signature (base64)
-    pub chain_nonce: Option<u64>,           // Replay prevention nonce
-    pub chain_algorithm: Option<String>,    // "ES256", "ES384", defaults to "ES256"
+    pub chain_session_id: Option<String>, // Chain session ID (hex-encoded)
+    pub chain_header_hash: Option<String>, // SHA256 of header bytes (hex-encoded, DPoP binding)
+    pub chain_signature: Option<String>,  // ECDSA signature (base64)
+    pub chain_nonce: Option<u64>,         // Replay prevention nonce
+    pub chain_algorithm: Option<String>,  // "ES256", "ES384", defaults to "ES256"
 }
 
 #[derive(Debug, Serialize)]
@@ -250,16 +251,77 @@ async fn validate_chain_session(
         }
     })?;
 
+    // DPoP Header Binding: require header_hash
+    let client_header_hash_hex = payload.chain_header_hash.as_ref().ok_or_else(|| {
+        warn!("Chain validation enabled but no chain_header_hash provided");
+        ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: "chain_header_hash is required for DPoP binding".to_string(),
+        }
+    })?;
+
+    // Decode client-provided header_hash
+    let client_header_hash_bytes =
+        hex::decode(client_header_hash_hex).map_err(|e| ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: format!("Invalid chain_header_hash hex encoding: {}", e),
+        })?;
+
+    if client_header_hash_bytes.len() != 32 {
+        return Err(ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: format!(
+                "chain_header_hash must be 32 bytes, got {}",
+                client_header_hash_bytes.len()
+            ),
+        });
+    }
+
+    // Get the actual header bytes from the nanotdf_header field
+    let header_bytes = payload
+        .nanotdf_header
+        .as_ref()
+        .ok_or_else(|| ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: "nanotdf_header is required for chain validation".to_string(),
+        })?;
+
+    let header_bytes = crypto::base64_decode(header_bytes).map_err(|e| ErrorResponse {
+        error: "invalid_request".to_string(),
+        message: format!("Invalid nanotdf_header base64 encoding: {}", e),
+    })?;
+
+    // Compute server-side header hash
+    let server_header_hash: [u8; 32] = {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(&header_bytes).into()
+    };
+
+    // DPoP binding check: verify client's header_hash matches
+    let client_header_hash: [u8; 32] = client_header_hash_bytes.try_into().unwrap();
+    if client_header_hash != server_header_hash {
+        warn!(
+            "Header hash mismatch: client={} server={}",
+            hex::encode(client_header_hash),
+            hex::encode(server_header_hash)
+        );
+        return Err(ErrorResponse {
+            error: "authentication_failed".to_string(),
+            message: "chain_header_hash does not match actual header content".to_string(),
+        });
+    }
+
     // Decode signature from base64
     let signature_bytes = crypto::base64_decode(signature).map_err(|e| ErrorResponse {
         error: "invalid_request".to_string(),
         message: format!("Invalid chain_signature encoding: {}", e),
     })?;
 
-    // Build validation request
+    // Build validation request with verified header_hash
     let validation_request = ChainValidationRequest {
         session_id: session_id.clone(),
-        resource_id: payload.asset_id.clone(),
+        header_hash: server_header_hash, // Use server-computed (verified) hash
+        resource_id: hex::encode(server_header_hash), // Keep for logging
         signature: signature_bytes,
         algorithm: payload
             .chain_algorithm
@@ -285,7 +347,10 @@ async fn validate_chain_session(
                     error: "policy_denied".to_string(),
                     message: format!("Session not found: {}", session_id),
                 },
-                ValidationError::SessionExpired { expired_at, current } => ErrorResponse {
+                ValidationError::SessionExpired {
+                    expired_at,
+                    current,
+                } => ErrorResponse {
                     error: "policy_denied".to_string(),
                     message: format!(
                         "Session expired at block {} (current: {})",
@@ -307,6 +372,10 @@ async fn validate_chain_session(
                 ValidationError::ScopeMismatch { resource_id } => ErrorResponse {
                     error: "policy_denied".to_string(),
                     message: format!("Resource {} not in session scope", resource_id),
+                },
+                ValidationError::HeaderHashMismatch { client, server } => ErrorResponse {
+                    error: "authentication_failed".to_string(),
+                    message: format!("Header hash mismatch: client={}, server={}", client, server),
                 },
                 ValidationError::Chain(chain_err) => ErrorResponse {
                     error: "internal_error".to_string(),
@@ -955,6 +1024,7 @@ mod tests {
             nanotdf_header: Some("base64header".to_string()),
             spc_data: None,
             chain_session_id: None,
+            chain_header_hash: None,
             chain_signature: None,
             chain_nonce: None,
             chain_algorithm: None,
@@ -974,6 +1044,7 @@ mod tests {
             nanotdf_header: None,
             spc_data: Some("base64spc".to_string()),
             chain_session_id: None,
+            chain_header_hash: None,
             chain_signature: None,
             chain_nonce: None,
             chain_algorithm: None,
@@ -993,6 +1064,7 @@ mod tests {
             nanotdf_header: None,
             spc_data: None,
             chain_session_id: None,
+            chain_header_hash: None,
             chain_signature: None,
             chain_nonce: None,
             chain_algorithm: None,
@@ -1013,6 +1085,7 @@ mod tests {
             nanotdf_header: None,
             spc_data: None,
             chain_session_id: None,
+            chain_header_hash: None,
             chain_signature: None,
             chain_nonce: None,
             chain_algorithm: None,
