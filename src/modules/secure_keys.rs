@@ -2,6 +2,11 @@
 //!
 //! This module provides wrappers around cryptographic keys that ensure
 //! sensitive key material is automatically zeroized on drop.
+//!
+//! Note: These types are prepared for future use in WebSocket handler
+//! chain validation but not yet integrated.
+
+#![allow(dead_code)]
 
 use elliptic_curve::sec1::ToEncodedPoint;
 use p256::SecretKey;

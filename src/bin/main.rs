@@ -464,14 +464,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             (None, None)
         };
 
-    let rewrap_state = Arc::new(http_rewrap::RewrapState {
-        kas_ec_private_key: kas_private_key,
-        kas_ec_public_key_pem: kas_public_key_pem,
-        kas_rsa_private_key,
-        kas_rsa_public_key_pem,
-        oauth_public_key_pem,
-    });
-
     // Initialize chain client for blockchain-driven session validation
     info!(
         "Initializing chain client for {}",
@@ -494,6 +486,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(chain::ChainValidator::new(chain_client.clone(), session_cache));
 
     info!("Chain validation initialized (cache TTL: 6s)");
+
+    // Create HTTP rewrap state with chain validator
+    let rewrap_state = Arc::new(http_rewrap::RewrapState {
+        kas_ec_private_key: kas_private_key,
+        kas_ec_public_key_pem: kas_public_key_pem,
+        kas_rsa_private_key,
+        kas_rsa_public_key_pem,
+        oauth_public_key_pem,
+        chain_validator: Some(chain_validator.clone()),
+    });
 
     // Initialize media DRM components
     let max_concurrent_streams = env::var("MAX_CONCURRENT_STREAMS")
@@ -560,6 +562,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         fairplay_handler: Some(fairplay_handler),
         #[cfg(not(feature = "fairplay"))]
         fairplay_handler: None,
+        chain_validator: Some(chain_validator.clone()),
     });
 
     // Initialize C2PA signing state (optional - only if configured)

@@ -127,14 +127,14 @@ impl SessionCache {
     /// Compute HMAC integrity tag for a cached entry.
     fn compute_integrity_tag(&self, grant: &SessionGrant, block_number: u64) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(&self.server_secret);
-        hasher.update(&grant.session_id);
+        hasher.update(self.server_secret);
+        hasher.update(grant.session_id);
         hasher.update(&grant.eph_pub_key);
-        hasher.update(&grant.scope_id);
-        hasher.update(&grant.expires_at_block.to_le_bytes());
-        hasher.update(&[grant.is_revoked as u8]);
-        hasher.update(&grant.created_at_block.to_le_bytes());
-        hasher.update(&block_number.to_le_bytes());
+        hasher.update(grant.scope_id);
+        hasher.update(grant.expires_at_block.to_le_bytes());
+        hasher.update([grant.is_revoked as u8]);
+        hasher.update(grant.created_at_block.to_le_bytes());
+        hasher.update(block_number.to_le_bytes());
         hasher.finalize().into()
     }
 }

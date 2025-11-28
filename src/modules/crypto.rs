@@ -258,7 +258,10 @@ pub fn base64_decode(data: &str) -> Result<Vec<u8>, base64::DecodeError> {
 }
 
 // ==================== ECDSA Signature Verification ====================
+// Note: These functions are prepared for WebSocket handler chain validation
+// but not yet integrated.
 
+#[allow(dead_code)]
 /// Error type for signature verification operations.
 #[derive(Debug, thiserror::Error)]
 pub enum SignatureError {
@@ -285,6 +288,7 @@ pub enum SignatureError {
 ///
 /// # Returns
 /// `Ok(true)` if signature is valid, `Ok(false)` if invalid, `Err` on format errors.
+#[allow(dead_code)]
 pub fn verify_ecdsa_signature(
     algorithm: &str,
     public_key: &[u8],

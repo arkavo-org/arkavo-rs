@@ -65,7 +65,7 @@ impl ChainValidationRequest {
         let mut hasher = Sha256::new();
         hasher.update(&session_bytes);
         hasher.update(&resource_bytes);
-        hasher.update(&self.nonce.to_le_bytes());
+        hasher.update(self.nonce.to_le_bytes());
 
         Ok(hasher.finalize().into())
     }
