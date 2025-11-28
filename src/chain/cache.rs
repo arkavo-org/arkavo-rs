@@ -97,17 +97,9 @@ impl SessionCache {
         session_id: &[u8; 32],
         nonce: u64,
     ) -> Result<bool, CacheError> {
-        let key = format!(
-            "{}{}:{}",
-            NONCE_KEY_PREFIX,
-            hex::encode(session_id),
-            nonce
-        );
+        let key = format!("{}{}:{}", NONCE_KEY_PREFIX, hex::encode(session_id), nonce);
 
-        let mut conn = self
-            .redis_client
-            .get_multiplexed_async_connection()
-            .await?;
+        let mut conn = self.redis_client.get_multiplexed_async_connection().await?;
 
         // SETNX with TTL - atomic check-and-set
         // TTL of 5 minutes should be enough to prevent replays within session lifetime

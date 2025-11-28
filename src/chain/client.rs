@@ -173,7 +173,8 @@ impl ChainClient {
             });
         }
 
-        self.last_known_block.store(current_block, Ordering::Relaxed);
+        self.last_known_block
+            .store(current_block, Ordering::Relaxed);
         debug!("Node health OK: block {}", current_block);
 
         Ok(())

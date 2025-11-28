@@ -306,33 +306,43 @@ pub fn verify_ecdsa_signature(
 }
 
 /// Verify ES256 (P-256/secp256r1) signature.
-fn verify_es256(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<bool, SignatureError> {
+fn verify_es256(
+    public_key: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<bool, SignatureError> {
     use ecdsa::signature::Verifier;
     use p256::ecdsa::{Signature, VerifyingKey};
 
-    let verifying_key =
-        VerifyingKey::from_sec1_bytes(public_key).map_err(|e| SignatureError::InvalidPublicKey(e.to_string()))?;
+    let verifying_key = VerifyingKey::from_sec1_bytes(public_key)
+        .map_err(|e| SignatureError::InvalidPublicKey(e.to_string()))?;
 
     // Try to parse signature - could be raw (r||s) or DER encoded
     let sig = parse_ecdsa_signature::<64>(signature)?;
 
-    let p256_sig = Signature::from_slice(&sig).map_err(|e| SignatureError::InvalidSignatureFormat(e.to_string()))?;
+    let p256_sig = Signature::from_slice(&sig)
+        .map_err(|e| SignatureError::InvalidSignatureFormat(e.to_string()))?;
 
     Ok(verifying_key.verify(message, &p256_sig).is_ok())
 }
 
 /// Verify ES384 (P-384/secp384r1) signature.
-fn verify_es384(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<bool, SignatureError> {
+fn verify_es384(
+    public_key: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<bool, SignatureError> {
     use ecdsa::signature::Verifier;
     use p384::ecdsa::{Signature, VerifyingKey};
 
-    let verifying_key =
-        VerifyingKey::from_sec1_bytes(public_key).map_err(|e| SignatureError::InvalidPublicKey(e.to_string()))?;
+    let verifying_key = VerifyingKey::from_sec1_bytes(public_key)
+        .map_err(|e| SignatureError::InvalidPublicKey(e.to_string()))?;
 
     // Try to parse signature - could be raw (r||s) or DER encoded
     let sig = parse_ecdsa_signature::<96>(signature)?;
 
-    let p384_sig = Signature::from_slice(&sig).map_err(|e| SignatureError::InvalidSignatureFormat(e.to_string()))?;
+    let p384_sig = Signature::from_slice(&sig)
+        .map_err(|e| SignatureError::InvalidSignatureFormat(e.to_string()))?;
 
     Ok(verifying_key.verify(message, &p384_sig).is_ok())
 }
@@ -402,7 +412,8 @@ fn parse_der_signature<const N: usize>(der: &[u8]) -> Result<[u8; N], SignatureE
 
     // Copy R with proper padding
     let r_dest_start = component_len.saturating_sub(r_actual_len);
-    result[r_dest_start..component_len].copy_from_slice(&der[r_start..r_start + r_actual_len.min(component_len)]);
+    result[r_dest_start..component_len]
+        .copy_from_slice(&der[r_start..r_start + r_actual_len.min(component_len)]);
 
     pos += r_len;
 
@@ -430,7 +441,8 @@ fn parse_der_signature<const N: usize>(der: &[u8]) -> Result<[u8; N], SignatureE
 
     // Copy S with proper padding
     let s_dest_start = component_len + component_len.saturating_sub(s_actual_len);
-    result[s_dest_start..].copy_from_slice(&der[s_start..s_start + s_actual_len.min(component_len)]);
+    result[s_dest_start..]
+        .copy_from_slice(&der[s_start..s_start + s_actual_len.min(component_len)]);
 
     Ok(result)
 }
@@ -463,6 +475,9 @@ mod signature_tests {
     #[test]
     fn test_unsupported_algorithm() {
         let result = verify_ecdsa_signature("ES512", &[], &[], &[]);
-        assert!(matches!(result, Err(SignatureError::UnsupportedAlgorithm(_))));
+        assert!(matches!(
+            result,
+            Err(SignatureError::UnsupportedAlgorithm(_))
+        ));
     }
 }
