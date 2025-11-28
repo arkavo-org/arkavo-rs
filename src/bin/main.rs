@@ -2,7 +2,7 @@ mod contracts;
 mod schemas;
 
 // Import modules from library
-use nanotdf::{media_metrics, session_manager};
+use nanotdf::{chain, media_metrics, session_manager};
 
 // Include modules from parent src/modules directory
 #[path = "../modules/mod.rs"]
@@ -471,6 +471,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         kas_rsa_public_key_pem,
         oauth_public_key_pem,
     });
+
+    // Initialize chain client for blockchain-driven session validation
+    info!(
+        "Initializing chain client for {}",
+        settings.chain_rpc_url
+    );
+    let chain_client = Arc::new(chain::ChainClient::new(settings.chain_rpc_url.clone()));
+
+    // Generate server secret for cache integrity (random 32 bytes)
+    let mut server_secret = [0u8; 32];
+    OsRng.fill_bytes(&mut server_secret);
+
+    // Initialize session cache with 6-second TTL
+    let session_cache = Arc::new(chain::SessionCache::new(
+        server_secret,
+        Arc::new(server_state.redis_client.clone()),
+    ));
+
+    // Create chain validator
+    let chain_validator: Arc<dyn chain::SessionValidator> =
+        Arc::new(chain::ChainValidator::new(chain_client.clone(), session_cache));
+
+    info!("Chain validation initialized (cache TTL: 6s)");
 
     // Initialize media DRM components
     let max_concurrent_streams = env::var("MAX_CONCURRENT_STREAMS")
@@ -1864,6 +1887,8 @@ struct ServerSettings {
     jwt_validation_disabled: bool,
     jwt_public_key_path: Option<String>,
     s3_bucket: String,
+    /// Chain RPC URL for blockchain connectivity
+    chain_rpc_url: String,
 }
 
 fn log_timing(settings: &ServerSettings, message: &str, duration: std::time::Duration) {
@@ -1913,6 +1938,8 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
             .unwrap_or(true),
         jwt_public_key_path: env::var("JWT_PUBLIC_KEY_PATH").ok(),
         s3_bucket: env::var("S3_BUCKET").unwrap_or_else(|_| "default-bucket".to_string()),
+        chain_rpc_url: env::var("CHAIN_RPC_URL")
+            .unwrap_or_else(|_| "ws://chain.arkavo.net".to_string()),
     })
 }
 
@@ -1987,6 +2014,19 @@ fn validate_config(settings: &ServerSettings) -> Result<(), Box<dyn std::error::
     // Validate S3 bucket name
     if settings.s3_bucket.is_empty() {
         return Err("S3_BUCKET must not be empty".into());
+    }
+
+    // Validate Chain RPC URL format
+    if !settings.chain_rpc_url.starts_with("ws://")
+        && !settings.chain_rpc_url.starts_with("wss://")
+        && !settings.chain_rpc_url.starts_with("http://")
+        && !settings.chain_rpc_url.starts_with("https://")
+    {
+        return Err(format!(
+            "CHAIN_RPC_URL must be a valid WebSocket or HTTP URL: {}",
+            settings.chain_rpc_url
+        )
+        .into());
     }
 
     info!("✓ Configuration validation passed");
