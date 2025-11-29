@@ -180,25 +180,66 @@ impl ChainClient {
         Ok(())
     }
 
-    /// Compute the storage key for a session in the access_registry contract.
+    /// Compute the storage key for a session in the access_registry Ink! contract.
     ///
-    /// This uses the standard Ink! storage key computation:
-    /// twox_128("access_registry") ++ twox_128("sessions") ++ blake2_128_concat(session_id)
+    /// For Ink! Mapping storage, the key is computed as:
+    /// blake2_256(storage_slot_le_bytes ++ SCALE_encoded_map_key)
+    ///
+    /// Storage slot 1 corresponds to the `sessions` field (second field in contract storage,
+    /// after `entitlements`).
     fn compute_session_storage_key(&self, session_id: &[u8; 32]) -> Vec<u8> {
-        use sha2::{Digest, Sha256};
+        use blake2::{digest::consts::U32, Blake2b, Digest};
+        use scale::Encode;
 
-        // Simplified storage key computation
-        // In production, use proper Ink! storage key derivation
-        let mut key = Vec::with_capacity(80);
+        // Ink! assigns storage keys based on field order in the contract struct.
+        // Storage slot for "sessions" field (second field after entitlements).
+        let storage_slot: u32 = 1;
 
-        // Contract storage prefix (placeholder - would use actual contract address)
-        let contract_prefix = Sha256::digest(b"access_registry:sessions");
-        key.extend_from_slice(&contract_prefix[..16]);
+        let mut key_data = Vec::new();
+        key_data.extend_from_slice(&storage_slot.to_le_bytes());
+        key_data.extend_from_slice(&session_id.encode());
 
-        // Session ID with blake2 concat
-        key.extend_from_slice(session_id);
+        // Blake2-256 hash of the combined key
+        let mut hasher = Blake2b::<U32>::new();
+        hasher.update(&key_data);
+        let result = hasher.finalize();
 
-        key
+        result.to_vec()
+    }
+
+    /// Compute TwoX 128-bit hash (Substrate standard for pallet/field names).
+    #[allow(dead_code)]
+    fn twox_128(data: &[u8]) -> [u8; 16] {
+        use std::hash::Hasher;
+        use twox_hash::XxHash64;
+
+        // TwoX128 = XxHash64(seed=0) || XxHash64(seed=1)
+        let mut h0 = XxHash64::with_seed(0);
+        let mut h1 = XxHash64::with_seed(1);
+        h0.write(data);
+        h1.write(data);
+
+        let r0 = h0.finish();
+        let r1 = h1.finish();
+
+        let mut result = [0u8; 16];
+        result[..8].copy_from_slice(&r0.to_le_bytes());
+        result[8..].copy_from_slice(&r1.to_le_bytes());
+        result
+    }
+
+    /// Compute Blake2b 128-bit hash.
+    #[allow(dead_code)]
+    fn blake2_128(data: &[u8]) -> [u8; 16] {
+        use blake2::{digest::consts::U16, Blake2b, Digest};
+
+        let mut hasher = Blake2b::<U16>::new();
+        hasher.update(data);
+        let result = hasher.finalize();
+
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&result);
+        bytes
     }
 
     /// Decode a SessionGrant from SCALE-encoded storage data.
@@ -256,7 +297,40 @@ mod tests {
         let session_id = [0xABu8; 32];
         let key = client.compute_session_storage_key(&session_id);
 
-        // Key should be 16 (prefix) + 32 (session_id) = 48 bytes
-        assert_eq!(key.len(), 48);
+        // Ink! Mapping storage key is a 32-byte blake2_256 hash
+        assert_eq!(key.len(), 32);
+
+        // Verify deterministic output
+        let key2 = client.compute_session_storage_key(&session_id);
+        assert_eq!(key, key2);
+
+        // Different session_id should produce different key
+        let other_session_id = [0xCDu8; 32];
+        let other_key = client.compute_session_storage_key(&other_session_id);
+        assert_ne!(key, other_key);
+    }
+
+    #[test]
+    fn test_twox_128() {
+        // Test the twox_128 helper function
+        let data = b"test_data";
+        let hash = ChainClient::twox_128(data);
+        assert_eq!(hash.len(), 16);
+
+        // Verify deterministic output
+        let hash2 = ChainClient::twox_128(data);
+        assert_eq!(hash, hash2);
+    }
+
+    #[test]
+    fn test_blake2_128() {
+        // Test the blake2_128 helper function
+        let data = b"test_data";
+        let hash = ChainClient::blake2_128(data);
+        assert_eq!(hash.len(), 16);
+
+        // Verify deterministic output
+        let hash2 = ChainClient::blake2_128(data);
+        assert_eq!(hash, hash2);
     }
 }

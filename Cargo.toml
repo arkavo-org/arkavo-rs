@@ -74,6 +74,8 @@ sha1 = "0.10"
 
 # Chain-driven KAS dependencies
 subxt = { version = "0.37", features = ["jsonrpsee"] }
+twox-hash = "1.6"
+blake2 = "0.10"
 secrecy = { version = "0.8", features = ["serde"] }
 zeroize = { version = "1.7", features = ["derive"] }
 ecdsa = { version = "0.16", features = ["verifying"] }
