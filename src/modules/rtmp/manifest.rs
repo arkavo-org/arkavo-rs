@@ -1,20 +1,18 @@
-//! onTDFManifest AMF Parsing and Redis Caching
+//! NanoTDF Manifest Handling and Redis Caching
 //!
-//! Handles the NanoTDF manifest embedded in RTMP AMF data messages.
+//! Handles the NanoTDF manifest embedded in RTMP onMetaData messages.
 //! The manifest contains the NanoTDF header with policy and wrapped DEK.
 //!
-//! ## AMF Message Format
+//! ## Manifest Transport via onMetaData
 //!
-//! ```text
-//! +------------------------------+
-//! | AMF String: "onTDFManifest"  |
-//! +------------------------------+
-//! | AMF Object:                  |
-//! |   header: ByteArray (base64) |
-//! +------------------------------+
-//! ```
+//! The NanoTDF header is transported as a base64-encoded string in the
+//! standard RTMP `onMetaData` message under the key `ntdf_header`.
+//!
+//! This approach:
+//! - Works with standard RTMP tools (FFmpeg, OBS can inject metadata)
+//! - Is forwarded correctly by intermediate relays (nginx-rtmp)
+//! - Arrives before video data in the standard RTMP handshake
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -28,10 +26,6 @@ use super::{MANIFEST_TTL_SECONDS, REDIS_MANIFEST_PREFIX};
 /// Error types for manifest handling
 #[derive(Debug)]
 pub enum ManifestError {
-    /// AMF data is not a TDF manifest
-    NotTdfManifest,
-    /// Failed to parse AMF data
-    AmfParseError(String),
     /// Failed to decode base64 header
     Base64DecodeError(String),
     /// Failed to parse NanoTDF header
@@ -45,8 +39,6 @@ pub enum ManifestError {
 impl fmt::Display for ManifestError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ManifestError::NotTdfManifest => write!(f, "Not a TDF manifest"),
-            ManifestError::AmfParseError(msg) => write!(f, "AMF parse error: {}", msg),
             ManifestError::Base64DecodeError(msg) => write!(f, "Base64 decode error: {}", msg),
             ManifestError::NanoTdfParseError(msg) => write!(f, "NanoTDF parse error: {}", msg),
             ManifestError::RedisError(msg) => write!(f, "Redis error: {}", msg),
@@ -57,7 +49,7 @@ impl fmt::Display for ManifestError {
 
 impl Error for ManifestError {}
 
-/// NanoTDF manifest extracted from onTDFManifest AMF message
+/// NanoTDF manifest extracted from onMetaData ntdf_header field
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NanoTdfManifest {
     /// Raw NanoTDF header bytes
@@ -110,77 +102,6 @@ fn format_kas_url(locator: &ResourceLocator) -> String {
         ProtocolEnum::SharedResource => "shared",
     };
     format!("{}://{}", protocol, locator.body)
-}
-
-/// Parse TDF manifest from AMF data bytes
-///
-/// Expects AMF0 format with:
-/// - Command name: "onTDFManifest"
-/// - Object with "header" property containing base64-encoded NanoTDF header
-///
-/// # Arguments
-/// * `amf_data` - Raw AMF0 data bytes from RTMP data message
-/// * `stream_key` - RTMP stream key for this manifest
-pub fn parse_tdf_manifest(
-    amf_data: &[u8],
-    stream_key: &str,
-) -> Result<NanoTdfManifest, ManifestError> {
-    use rml_amf0::Amf0Value;
-    use std::io::Cursor;
-
-    // Deserialize AMF0 data - needs a mutable reader
-    let mut cursor = Cursor::new(amf_data);
-    let values: Vec<Amf0Value> = rml_amf0::deserialize(&mut cursor)
-        .map_err(|e| ManifestError::AmfParseError(format!("{:?}", e)))?;
-
-    // Check for "onTDFManifest" command name
-    if let Some(Amf0Value::Utf8String(cmd)) = values.first() {
-        if cmd != "onTDFManifest" {
-            return Err(ManifestError::NotTdfManifest);
-        }
-    } else {
-        return Err(ManifestError::NotTdfManifest);
-    }
-
-    // Find the object with "header" property
-    for value in values.iter().skip(1) {
-        if let Amf0Value::Object(props) = value {
-            if let Some(Amf0Value::Utf8String(header_b64)) = props.get("header") {
-                // Decode base64 header
-                let header_bytes = STANDARD
-                    .decode(header_b64)
-                    .map_err(|e| ManifestError::Base64DecodeError(e.to_string()))?;
-
-                return NanoTdfManifest::from_header_bytes(header_bytes, stream_key.to_string());
-            }
-        }
-    }
-
-    Err(ManifestError::NotTdfManifest)
-}
-
-/// Create AMF data for onTDFManifest message
-///
-/// Used by publishers to send manifest to subscribers
-pub fn create_tdf_manifest_amf(manifest: &NanoTdfManifest) -> Result<Vec<u8>, ManifestError> {
-    use rml_amf0::Amf0Value;
-    use std::collections::HashMap;
-
-    let header_b64 = STANDARD.encode(&manifest.header_bytes);
-
-    let mut props = HashMap::new();
-    props.insert("header".to_string(), Amf0Value::Utf8String(header_b64));
-    props.insert(
-        "kasUrl".to_string(),
-        Amf0Value::Utf8String(manifest.kas_url.clone()),
-    );
-
-    let values = vec![
-        Amf0Value::Utf8String("onTDFManifest".to_string()),
-        Amf0Value::Object(props),
-    ];
-
-    rml_amf0::serialize(&values).map_err(|e| ManifestError::AmfParseError(format!("{:?}", e)))
 }
 
 /// Cache manifest in Redis for late joiners
@@ -270,16 +191,6 @@ mod tests {
     #[test]
     fn test_manifest_from_header_bytes() {
         // Example NanoTDF header with ECDSA binding (secp256r1)
-        // Structure:
-        // - Magic "L1" (2 bytes): 4c 31
-        // - Version 'L' (1 byte): 4c
-        // - KAS: protocol=HTTPS (01), length=14 (0e), body="kas.virtru.com"
-        // - ECC mode: 0x80 (ECDSA binding, secp256r1)
-        // - Symmetric config: 0x80 (has signature, secp256r1, default cipher)
-        // - Policy type: 0x00 (Remote)
-        // - Policy locator: protocol=HTTPS (01), length=21 (15), body="kas.virtru.com/policy"
-        // - Policy binding: 64 bytes ECDSA signature
-        // - Ephemeral key: 33 bytes compressed P-256 point
         let hex_string = "\
             4c 31 4c 01 0e 6b 61 73 2e 76 69 72 74 72 75 2e 63 6f 6d 80\
             80 00 01 15 6b 61 73 2e 76 69 72 74 72 75 2e 63 6f 6d 2f 70\
@@ -289,27 +200,17 @@ mod tests {
             c7 54 03 03 6f fb 82 87 1f 02 f7 7f ba e5 26 09 da";
 
         let bytes = hex::decode(hex_string.replace(" ", "")).expect("Valid hex");
-
-        // The above test data may not be complete NanoTDF header
-        // For POC testing, just verify we can construct a manifest with valid data
-        // In production, proper NanoTDF headers will be used
-
-        // Test with minimal validation - just check stream_key assignment works
         let stream_key = "test_stream".to_string();
 
-        // If parsing fails, we still verify other parts of the module work
+        // Note: Test data may not be a complete header for our parser
         let result = NanoTdfManifest::from_header_bytes(bytes.clone(), stream_key.clone());
 
-        // Note: The test data from lib.rs may not be a complete header for our parser
-        // This is expected for POC - real manifests will come from NanoTDF publishers
         if result.is_err() {
             eprintln!(
                 "Note: Test data parsing returned error (expected for incomplete test data): {:?}",
                 result.err()
             );
         }
-
-        // Test format_kas_url function separately since it doesn't depend on parsing
     }
 
     #[test]

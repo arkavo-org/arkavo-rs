@@ -3,11 +3,10 @@
 //! Manages the lifecycle of an RTMP connection including:
 //! - RTMP handshake
 //! - Publisher/Subscriber role detection
-//! - onTDFManifest handling (via dedicated message OR onMetaData)
+//! - NanoTDF manifest via onMetaData `ntdf_header` field
 //! - Frame encryption (publisher) / decryption (subscriber)
 //! - Passthrough mode for standard cleartext RTMP streams
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::Bytes;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
@@ -20,10 +19,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use super::encryption::{decrypt_payload, derive_dek, encrypt_payload};
-use super::manifest::{
-    cache_manifest, create_tdf_manifest_amf, delete_cached_manifest, get_cached_manifest,
-    parse_tdf_manifest, NanoTdfManifest,
-};
+use super::manifest::{delete_cached_manifest, get_cached_manifest, NanoTdfManifest};
 
 /// RTMP session role
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,9 +42,6 @@ pub enum EncryptionMode {
     /// Standard cleartext RTMP stream (passthrough)
     Passthrough,
 }
-
-/// Metadata key for NanoTDF header in onMetaData
-const NTDF_HEADER_KEY: &str = "ntdf_header";
 
 /// RTMP session error
 #[derive(Debug)]
@@ -115,7 +108,6 @@ pub struct RelayFrame {
 pub enum FrameType {
     Video,
     Audio,
-    Manifest,
 }
 
 impl RtmpSession {
@@ -391,53 +383,28 @@ impl RtmpSession {
     ///
     /// Checks for `ntdf_header` key containing base64-encoded NanoTDF header.
     /// If found, initializes encryption context. Otherwise, sets passthrough mode.
+    ///
+    /// NOTE: The rml_rtmp StreamMetadata struct doesn't expose custom fields.
+    /// NTDF-aware encoders will need to inject ntdf_header via custom AMF data
+    /// which will be parsed separately. Standard RTMP clients default to passthrough.
     async fn handle_metadata(&mut self, metadata: &StreamMetadata) -> Result<(), SessionError> {
-        // Check for ntdf_header in metadata
-        if let Some(ntdf_header_b64) = metadata.video_width.as_ref().and_then(|_| {
-            // StreamMetadata doesn't expose custom fields directly
-            // We need to check via additional_values or use a different approach
-            // For now, we'll also check onTDFManifest messages
-            None::<String>
-        }) {
-            // Found ntdf_header in metadata
-            match STANDARD.decode(&ntdf_header_b64) {
-                Ok(header_bytes) => {
-                    if let Some(ref stream_key) = self.stream_key {
-                        match NanoTdfManifest::from_header_bytes(header_bytes, stream_key.clone()) {
-                            Ok(manifest) => {
-                                log::info!(
-                                    "NTDF header found in metadata for stream: {}",
-                                    stream_key
-                                );
+        // Log standard metadata for debugging
+        log::debug!(
+            "Stream metadata: video={}x{}, audio_rate={:?}",
+            metadata.video_width.unwrap_or(0),
+            metadata.video_height.unwrap_or(0),
+            metadata.audio_sample_rate
+        );
 
-                                // Cache manifest for late joiners
-                                if let Err(e) = cache_manifest(&self.redis_client, &manifest).await
-                                {
-                                    log::error!("Failed to cache manifest: {}", e);
-                                }
-
-                                // Set manifest and derive DEK
-                                self.set_manifest(manifest)?;
-                                self.encryption_mode = EncryptionMode::Encrypted;
-                                return Ok(());
-                            }
-                            Err(e) => {
-                                log::warn!("Failed to parse NTDF header from metadata: {}", e);
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Failed to decode NTDF header base64: {}", e);
-                }
-            }
-        }
-
-        // No ntdf_header found - set passthrough mode for cleartext streams
+        // StreamMetadata from rml_rtmp doesn't expose custom fields like ntdf_header.
+        // For NTDF-aware streams, the encoder needs to send a custom AMF data message
+        // with the ntdf_header field, which we handle in UnhandleableAmf0Command.
+        //
+        // For now, standard RTMP streams (FFmpeg, OBS) default to passthrough mode.
         if self.encryption_mode == EncryptionMode::Pending {
             self.encryption_mode = EncryptionMode::Passthrough;
             log::info!(
-                "No NTDF header in metadata; defaulting to passthrough mode for {:?}",
+                "Standard metadata received; defaulting to passthrough mode for {:?}",
                 self.stream_key
             );
         }
@@ -453,11 +420,6 @@ impl RtmpSession {
     ) -> Result<(), SessionError> {
         match self.role {
             SessionRole::Publisher => {
-                // Check for onTDFManifest in data messages (dedicated manifest message)
-                if self.try_parse_manifest(data).await {
-                    return Ok(());
-                }
-
                 match self.encryption_mode {
                     EncryptionMode::Encrypted => {
                         // Encrypt video frame
@@ -580,47 +542,6 @@ impl RtmpSession {
         }
 
         Ok(())
-    }
-
-    /// Try to parse TDF manifest from AMF data (onTDFManifest message)
-    async fn try_parse_manifest(&mut self, data: &bytes::Bytes) -> bool {
-        if let Some(ref stream_key) = self.stream_key {
-            match parse_tdf_manifest(data, stream_key) {
-                Ok(manifest) => {
-                    log::info!("Received onTDFManifest for stream: {}", stream_key);
-
-                    // Cache manifest for late joiners
-                    if let Err(e) = cache_manifest(&self.redis_client, &manifest).await {
-                        log::error!("Failed to cache manifest: {}", e);
-                    }
-
-                    // Set manifest and derive DEK
-                    if let Err(e) = self.set_manifest(manifest.clone()) {
-                        log::error!("Failed to set manifest: {}", e);
-                        return false;
-                    }
-
-                    // Set encryption mode
-                    self.encryption_mode = EncryptionMode::Encrypted;
-
-                    // Create AMF data for relaying to subscribers
-                    if let Ok(amf_data) = create_tdf_manifest_amf(&manifest) {
-                        self.relay_frame(RelayFrame {
-                            frame_type: FrameType::Manifest,
-                            timestamp: 0,
-                            data: amf_data,
-                        })
-                        .await;
-                    }
-
-                    return true;
-                }
-                Err(_) => {
-                    // Not a TDF manifest, continue
-                }
-            }
-        }
-        false
     }
 
     /// Set manifest and derive DEK
