@@ -5,4 +5,5 @@ pub mod crypto;
 pub mod fairplay;
 pub mod http_rewrap;
 pub mod media_api;
+pub mod rtmp;
 pub mod secure_keys;

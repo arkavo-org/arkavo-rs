@@ -86,6 +86,11 @@ async-trait = "0.1"
 ciborium = "0.2"
 serde_bytes = "0.11"
 
+# RTMP protocol support
+rml_rtmp = "0.8"
+rml_amf0 = "0.3"
+bytes = "1.0"
+
 [features]
 default = []
 fairplay = ["fairplay-wrapper"]
