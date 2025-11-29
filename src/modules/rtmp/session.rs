@@ -4,10 +4,13 @@
 //! - RTMP handshake
 //! - Publisher/Subscriber role detection
 //! - NanoTDF manifest via onMetaData `ntdf_header` field
-//! - Frame encryption (publisher) / decryption (subscriber)
+//! - Frame encryption (publisher via Collection) / decryption (subscriber via Decryptor)
 //! - Passthrough mode for standard cleartext RTMP streams
 
 use bytes::Bytes;
+use opentdf_crypto::tdf::{NanoTdfCollection, NanoTdfCollectionDecryptor};
+use p256::pkcs8::EncodePrivateKey;
+use p256::SecretKey;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
@@ -18,7 +21,9 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use super::encryption::{decrypt_payload, derive_dek, encrypt_payload};
+use super::encryption::{
+    create_decryptor_kas, decrypt_item, encrypt_item, rotation_threshold_reached,
+};
 use super::manifest::{delete_cached_manifest, get_cached_manifest, NanoTdfManifest};
 
 /// RTMP session role
@@ -83,10 +88,12 @@ pub struct RtmpSession {
     stream_key: Option<String>,
     /// NanoTDF manifest (received from publisher or cache)
     manifest: Option<NanoTdfManifest>,
-    /// Derived DEK for encryption/decryption
-    dek: Option<[u8; 32]>,
-    /// KAS private key for DEK derivation
-    kas_private_key: [u8; 32],
+    /// NanoTDF Collection for publisher-side encryption (thread-safe)
+    collection: Option<Arc<NanoTdfCollection>>,
+    /// NanoTDF Decryptor for subscriber-side decryption
+    decryptor: Option<NanoTdfCollectionDecryptor>,
+    /// KAS private key for DEK derivation (PKCS#8 DER format)
+    kas_private_key: Vec<u8>,
     /// Redis client for manifest caching
     redis_client: Arc<redis::Client>,
     /// Subscribers to relay encrypted frames to
@@ -112,14 +119,29 @@ pub enum FrameType {
 
 impl RtmpSession {
     /// Create a new RTMP session
+    ///
+    /// # Arguments
+    /// * `redis_client` - Redis client for manifest caching
+    /// * `kas_private_key` - KAS EC private key raw bytes (32 bytes for P-256)
     pub fn new(redis_client: Arc<redis::Client>, kas_private_key: [u8; 32]) -> Self {
+        // Convert raw 32-byte key to PKCS#8 DER format for opentdf-rs
+        // The EcdhKem::derive_key_with_private accepts SEC1 DER or PKCS#8 DER
+        let secret_key = SecretKey::from_bytes(&kas_private_key.into())
+            .expect("Invalid KAS private key bytes");
+        let kas_private_key_der = secret_key
+            .to_pkcs8_der()
+            .expect("Failed to encode key as PKCS#8")
+            .as_bytes()
+            .to_vec();
+
         RtmpSession {
             role: SessionRole::Unknown,
             encryption_mode: EncryptionMode::Pending,
             stream_key: None,
             manifest: None,
-            dek: None,
-            kas_private_key,
+            collection: None,
+            decryptor: None,
+            kas_private_key: kas_private_key_der,
             redis_client,
             subscribers: Vec::new(),
             metadata_received: false,
@@ -322,7 +344,7 @@ impl RtmpSession {
                 match get_cached_manifest(&self.redis_client, &full_key).await {
                     Ok(manifest) => {
                         log::info!("Found cached manifest for late joiner");
-                        self.set_manifest(manifest)?;
+                        self.set_manifest_subscriber(manifest)?;
                     }
                     Err(_) => {
                         log::debug!("No cached manifest found, waiting for live manifest");
@@ -422,9 +444,17 @@ impl RtmpSession {
             SessionRole::Publisher => {
                 match self.encryption_mode {
                     EncryptionMode::Encrypted => {
-                        // Encrypt video frame
-                        if let Some(ref dek) = self.dek {
-                            let encrypted = encrypt_payload(dek, data)
+                        // Encrypt video frame with Collection
+                        if let Some(ref collection) = self.collection {
+                            // Check rotation threshold
+                            if rotation_threshold_reached(collection) {
+                                log::warn!(
+                                    "IV rotation threshold reached for stream {:?} - consider key rotation",
+                                    self.stream_key
+                                );
+                            }
+
+                            let encrypted = encrypt_item(collection, data)
                                 .map_err(|e| SessionError::EncryptionError(e.to_string()))?;
 
                             // Relay encrypted frame to subscribers
@@ -464,9 +494,9 @@ impl RtmpSession {
             SessionRole::Subscriber => {
                 match self.encryption_mode {
                     EncryptionMode::Encrypted => {
-                        // Decrypt video frame
-                        if let Some(ref dek) = self.dek {
-                            let _decrypted = decrypt_payload(dek, data)
+                        // Decrypt video frame with Decryptor
+                        if let Some(ref decryptor) = self.decryptor {
+                            let _decrypted = decrypt_item(decryptor, data)
                                 .map_err(|e| SessionError::EncryptionError(e.to_string()))?;
                             // Would send decrypted frame to player
                         }
@@ -498,8 +528,8 @@ impl RtmpSession {
             SessionRole::Publisher => {
                 match self.encryption_mode {
                     EncryptionMode::Encrypted => {
-                        if let Some(ref dek) = self.dek {
-                            let encrypted = encrypt_payload(dek, data)
+                        if let Some(ref collection) = self.collection {
+                            let encrypted = encrypt_item(collection, data)
                                 .map_err(|e| SessionError::EncryptionError(e.to_string()))?;
 
                             self.relay_frame(RelayFrame {
@@ -527,8 +557,8 @@ impl RtmpSession {
             SessionRole::Subscriber => {
                 match self.encryption_mode {
                     EncryptionMode::Encrypted => {
-                        if let Some(ref dek) = self.dek {
-                            let _decrypted = decrypt_payload(dek, data)
+                        if let Some(ref decryptor) = self.decryptor {
+                            let _decrypted = decrypt_item(decryptor, data)
                                 .map_err(|e| SessionError::EncryptionError(e.to_string()))?;
                         }
                     }
@@ -544,17 +574,25 @@ impl RtmpSession {
         Ok(())
     }
 
-    /// Set manifest and derive DEK
-    fn set_manifest(&mut self, manifest: NanoTdfManifest) -> Result<(), SessionError> {
-        // Derive DEK from manifest
-        let dek = derive_dek(&manifest.ephemeral_key, &self.kas_private_key)
+    /// Set manifest for subscriber and create decryptor
+    fn set_manifest_subscriber(&mut self, manifest: NanoTdfManifest) -> Result<(), SessionError> {
+        // Create decryptor from manifest header bytes and KAS private key
+        let decryptor = create_decryptor_kas(&manifest.header_bytes, &self.kas_private_key)
             .map_err(|e| SessionError::EncryptionError(e.to_string()))?;
 
         self.manifest = Some(manifest);
-        self.dek = Some(dek);
+        self.decryptor = Some(decryptor);
+        self.encryption_mode = EncryptionMode::Encrypted;
 
-        log::debug!("DEK derived successfully");
+        log::debug!("Decryptor created successfully from manifest");
         Ok(())
+    }
+
+    /// Set collection for publisher (called when publisher provides manifest)
+    pub fn set_collection(&mut self, collection: Arc<NanoTdfCollection>) {
+        self.collection = Some(collection);
+        self.encryption_mode = EncryptionMode::Encrypted;
+        log::debug!("Collection set for publisher encryption");
     }
 
     /// Relay frame to all subscribers
@@ -578,9 +616,13 @@ impl RtmpSession {
         self.manifest.as_ref()
     }
 
-    /// Check if DEK is available
-    pub fn has_dek(&self) -> bool {
-        self.dek.is_some()
+    /// Check if encryption is ready (collection for publisher, decryptor for subscriber)
+    pub fn is_encryption_ready(&self) -> bool {
+        match self.role {
+            SessionRole::Publisher => self.collection.is_some(),
+            SessionRole::Subscriber => self.decryptor.is_some(),
+            SessionRole::Unknown => false,
+        }
     }
 
     /// Get session role
