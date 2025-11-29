@@ -7,6 +7,7 @@
 //! - Frame encryption (publisher) / decryption (subscriber)
 
 use bytes::Bytes;
+use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
 };
@@ -119,21 +120,77 @@ impl RtmpSession {
 
         log::info!("RTMP connection from {}", peer_addr);
 
-        // Create RTMP server session
+        // Phase 1: RTMP Handshake
+        let mut handshake = Handshake::new(PeerType::Server);
+        let mut buf = [0u8; 4096];
+        let mut remaining_bytes = Vec::new();
+
+        loop {
+            let n = socket.read(&mut buf).await?;
+            if n == 0 {
+                return Err(SessionError::RtmpError(
+                    "Connection closed during handshake".to_string(),
+                ));
+            }
+
+            let mut input = buf[..n].to_vec();
+            if !remaining_bytes.is_empty() {
+                let mut combined = remaining_bytes.clone();
+                combined.extend_from_slice(&input);
+                input = combined;
+                remaining_bytes.clear();
+            }
+
+            match handshake.process_bytes(&input) {
+                Ok(HandshakeProcessResult::InProgress { response_bytes }) => {
+                    socket.write_all(&response_bytes).await?;
+                }
+                Ok(HandshakeProcessResult::Completed {
+                    response_bytes,
+                    remaining_bytes: leftover,
+                }) => {
+                    socket.write_all(&response_bytes).await?;
+                    remaining_bytes = leftover;
+                    log::debug!("RTMP handshake completed for {}", peer_addr);
+                    break;
+                }
+                Err(e) => {
+                    return Err(SessionError::RtmpError(format!(
+                        "Handshake error: {:?}",
+                        e
+                    )));
+                }
+            }
+        }
+
+        // Phase 2: RTMP Session
         let config = ServerSessionConfig::new();
         let (mut session, initial_results) =
             ServerSession::new(config).map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
 
-        // Send initial handshake responses
+        // Send initial session responses
         for result in initial_results {
             self.process_result(&mut socket, &result).await?;
         }
 
-        // Read buffer
-        let mut buf = [0u8; 4096];
+        // Process any bytes left over from handshake
+        if !remaining_bytes.is_empty() {
+            let results = session
+                .handle_input(&remaining_bytes)
+                .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
 
+            for result in results {
+                if let Some(request_id) = self.process_result(&mut socket, &result).await? {
+                    let accept_results = session
+                        .accept_request(request_id)
+                        .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
+                    Self::send_responses(&mut socket, accept_results).await?;
+                }
+            }
+        }
+
+        // Main session loop
         loop {
-            // Read from socket
             let n = socket.read(&mut buf).await?;
             if n == 0 {
                 log::info!("RTMP connection closed: {}", peer_addr);
@@ -146,7 +203,13 @@ impl RtmpSession {
                 .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
 
             for result in results {
-                self.process_result(&mut socket, &result).await?;
+                if let Some(request_id) = self.process_result(&mut socket, &result).await? {
+                    let accept_results = session
+                        .accept_request(request_id)
+                        .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
+                    Self::send_responses(&mut socket, accept_results).await?;
+                    log::info!("Request {} accepted", request_id);
+                }
             }
         }
 
@@ -161,44 +224,52 @@ impl RtmpSession {
         Ok(())
     }
 
-    /// Process an RTMP session result
+    /// Process an RTMP session result, returning any accept request IDs that need handling
     async fn process_result(
         &mut self,
         socket: &mut TcpStream,
         result: &ServerSessionResult,
-    ) -> Result<(), SessionError> {
+    ) -> Result<Option<u32>, SessionError> {
         match result {
             ServerSessionResult::OutboundResponse(packet) => {
                 socket.write_all(&packet.bytes).await?;
+                Ok(None)
             }
 
-            ServerSessionResult::RaisedEvent(event) => {
-                self.handle_event(socket, event).await?;
-            }
+            ServerSessionResult::RaisedEvent(event) => self.handle_event(event).await,
 
             ServerSessionResult::UnhandleableMessageReceived(_) => {
                 // Ignore unhandled messages
+                Ok(None)
             }
         }
+    }
 
+    /// Send outbound responses from accept_request
+    async fn send_responses(
+        socket: &mut TcpStream,
+        results: Vec<ServerSessionResult>,
+    ) -> Result<(), SessionError> {
+        for result in results {
+            if let ServerSessionResult::OutboundResponse(packet) = result {
+                socket.write_all(&packet.bytes).await?;
+            }
+        }
         Ok(())
     }
 
-    /// Handle an RTMP session event
+    /// Handle an RTMP session event, returning request_id if acceptance is needed
     async fn handle_event(
         &mut self,
-        _socket: &mut TcpStream,
         event: &ServerSessionEvent,
-    ) -> Result<(), SessionError> {
+    ) -> Result<Option<u32>, SessionError> {
         match event {
             ServerSessionEvent::ConnectionRequested {
                 request_id,
                 app_name,
             } => {
                 log::info!("Connection requested for app: {}", app_name);
-                // Accept all connections for POC
-                // In production, validate app_name
-                let _ = request_id; // Would use for accept/reject
+                Ok(Some(*request_id))
             }
 
             ServerSessionEvent::PublishStreamRequested {
@@ -215,6 +286,7 @@ impl RtmpSession {
                     stream_key,
                     request_id
                 );
+                Ok(Some(*request_id))
             }
 
             ServerSessionEvent::PlayStreamRequested {
@@ -241,6 +313,7 @@ impl RtmpSession {
                         log::debug!("No cached manifest found, waiting for live manifest");
                     }
                 }
+                Ok(Some(*request_id))
             }
 
             ServerSessionEvent::StreamMetadataChanged {
@@ -249,6 +322,7 @@ impl RtmpSession {
                 metadata: _,
             } => {
                 log::debug!("Metadata changed for {}/{}", app_name, stream_key);
+                Ok(None)
             }
 
             ServerSessionEvent::VideoDataReceived {
@@ -258,6 +332,7 @@ impl RtmpSession {
                 timestamp,
             } => {
                 self.handle_video_data(data, timestamp).await?;
+                Ok(None)
             }
 
             ServerSessionEvent::AudioDataReceived {
@@ -267,6 +342,7 @@ impl RtmpSession {
                 timestamp,
             } => {
                 self.handle_audio_data(data, timestamp).await?;
+                Ok(None)
             }
 
             ServerSessionEvent::UnhandleableAmf0Command {
@@ -276,14 +352,14 @@ impl RtmpSession {
                 additional_values: _,
             } => {
                 log::debug!("Unhandled AMF0 command: {}", command_name);
+                Ok(None)
             }
 
             _ => {
                 log::trace!("Unhandled RTMP event: {:?}", event);
+                Ok(None)
             }
         }
-
-        Ok(())
     }
 
     /// Handle video data
