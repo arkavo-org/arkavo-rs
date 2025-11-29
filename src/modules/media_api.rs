@@ -14,7 +14,8 @@ use axum::{
 #[cfg(feature = "fairplay")]
 use base64::Engine;
 use chrono::Utc;
-use log::{error, info};
+use log::{error, info, warn};
+use nanotdf::chain::{ChainValidationRequest, SessionValidator, ValidationError};
 use nanotdf::BinaryParser;
 use p256::{ecdh::EphemeralSecret, PublicKey as P256PublicKey, SecretKey};
 use rand_core::OsRng;
@@ -45,6 +46,8 @@ pub struct MediaApiState {
     pub media_metrics: Arc<MediaMetrics>,
     #[allow(dead_code)]
     pub fairplay_handler: Option<Arc<crate::modules::fairplay::FairPlayHandler>>,
+    /// Chain validator for session validation (optional for backward compatibility)
+    pub chain_validator: Option<Arc<dyn SessionValidator>>,
 }
 
 // ==================== Request/Response Types ====================
@@ -61,6 +64,12 @@ pub struct MediaKeyRequest {
     pub nanotdf_header: Option<String>,    // Base64-encoded (for TDF3)
     // FairPlay fields
     pub spc_data: Option<String>, // Base64-encoded (for FairPlay)
+    // Chain validation fields (optional for backward compatibility)
+    pub chain_session_id: Option<String>, // Chain session ID (hex-encoded)
+    pub chain_header_hash: Option<String>, // SHA256 of header bytes (hex-encoded, DPoP binding)
+    pub chain_signature: Option<String>,  // ECDSA signature (base64)
+    pub chain_nonce: Option<u64>,         // Replay prevention nonce
+    pub chain_algorithm: Option<String>,  // "ES256", "ES384", defaults to "ES256"
 }
 
 #[derive(Debug, Serialize)]
@@ -207,6 +216,180 @@ async fn log_key_request_error(
     state.media_metrics.log_event(&event);
 }
 
+/// Validate session on chain (if chain validation is configured)
+async fn validate_chain_session(
+    state: &MediaApiState,
+    payload: &MediaKeyRequest,
+) -> Result<(), ErrorResponse> {
+    let validator = match state.chain_validator.as_ref() {
+        Some(v) => v,
+        None => return Ok(()), // Chain validation not configured
+    };
+
+    // Chain validation is required when validator is configured
+    let session_id = payload.chain_session_id.as_ref().ok_or_else(|| {
+        warn!("Chain validation enabled but no chain_session_id provided");
+        ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: "chain_session_id is required".to_string(),
+        }
+    })?;
+
+    let signature = payload.chain_signature.as_ref().ok_or_else(|| {
+        warn!("Chain validation enabled but no chain_signature provided");
+        ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: "chain_signature is required".to_string(),
+        }
+    })?;
+
+    let nonce = payload.chain_nonce.ok_or_else(|| {
+        warn!("Chain validation enabled but no chain_nonce provided");
+        ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: "chain_nonce is required".to_string(),
+        }
+    })?;
+
+    // DPoP Header Binding: require header_hash
+    let client_header_hash_hex = payload.chain_header_hash.as_ref().ok_or_else(|| {
+        warn!("Chain validation enabled but no chain_header_hash provided");
+        ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: "chain_header_hash is required for DPoP binding".to_string(),
+        }
+    })?;
+
+    // Decode client-provided header_hash
+    let client_header_hash_bytes =
+        hex::decode(client_header_hash_hex).map_err(|e| ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: format!("Invalid chain_header_hash hex encoding: {}", e),
+        })?;
+
+    if client_header_hash_bytes.len() != 32 {
+        return Err(ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: format!(
+                "chain_header_hash must be 32 bytes, got {}",
+                client_header_hash_bytes.len()
+            ),
+        });
+    }
+
+    // Get the actual header bytes from the nanotdf_header field
+    let header_bytes = payload
+        .nanotdf_header
+        .as_ref()
+        .ok_or_else(|| ErrorResponse {
+            error: "invalid_request".to_string(),
+            message: "nanotdf_header is required for chain validation".to_string(),
+        })?;
+
+    let header_bytes = crypto::base64_decode(header_bytes).map_err(|e| ErrorResponse {
+        error: "invalid_request".to_string(),
+        message: format!("Invalid nanotdf_header base64 encoding: {}", e),
+    })?;
+
+    // Compute server-side header hash
+    let server_header_hash: [u8; 32] = {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(&header_bytes).into()
+    };
+
+    // DPoP binding check: verify client's header_hash matches
+    let client_header_hash: [u8; 32] = client_header_hash_bytes.try_into().unwrap();
+    if client_header_hash != server_header_hash {
+        warn!(
+            "Header hash mismatch: client={} server={}",
+            hex::encode(client_header_hash),
+            hex::encode(server_header_hash)
+        );
+        return Err(ErrorResponse {
+            error: "authentication_failed".to_string(),
+            message: "chain_header_hash does not match actual header content".to_string(),
+        });
+    }
+
+    // Decode signature from base64
+    let signature_bytes = crypto::base64_decode(signature).map_err(|e| ErrorResponse {
+        error: "invalid_request".to_string(),
+        message: format!("Invalid chain_signature encoding: {}", e),
+    })?;
+
+    // Build validation request with verified header_hash
+    let validation_request = ChainValidationRequest {
+        session_id: session_id.clone(),
+        header_hash: server_header_hash, // Use server-computed (verified) hash
+        resource_id: hex::encode(server_header_hash), // Keep for logging
+        signature: signature_bytes,
+        algorithm: payload
+            .chain_algorithm
+            .clone()
+            .unwrap_or_else(|| "ES256".to_string()),
+        nonce,
+    };
+
+    // Validate session on chain
+    match validator.validate(&validation_request).await {
+        Ok(validated) => {
+            info!(
+                "Chain validation passed for session {}, scope {}",
+                hex::encode(validated.grant.session_id),
+                hex::encode(validated.grant.scope_id)
+            );
+            Ok(())
+        }
+        Err(e) => {
+            warn!("Chain validation failed: {:?}", e);
+            Err(match e {
+                ValidationError::SessionNotFound { session_id } => ErrorResponse {
+                    error: "policy_denied".to_string(),
+                    message: format!("Session not found: {}", session_id),
+                },
+                ValidationError::SessionExpired {
+                    expired_at,
+                    current,
+                } => ErrorResponse {
+                    error: "policy_denied".to_string(),
+                    message: format!(
+                        "Session expired at block {} (current: {})",
+                        expired_at, current
+                    ),
+                },
+                ValidationError::SessionRevoked => ErrorResponse {
+                    error: "policy_denied".to_string(),
+                    message: "Session has been revoked".to_string(),
+                },
+                ValidationError::SignatureInvalid { reason } => ErrorResponse {
+                    error: "authentication_failed".to_string(),
+                    message: format!("Invalid proof-of-possession signature: {}", reason),
+                },
+                ValidationError::NonceReplay => ErrorResponse {
+                    error: "authentication_failed".to_string(),
+                    message: "Nonce already used (replay attack detected)".to_string(),
+                },
+                ValidationError::ScopeMismatch { resource_id } => ErrorResponse {
+                    error: "policy_denied".to_string(),
+                    message: format!("Resource {} not in session scope", resource_id),
+                },
+                ValidationError::HeaderHashMismatch { client, server } => ErrorResponse {
+                    error: "authentication_failed".to_string(),
+                    message: format!("Header hash mismatch: client={}, server={}", client, server),
+                },
+                ValidationError::Chain(chain_err) => ErrorResponse {
+                    error: "internal_error".to_string(),
+                    message: format!("Chain query failed: {}", chain_err),
+                },
+                ValidationError::Crypto(err) => ErrorResponse {
+                    error: "internal_error".to_string(),
+                    message: format!("Crypto error: {}", err),
+                },
+            })
+        }
+    }
+}
+
 // ==================== API Handlers ====================
 
 /// POST /media/v1/key-request
@@ -304,6 +487,9 @@ async fn handle_tdf3_key_request(
 ) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
     // 1. Validate session and user
     let _session = validate_session(&state, &payload, &timer).await?;
+
+    // 2. Chain-driven session validation (if configured)
+    validate_chain_session(&state, &payload).await?;
 
     // 3. Validate NanoTDF header size
     let nanotdf_header = payload
@@ -408,6 +594,9 @@ async fn handle_fairplay_key_request(
 ) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
     // 1. Validate session and user
     let session = validate_session(&state, &payload, &timer).await?;
+
+    // 2. Chain-driven session validation (if configured)
+    validate_chain_session(&state, &payload).await?;
 
     // 3. Validate protocol matches session
     if session.protocol != MediaProtocol::FairPlay {
@@ -834,6 +1023,11 @@ mod tests {
             ),
             nanotdf_header: Some("base64header".to_string()),
             spc_data: None,
+            chain_session_id: None,
+            chain_header_hash: None,
+            chain_signature: None,
+            chain_nonce: None,
+            chain_algorithm: None,
         };
 
         assert_eq!(detect_protocol(&request), Some(MediaProtocol::TDF3));
@@ -849,6 +1043,11 @@ mod tests {
             client_public_key: None,
             nanotdf_header: None,
             spc_data: Some("base64spc".to_string()),
+            chain_session_id: None,
+            chain_header_hash: None,
+            chain_signature: None,
+            chain_nonce: None,
+            chain_algorithm: None,
         };
 
         assert_eq!(detect_protocol(&request), Some(MediaProtocol::FairPlay));
@@ -864,6 +1063,11 @@ mod tests {
             client_public_key: None,
             nanotdf_header: None,
             spc_data: None,
+            chain_session_id: None,
+            chain_header_hash: None,
+            chain_signature: None,
+            chain_nonce: None,
+            chain_algorithm: None,
         };
 
         assert_eq!(detect_protocol(&request), None);
@@ -880,6 +1084,11 @@ mod tests {
             client_public_key: Some("pubkey".to_string()),
             nanotdf_header: None,
             spc_data: None,
+            chain_session_id: None,
+            chain_header_hash: None,
+            chain_signature: None,
+            chain_nonce: None,
+            chain_algorithm: None,
         };
 
         assert_eq!(detect_protocol(&request), None);

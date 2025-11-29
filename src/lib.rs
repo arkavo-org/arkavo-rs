@@ -7,6 +7,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+// Chain-driven KAS validation
+pub mod chain;
+
 // Session manager for media DRM
 pub mod session_manager;
 

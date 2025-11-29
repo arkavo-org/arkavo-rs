@@ -2,7 +2,7 @@ mod contracts;
 mod schemas;
 
 // Import modules from library
-use nanotdf::{media_metrics, session_manager};
+use nanotdf::{chain, media_metrics, session_manager};
 
 // Include modules from parent src/modules directory
 #[path = "../modules/mod.rs"]
@@ -10,7 +10,7 @@ mod modules;
 
 #[cfg(feature = "c2pa_signing")]
 use modules::c2pa_signing;
-use modules::{crypto, http_rewrap, media_api};
+use modules::{cbor_protocol, crypto, http_rewrap, media_api};
 
 use crate::contracts::content_rating::content_rating::{
     AgeLevel, ContentRating, Rating, RatingLevel,
@@ -135,6 +135,7 @@ enum MessageType {
     RewrappedKey = 0x04,
     Nats = 0x05,
     Event = 0x06,
+    Cbor = 0x08, // CBOR-encoded messages (chain rewrap, etc.)
     Error = 0xFF,
 }
 
@@ -147,6 +148,7 @@ impl MessageType {
             0x04 => Some(MessageType::RewrappedKey),
             0x05 => Some(MessageType::Nats),
             0x06 => Some(MessageType::Event),
+            0x08 => Some(MessageType::Cbor),
             0xFF => Some(MessageType::Error),
             _ => None,
         }
@@ -379,7 +381,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Validate configuration
     validate_config(&settings)?;
 
-    let server_state = Arc::new(ServerState::new(settings.clone()).await?);
+    // Initialize Redis client early (needed for chain cache and session manager)
+    info!("Attempting to connect to Redis at {}", settings.redis_url);
+    let redis_client = RedisClient::open(settings.redis_url.clone()).map_err(|e| {
+        error!("Failed to connect to Redis server: {}", e);
+        e
+    })?;
+    info!("Successfully connected to Redis server");
+
+    // Initialize chain client for blockchain-driven session validation
+    info!("Initializing chain client for {}", settings.chain_rpc_url);
+    let chain_client = Arc::new(chain::ChainClient::new(settings.chain_rpc_url.clone()));
+
+    // Generate server secret for cache integrity (random 32 bytes)
+    let mut server_secret = [0u8; 32];
+    OsRng.fill_bytes(&mut server_secret);
+
+    // Initialize session cache with 6-second TTL
+    let session_cache = Arc::new(chain::SessionCache::new(
+        server_secret,
+        Arc::new(redis_client.clone()),
+    ));
+
+    // Create chain validator
+    let chain_validator: Arc<dyn chain::SessionValidator> = Arc::new(chain::ChainValidator::new(
+        chain_client.clone(),
+        session_cache,
+    ));
+
+    info!("Chain validation initialized (cache TTL: 6s)");
+
+    let server_state = Arc::new(
+        ServerState::new(
+            settings.clone(),
+            redis_client,
+            Some(chain_validator.clone()),
+        )
+        .await?,
+    );
     // Load and cache the apple-app-site-association.json file
     let apple_app_site_association = load_apple_app_site_association().await;
     // Initialize KAS keys
@@ -464,12 +503,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             (None, None)
         };
 
+    // Create HTTP rewrap state with chain validator
     let rewrap_state = Arc::new(http_rewrap::RewrapState {
         kas_ec_private_key: kas_private_key,
         kas_ec_public_key_pem: kas_public_key_pem,
         kas_rsa_private_key,
         kas_rsa_public_key_pem,
         oauth_public_key_pem,
+        chain_validator: Some(chain_validator.clone()),
     });
 
     // Initialize media DRM components
@@ -537,6 +578,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         fairplay_handler: Some(fairplay_handler),
         #[cfg(not(feature = "fairplay"))]
         fairplay_handler: None,
+        chain_validator: Some(chain_validator.clone()),
     });
 
     // Initialize C2PA signing state (optional - only if configured)
@@ -810,6 +852,9 @@ async fn handle_binary_message(
             .await
         } // internal
         Some(MessageType::Event) => handle_event(server_state, payload, nats_connection).await, // embedded
+        Some(MessageType::Cbor) => {
+            handle_cbor_message(connection_state, server_state, payload).await
+        }
         Some(MessageType::Error) => {
             // Error messages are sent from server to client, not received
             error!("Received unexpected Error message type from client");
@@ -1370,6 +1415,461 @@ async fn handle_rewrap(
     Some(Message::Binary(response_data))
 }
 
+/// Handle CBOR-encoded messages (0x08 type prefix).
+///
+/// Supports chain-validated rewrap and other CBOR message types.
+async fn handle_cbor_message(
+    connection_state: &Arc<ConnectionState>,
+    server_state: &Arc<ServerState>,
+    payload: &[u8],
+) -> Option<Message> {
+    use cbor_protocol::CborRequest;
+
+    // Decode CBOR request
+    let request = match CborRequest::decode(payload) {
+        Ok(req) => req,
+        Err(e) => {
+            error!("Failed to decode CBOR message: {}", e);
+            return Some(cbor_error_response(
+                "invalid_format",
+                &format!("Failed to decode CBOR: {}", e),
+            ));
+        }
+    };
+
+    info!(
+        "Received CBOR message: {:?}",
+        std::mem::discriminant(&request)
+    );
+
+    match request {
+        CborRequest::ChainRewrap { header, chain } => {
+            handle_chain_rewrap(connection_state, server_state, &header, chain).await
+        }
+        CborRequest::KeyExchange { public_key } => {
+            handle_cbor_key_exchange(connection_state, &public_key).await
+        }
+        CborRequest::MediaKeyRequest { .. } => {
+            // Media key requests should go through HTTP API for now
+            Some(cbor_error_response(
+                "not_implemented",
+                "Media key requests should use HTTP API /media/v1/key-request",
+            ))
+        }
+        CborRequest::UserEvent { .. }
+        | CborRequest::CacheEvent { .. }
+        | CborRequest::RouteEvent { .. } => {
+            // Events can be handled through the existing FlatBuffer path
+            // or we can implement CBOR event handling later
+            Some(cbor_error_response(
+                "not_implemented",
+                "Event types not yet implemented in CBOR protocol",
+            ))
+        }
+    }
+}
+
+/// Handle chain-validated rewrap via CBOR.
+async fn handle_chain_rewrap(
+    connection_state: &Arc<ConnectionState>,
+    server_state: &Arc<ServerState>,
+    header: &[u8],
+    chain: cbor_protocol::ChainValidation,
+) -> Option<Message> {
+    use cbor_protocol::{CborResponse, CBOR_MESSAGE_TYPE};
+    use nanotdf::chain::{ChainValidationRequest, ValidationError};
+
+    let start_time = Instant::now();
+
+    // 1. Validate session is established
+    let session_shared_secret = {
+        let shared_secret = connection_state.shared_secret_lock.read().unwrap();
+        shared_secret.clone()
+    };
+    let session_shared_secret = match session_shared_secret {
+        Some(secret) => secret,
+        None => {
+            error!("Chain rewrap attempted before key agreement");
+            return Some(cbor_error_response(
+                "invalid_request",
+                "Session not established - perform key agreement first",
+            ));
+        }
+    };
+
+    // 2. Perform chain validation
+    let chain_validator = match server_state.chain_validator.as_ref() {
+        Some(v) => v,
+        None => {
+            error!("Chain validation not configured");
+            return Some(cbor_error_response(
+                "internal_error",
+                "Chain validation not configured on server",
+            ));
+        }
+    };
+
+    // Parse session_id from bytes to hex string for validation request
+    if chain.session_id.len() != 32 {
+        error!(
+            "Invalid chain session_id length: {} (expected 32)",
+            chain.session_id.len()
+        );
+        return Some(cbor_error_response(
+            "invalid_request",
+            "chain.session_id must be 32 bytes",
+        ));
+    }
+
+    // DPoP Header Binding: Verify client-provided header_hash matches server computation
+    let server_header_hash: [u8; 32] = {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(header).into()
+    };
+
+    // Verify header_hash is correct length
+    if chain.header_hash.len() != 32 {
+        error!(
+            "Invalid header_hash length: {} (expected 32)",
+            chain.header_hash.len()
+        );
+        return Some(cbor_error_response(
+            "invalid_request",
+            "header_hash must be exactly 32 bytes",
+        ));
+    }
+    let client_header_hash: [u8; 32] = chain.header_hash.clone().try_into().unwrap();
+
+    // Critical security check: client's header_hash must match server-computed hash
+    // This binds the signature to the actual header content (DPoP-style binding)
+    if client_header_hash != server_header_hash {
+        error!(
+            "Header hash mismatch: client={} server={}",
+            hex::encode(client_header_hash),
+            hex::encode(server_header_hash)
+        );
+        return Some(cbor_error_response(
+            "authentication_failed",
+            "header_hash does not match actual header content",
+        ));
+    }
+
+    // Build validation request with verified header_hash
+    let validation_request = ChainValidationRequest {
+        session_id: hex::encode(&chain.session_id),
+        header_hash: server_header_hash, // Use server-computed (verified) hash
+        resource_id: hex::encode(server_header_hash), // Keep for logging
+        signature: chain.signature.clone(),
+        algorithm: chain.algorithm.clone(),
+        nonce: chain.nonce,
+    };
+
+    match chain_validator.validate(&validation_request).await {
+        Ok(validated) => {
+            info!(
+                "Chain validation passed for session {}, scope {}",
+                hex::encode(validated.grant.session_id),
+                hex::encode(validated.grant.scope_id)
+            );
+        }
+        Err(e) => {
+            log::warn!("Chain validation failed: {:?}", e);
+            let (code, message) = match e {
+                ValidationError::SessionNotFound { session_id } => (
+                    "policy_denied",
+                    format!("Session not found: {}", session_id),
+                ),
+                ValidationError::SessionExpired {
+                    expired_at,
+                    current,
+                } => (
+                    "policy_denied",
+                    format!(
+                        "Session expired at block {} (current: {})",
+                        expired_at, current
+                    ),
+                ),
+                ValidationError::SessionRevoked => {
+                    ("policy_denied", "Session has been revoked".to_string())
+                }
+                ValidationError::SignatureInvalid { reason } => (
+                    "authentication_failed",
+                    format!("Invalid signature: {}", reason),
+                ),
+                ValidationError::NonceReplay => (
+                    "authentication_failed",
+                    "Nonce already used (replay attack detected)".to_string(),
+                ),
+                ValidationError::ScopeMismatch { resource_id } => (
+                    "policy_denied",
+                    format!("Resource {} not in session scope", resource_id),
+                ),
+                ValidationError::HeaderHashMismatch { client, server } => (
+                    "authentication_failed",
+                    format!("Header hash mismatch: client={}, server={}", client, server),
+                ),
+                ValidationError::Chain(chain_err) => (
+                    "internal_error",
+                    format!("Chain query failed: {}", chain_err),
+                ),
+                ValidationError::Crypto(err) => {
+                    ("internal_error", format!("Crypto error: {}", err))
+                }
+            };
+            return Some(cbor_error_response(code, &message));
+        }
+    }
+
+    // 3. Parse NanoTDF header and perform rewrap
+    let mut parser = BinaryParser::new(header);
+    let parsed_header = match parser.parse_header() {
+        Ok(h) => h,
+        Err(e) => {
+            error!("Failed to parse NanoTDF header: {:?}", e);
+            return Some(cbor_error_response(
+                "invalid_format",
+                &format!("Invalid NanoTDF header: {}", e),
+            ));
+        }
+    };
+
+    let tdf_ephemeral_key_bytes = parsed_header.get_ephemeral_key();
+    if tdf_ephemeral_key_bytes.len() != 33 {
+        error!(
+            "Invalid ephemeral key size: {} (expected 33)",
+            tdf_ephemeral_key_bytes.len()
+        );
+        return Some(cbor_error_response(
+            "invalid_format",
+            &format!(
+                "Invalid ephemeral key size: {} bytes",
+                tdf_ephemeral_key_bytes.len()
+            ),
+        ));
+    }
+
+    let tdf_ephemeral_public_key = match PublicKey::from_sec1_bytes(tdf_ephemeral_key_bytes) {
+        Ok(key) => key,
+        Err(e) => {
+            error!("Failed to parse TDF ephemeral key: {:?}", e);
+            return Some(cbor_error_response(
+                "invalid_format",
+                "Invalid TDF ephemeral public key",
+            ));
+        }
+    };
+
+    // 4. Perform ECDH and rewrap
+    let kas_private_key_bytes = match get_kas_private_key_bytes() {
+        Some(bytes) => bytes,
+        None => {
+            error!("KAS private key not available");
+            return Some(cbor_error_response(
+                "internal_error",
+                "KAS private key not configured",
+            ));
+        }
+    };
+
+    let kas_private_key_array: [u8; 32] = match kas_private_key_bytes.try_into() {
+        Ok(arr) => arr,
+        Err(_) => {
+            error!("Invalid KAS private key size");
+            return Some(cbor_error_response(
+                "internal_error",
+                "Invalid KAS private key",
+            ));
+        }
+    };
+
+    let kas_private_key = match SecretKey::from_bytes(&kas_private_key_array.into()) {
+        Ok(key) => key,
+        Err(_) => {
+            error!("Failed to create KAS secret key");
+            return Some(cbor_error_response(
+                "internal_error",
+                "Invalid KAS private key",
+            ));
+        }
+    };
+
+    let dek_shared_secret_bytes =
+        match crypto::custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
+            Ok(secret) => secret,
+            Err(e) => {
+                error!("ECDH failed: {:?}", e);
+                return Some(cbor_error_response(
+                    "internal_error",
+                    &format!("Key agreement failed: {}", e),
+                ));
+            }
+        };
+
+    // Determine HKDF salt based on NanoTDF version
+    let nanotdf_salt = if let Some(version) = crypto::detect_nanotdf_version(header) {
+        crypto::compute_nanotdf_salt(version)
+    } else {
+        crypto::compute_nanotdf_salt(crypto::NANOTDF_VERSION_V12)
+    };
+
+    let (nonce_vec, wrapped_dek) = match crypto::rewrap_dek(
+        &dek_shared_secret_bytes,
+        &session_shared_secret,
+        &nanotdf_salt,
+        b"", // Empty info per NanoTDF spec
+    ) {
+        Ok(result) => result,
+        Err(e) => {
+            error!("Failed to rewrap DEK: {}", e);
+            return Some(cbor_error_response(
+                "internal_error",
+                &format!("Failed to rewrap key: {}", e),
+            ));
+        }
+    };
+
+    let total_time = start_time.elapsed();
+    info!(
+        "Chain rewrap completed in {:?} for session {}",
+        total_time,
+        hex::encode(&chain.session_id)
+    );
+
+    // 5. Build CBOR response
+    let response = CborResponse::RewrappedKey {
+        ephemeral_key: tdf_ephemeral_key_bytes.to_vec(),
+        nonce: nonce_vec.clone(),
+        wrapped_dek: wrapped_dek.clone(),
+    };
+
+    match response.encode() {
+        Ok(cbor_bytes) => {
+            let mut response_data = Vec::with_capacity(1 + cbor_bytes.len());
+            response_data.push(CBOR_MESSAGE_TYPE);
+            response_data.extend_from_slice(&cbor_bytes);
+            Some(Message::Binary(response_data))
+        }
+        Err(e) => {
+            error!("Failed to encode CBOR response: {}", e);
+            Some(cbor_error_response(
+                "internal_error",
+                "Failed to encode response",
+            ))
+        }
+    }
+}
+
+/// Handle CBOR key exchange request.
+async fn handle_cbor_key_exchange(
+    connection_state: &Arc<ConnectionState>,
+    public_key: &[u8],
+) -> Option<Message> {
+    use cbor_protocol::{CborResponse, CBOR_MESSAGE_TYPE};
+
+    // Check if session already established
+    {
+        let shared_secret_lock = connection_state.shared_secret_lock.read();
+        let shared_secret = shared_secret_lock.unwrap();
+        if shared_secret.is_some() {
+            return None; // Already established
+        }
+    }
+
+    if public_key.len() != 33 && public_key.len() != 65 {
+        error!("Invalid client public key size: {} bytes", public_key.len());
+        return Some(cbor_error_response(
+            "invalid_format",
+            &format!(
+                "Invalid public key size: {} bytes (expected 33 or 65 for P-256)",
+                public_key.len()
+            ),
+        ));
+    }
+
+    let client_public_key = match PublicKey::from_sec1_bytes(public_key) {
+        Ok(key) => key,
+        Err(e) => {
+            error!("Failed to deserialize client public key: {:?}", e);
+            return Some(cbor_error_response(
+                "invalid_format",
+                "Invalid P-256 public key",
+            ));
+        }
+    };
+
+    // Generate ephemeral key pair
+    let server_ephemeral_secret = EphemeralSecret::random(&mut OsRng);
+    let server_ephemeral_public = PublicKey::from(&server_ephemeral_secret);
+
+    // Perform ECDH
+    let shared_secret = server_ephemeral_secret.diffie_hellman(&client_public_key);
+
+    // Generate random salt
+    let mut session_salt = [0u8; 32];
+    OsRng.fill_bytes(&mut session_salt);
+
+    // Derive session key using HKDF
+    let hk = hkdf::Hkdf::<sha2::Sha256>::new(Some(&session_salt), shared_secret.raw_secret_bytes());
+    let mut session_key = vec![0u8; 32];
+    hk.expand(b"arkavo-session-key", &mut session_key)
+        .expect("HKDF expansion failed");
+
+    // Store session shared secret
+    {
+        let mut shared_secret_lock = connection_state.shared_secret_lock.write().unwrap();
+        *shared_secret_lock = Some(session_key);
+    }
+
+    // Build response
+    let response = CborResponse::KeyExchangeResponse {
+        kas_public_key: server_ephemeral_public
+            .to_encoded_point(true)
+            .as_bytes()
+            .to_vec(),
+        session_salt: session_salt.to_vec(),
+    };
+
+    match response.encode() {
+        Ok(cbor_bytes) => {
+            let mut response_data = Vec::with_capacity(1 + cbor_bytes.len());
+            response_data.push(CBOR_MESSAGE_TYPE);
+            response_data.extend_from_slice(&cbor_bytes);
+            Some(Message::Binary(response_data))
+        }
+        Err(e) => {
+            error!("Failed to encode CBOR key exchange response: {}", e);
+            Some(cbor_error_response(
+                "internal_error",
+                "Failed to encode response",
+            ))
+        }
+    }
+}
+
+/// Helper to create a CBOR error response message.
+fn cbor_error_response(code: &str, message: &str) -> Message {
+    use cbor_protocol::{CborResponse, CBOR_MESSAGE_TYPE};
+
+    let response = CborResponse::error(code, message);
+    match response.encode() {
+        Ok(cbor_bytes) => {
+            let mut response_data = Vec::with_capacity(1 + cbor_bytes.len());
+            response_data.push(CBOR_MESSAGE_TYPE);
+            response_data.extend_from_slice(&cbor_bytes);
+            Message::Binary(response_data)
+        }
+        Err(_) => {
+            // Fallback to JSON error if CBOR encoding fails
+            let json_error = serde_json::json!({
+                "type": "error",
+                "code": code,
+                "message": message
+            });
+            Message::Text(json_error.to_string())
+        }
+    }
+}
+
 async fn handle_public_key(
     connection_state: &Arc<ConnectionState>,
     payload: &[u8],
@@ -1811,6 +2311,7 @@ struct ServerState {
     settings: ServerSettings,
     redis_client: RedisClient,
     s3_client: s3::Client,
+    chain_validator: Option<Arc<dyn chain::SessionValidator>>,
 }
 
 /// WebSocket route state - contains all dependencies needed for WebSocket handling
@@ -1822,19 +2323,11 @@ struct WebSocketState {
 }
 
 impl ServerState {
-    async fn new(settings: ServerSettings) -> Result<Self, Box<dyn std::error::Error>> {
-        info!("Attempting to connect to Redis at {}", settings.redis_url);
-        let redis_client = match RedisClient::open(settings.redis_url.clone()) {
-            Ok(client) => {
-                info!("Successfully connected to Redis server");
-                client
-            }
-            Err(e) => {
-                error!("Failed to connect to Redis server: {}", e);
-                return Err(Box::new(e));
-            }
-        };
-
+    async fn new(
+        settings: ServerSettings,
+        redis_client: RedisClient,
+        chain_validator: Option<Arc<dyn chain::SessionValidator>>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         // Initialize AWS S3 client
         info!("Loading AWS configuration...");
         let config = aws_config::load_from_env().await;
@@ -1846,6 +2339,7 @@ impl ServerState {
             settings,
             redis_client,
             s3_client,
+            chain_validator,
         })
     }
 }
@@ -1864,6 +2358,8 @@ struct ServerSettings {
     jwt_validation_disabled: bool,
     jwt_public_key_path: Option<String>,
     s3_bucket: String,
+    /// Chain RPC URL for blockchain connectivity
+    chain_rpc_url: String,
 }
 
 fn log_timing(settings: &ServerSettings, message: &str, duration: std::time::Duration) {
@@ -1913,6 +2409,8 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
             .unwrap_or(true),
         jwt_public_key_path: env::var("JWT_PUBLIC_KEY_PATH").ok(),
         s3_bucket: env::var("S3_BUCKET").unwrap_or_else(|_| "default-bucket".to_string()),
+        chain_rpc_url: env::var("CHAIN_RPC_URL")
+            .unwrap_or_else(|_| "ws://chain.arkavo.net".to_string()),
     })
 }
 
@@ -1987,6 +2485,19 @@ fn validate_config(settings: &ServerSettings) -> Result<(), Box<dyn std::error::
     // Validate S3 bucket name
     if settings.s3_bucket.is_empty() {
         return Err("S3_BUCKET must not be empty".into());
+    }
+
+    // Validate Chain RPC URL format
+    if !settings.chain_rpc_url.starts_with("ws://")
+        && !settings.chain_rpc_url.starts_with("wss://")
+        && !settings.chain_rpc_url.starts_with("http://")
+        && !settings.chain_rpc_url.starts_with("https://")
+    {
+        return Err(format!(
+            "CHAIN_RPC_URL must be a valid WebSocket or HTTP URL: {}",
+            settings.chain_rpc_url
+        )
+        .into());
     }
 
     info!("✓ Configuration validation passed");
