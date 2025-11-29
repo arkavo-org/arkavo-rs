@@ -13,8 +13,7 @@ use p256::pkcs8::EncodePrivateKey;
 use p256::SecretKey;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
-    ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
-    StreamMetadata,
+    ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult, StreamMetadata,
 };
 use rml_rtmp::time::RtmpTimestamp;
 use std::sync::Arc;
@@ -126,8 +125,8 @@ impl RtmpSession {
     pub fn new(redis_client: Arc<redis::Client>, kas_private_key: [u8; 32]) -> Self {
         // Convert raw 32-byte key to PKCS#8 DER format for opentdf-rs
         // The EcdhKem::derive_key_with_private accepts SEC1 DER or PKCS#8 DER
-        let secret_key = SecretKey::from_bytes(&kas_private_key.into())
-            .expect("Invalid KAS private key bytes");
+        let secret_key =
+            SecretKey::from_bytes(&kas_private_key.into()).expect("Invalid KAS private key bytes");
         let kas_private_key_der = secret_key
             .to_pkcs8_der()
             .expect("Failed to encode key as PKCS#8")
@@ -192,10 +191,7 @@ impl RtmpSession {
                     break;
                 }
                 Err(e) => {
-                    return Err(SessionError::RtmpError(format!(
-                        "Handshake error: {:?}",
-                        e
-                    )));
+                    return Err(SessionError::RtmpError(format!("Handshake error: {:?}", e)));
                 }
             }
         }
@@ -479,7 +475,9 @@ impl RtmpSession {
                         // First video frame before metadata - auto-set passthrough
                         if !self.metadata_received {
                             self.encryption_mode = EncryptionMode::Passthrough;
-                            log::info!("Video data before metadata; defaulting to passthrough mode");
+                            log::info!(
+                                "Video data before metadata; defaulting to passthrough mode"
+                            );
                             // Relay this frame
                             self.relay_frame(RelayFrame {
                                 frame_type: FrameType::Video,

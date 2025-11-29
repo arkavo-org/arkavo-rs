@@ -47,7 +47,9 @@ impl fmt::Display for EncryptionError {
             EncryptionError::KeyAgreementFailed(msg) => write!(f, "Key agreement failed: {}", msg),
             EncryptionError::InvalidPublicKey(msg) => write!(f, "Invalid public key: {}", msg),
             EncryptionError::CollectionError(msg) => write!(f, "Collection error: {}", msg),
-            EncryptionError::IvExhausted => write!(f, "IV counter exhausted - create new collection"),
+            EncryptionError::IvExhausted => {
+                write!(f, "IV counter exhausted - create new collection")
+            }
         }
     }
 }
@@ -224,12 +226,9 @@ mod tests {
         let plaintext = b"Hello NTDF-RTMP! This is a test video frame payload.";
 
         // Create collection
-        let collection = create_collection(
-            "https://kas.example.com/kas",
-            b"test-policy",
-            &public_key,
-        )
-        .expect("Collection creation should succeed");
+        let collection =
+            create_collection("https://kas.example.com/kas", b"test-policy", &public_key)
+                .expect("Collection creation should succeed");
 
         // Get header bytes
         let header_bytes = collection_header_bytes(&collection).expect("Header serialization");
@@ -257,12 +256,9 @@ mod tests {
     fn test_decrypt_payload_too_short() {
         let (public_key, private_key) = generate_test_keypair();
 
-        let collection = create_collection(
-            "https://kas.example.com/kas",
-            b"test-policy",
-            &public_key,
-        )
-        .expect("Collection creation should succeed");
+        let collection =
+            create_collection("https://kas.example.com/kas", b"test-policy", &public_key)
+                .expect("Collection creation should succeed");
 
         let header_bytes = collection_header_bytes(&collection).expect("Header serialization");
         let decryptor = create_decryptor_kas(&header_bytes, &private_key).expect("Decryptor");
@@ -277,12 +273,9 @@ mod tests {
         let (public_key, _private_key) = generate_test_keypair();
         let plaintext = b"Same plaintext";
 
-        let collection = create_collection(
-            "https://kas.example.com/kas",
-            b"test-policy",
-            &public_key,
-        )
-        .expect("Collection creation should succeed");
+        let collection =
+            create_collection("https://kas.example.com/kas", b"test-policy", &public_key)
+                .expect("Collection creation should succeed");
 
         let encrypted1 = encrypt_item(&collection, plaintext).expect("Encryption should succeed");
         let encrypted2 = encrypt_item(&collection, plaintext).expect("Encryption should succeed");
@@ -342,12 +335,9 @@ mod tests {
     fn test_remaining_capacity() {
         let (public_key, _private_key) = generate_test_keypair();
 
-        let collection = create_collection(
-            "https://kas.example.com/kas",
-            b"test-policy",
-            &public_key,
-        )
-        .expect("Collection creation should succeed");
+        let collection =
+            create_collection("https://kas.example.com/kas", b"test-policy", &public_key)
+                .expect("Collection creation should succeed");
 
         // Initial capacity is MAX_IV (16,777,215)
         let initial = remaining_capacity(&collection);
@@ -363,12 +353,9 @@ mod tests {
         let (public_key, private_key) = generate_test_keypair();
         let plaintext = b"";
 
-        let collection = create_collection(
-            "https://kas.example.com/kas",
-            b"test-policy",
-            &public_key,
-        )
-        .expect("Collection creation should succeed");
+        let collection =
+            create_collection("https://kas.example.com/kas", b"test-policy", &public_key)
+                .expect("Collection creation should succeed");
 
         let header_bytes = collection_header_bytes(&collection).expect("Header");
         let encrypted = encrypt_item(&collection, plaintext).expect("Encryption should succeed");
