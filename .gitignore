@@ -34,6 +34,8 @@ Cargo.lock
 /etc/contracts/*/.idea/
 /apple-app-site-association.json
 /dump.rdb
+# Production directory (contains binary, keys, and scripts)
+/production/
 vendor/FairPlay*/
 # Allow committed FairPlay SDK Rust module
 !vendor/fpssdk/
