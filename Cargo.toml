@@ -65,9 +65,11 @@ uuid = { version = "1.11", features = ["v4"] }
 fairplay-wrapper = { path = "crates/fairplay-wrapper", optional = true }
 c2pa = { version = "0.37.1", features = ["file_io", "unstable_api"], optional = true }
 mp4parse = { version = "0.17", optional = true }
-# Git dependency on opentdf-rs for RSA crypto primitives
-# Source: https://github.com/arkavo-org/opentdf-rs
-opentdf = { git = "https://github.com/arkavo-org/opentdf-rs", branch = "main" }
+# opentdf-rs v0.8.0 - NanoTDF Collection support
+# Source: https://github.com/arkavo-org/opentdf-rs/releases/tag/0.8.0
+opentdf = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.8.0" }
+opentdf-crypto = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.8.0", features = ["kem-ec"] }
+opentdf-protocol = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.8.0" }
 rsa = { version = "0.9", features = ["sha2"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
 sha1 = "0.10"
@@ -85,6 +87,11 @@ thiserror = "1.0"
 async-trait = "0.1"
 ciborium = "0.2"
 serde_bytes = "0.11"
+
+# RTMP protocol support
+rml_rtmp = "0.8"
+rml_amf0 = "0.3"
+bytes = "1.0"
 
 [features]
 default = []

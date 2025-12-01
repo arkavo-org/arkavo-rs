@@ -661,6 +661,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tower::ServiceBuilder::new().layer(axum::middleware::from_fn(log_request_middleware)),
         );
 
+    // Start RTMP server if RTMP_PORT is configured
+    if let Ok(rtmp_port_str) = env::var("RTMP_PORT") {
+        let rtmp_port: u16 = rtmp_port_str.parse().unwrap_or(1935);
+        let rtmp_redis_client = Arc::new(server_state.redis_client.clone());
+        let rtmp_kas_key = kas_private_key_array;
+
+        tokio::spawn(async move {
+            let rtmp_server =
+                modules::rtmp::RtmpServer::with_port(rtmp_port, rtmp_redis_client, rtmp_kas_key);
+            if let Err(e) = rtmp_server.run().await {
+                error!("RTMP server error: {}", e);
+            }
+        });
+        info!("NTDF-RTMP server started on port {}", rtmp_port);
+    }
+
     // Set up unified server on single port
     let addr = format!("0.0.0.0:{}", settings.port);
     info!("Starting unified server (HTTP + WebSocket) on {}", addr);

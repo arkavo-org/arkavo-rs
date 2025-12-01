@@ -92,6 +92,9 @@ impl Header {
     pub fn get_ecc_mode(&self) -> &ECCAndBindingMode {
         &self.ecc_mode
     }
+    pub fn get_kas(&self) -> &ResourceLocator {
+        &self.kas
+    }
 }
 
 #[derive(Debug)]
