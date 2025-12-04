@@ -20,16 +20,19 @@ cargo build
 export RUSTFLAGS="-C target-cpu=native"
 cargo build --release --bin arks
 
-# Release build with FairPlay Streaming DRM
-./build-release.sh --fairplay
+# Release build with FairPlay Streaming DRM (default)
+./production/build.sh
+
+# Release build without FairPlay
+./production/build.sh --no-fairplay
 ```
 
-**Quick Build Script:** The `build-release.sh` script automates release builds:
-- Standard build: `./build-release.sh`
-- With FairPlay: `./build-release.sh --fairplay`
+**Quick Build Script:** The `production/build.sh` script automates release builds:
+- With FairPlay (default): `./production/build.sh`
+- Without FairPlay: `./production/build.sh --no-fairplay`
 - Automatically detects platform and sets correct library paths
+- Copies binary to `production/arks`
 - Shows build summary with binary size and dependencies
-```
 
 ### Testing
 ```bash

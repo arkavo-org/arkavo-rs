@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "arkavo-rs"
-version = "0.9.3"
+version = "0.9.4"
 edition = "2021"
 rust-version = "1.83.0"
 
@@ -73,6 +73,7 @@ opentdf-protocol = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.
 rsa = { version = "0.9", features = ["sha2"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
 sha1 = "0.10"
+z85 = "3.0"
 
 # Chain-driven KAS dependencies
 subxt = { version = "0.37", features = ["jsonrpsee"] }

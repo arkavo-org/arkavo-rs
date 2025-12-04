@@ -10,7 +10,7 @@ mod modules;
 
 #[cfg(feature = "c2pa_signing")]
 use modules::c2pa_signing;
-use modules::{cbor_protocol, crypto, http_rewrap, media_api};
+use modules::{cbor_protocol, crypto, http_rewrap, media_api, ntdf_token};
 
 use crate::contracts::content_rating::content_rating::{
     AgeLevel, ContentRating, Rating, RatingLevel,
@@ -25,11 +25,13 @@ use async_nats::{Client as NatsClient, PublishError};
 use aws_sdk_s3 as s3;
 use axum::extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
+use axum::http::header::AUTHORIZATION;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use flatbuffers::root;
 use futures_util::{SinkExt, StreamExt};
 use jsonwebtoken::{decode, DecodingKey, Validation};
-use log::{error, info};
+use log::{error, info, warn};
 use nanotdf::{BinaryParser, PolicyType, ProtocolEnum, ResourceLocator};
 use once_cell::sync::OnceCell;
 use p256::ecdh::EphemeralSecret;
@@ -113,6 +115,8 @@ struct ConnectionState {
     salt_lock: RwLock<Option<Vec<u8>>>,
     shared_secret_lock: RwLock<Option<Vec<u8>>>,
     claims_lock: RwLock<Option<Claims>>,
+    #[allow(dead_code)] // Used for future policy enforcement
+    ntdf_claims_lock: RwLock<Option<ntdf_token::NtdfTokenPayload>>,
     outgoing_tx: mpsc::UnboundedSender<Message>,
 }
 
@@ -122,6 +126,20 @@ impl ConnectionState {
             salt_lock: RwLock::new(None),
             shared_secret_lock: RwLock::new(None),
             claims_lock: RwLock::new(None),
+            ntdf_claims_lock: RwLock::new(None),
+            outgoing_tx,
+        }
+    }
+
+    fn new_with_ntdf_claims(
+        outgoing_tx: mpsc::UnboundedSender<Message>,
+        ntdf_claims: ntdf_token::NtdfTokenPayload,
+    ) -> Self {
+        ConnectionState {
+            salt_lock: RwLock::new(None),
+            shared_secret_lock: RwLock::new(None),
+            claims_lock: RwLock::new(None),
+            ntdf_claims_lock: RwLock::new(Some(ntdf_claims)),
             outgoing_tx,
         }
     }
@@ -237,9 +255,62 @@ async fn log_request_middleware(
 /// WebSocket upgrade handler for Axum
 async fn ws_handler(
     State(state): State<Arc<WebSocketState>>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_websocket_axum(socket, state))
+    // Check for NTDF token in Authorization header
+    if let Some(auth_header) = headers.get(AUTHORIZATION) {
+        if let Ok(auth_str) = auth_header.to_str() {
+            if auth_str.starts_with("NTDF ") {
+                // Validate NTDF token
+                match get_kas_private_key_bytes() {
+                    Some(kas_key_bytes) => {
+                        let kas_key_array: [u8; 32] = match kas_key_bytes.try_into() {
+                            Ok(arr) => arr,
+                            Err(_) => {
+                                warn!("Invalid KAS private key length");
+                                return (StatusCode::INTERNAL_SERVER_ERROR, "Server configuration error").into_response();
+                            }
+                        };
+                        let kas_private_key = match SecretKey::from_bytes(&kas_key_array.into()) {
+                            Ok(key) => key,
+                            Err(_) => {
+                                warn!("Invalid KAS private key");
+                                return (StatusCode::INTERNAL_SERVER_ERROR, "Server configuration error").into_response();
+                            }
+                        };
+
+                        match ntdf_token::validate_ntdf_token(
+                            auth_str,
+                            &kas_private_key,
+                            &state.server_state.settings.ntdf_expected_audience,
+                        ) {
+                            Ok(claims) => {
+                                info!(
+                                    "NTDF token validated: sub_id={}",
+                                    claims.sub_id_hex()
+                                );
+                                return ws.on_upgrade(move |socket| {
+                                    handle_websocket_axum_with_ntdf(socket, state, claims)
+                                }).into_response();
+                            }
+                            Err(e) => {
+                                warn!("NTDF token validation failed: {:?}", e);
+                                return (StatusCode::UNAUTHORIZED, format!("Invalid NTDF token: {}", e)).into_response();
+                            }
+                        }
+                    }
+                    None => {
+                        warn!("KAS private key not initialized");
+                        return (StatusCode::INTERNAL_SERVER_ERROR, "Server not ready").into_response();
+                    }
+                }
+            }
+        }
+    }
+
+    // No NTDF token - allow for backward compatibility
+    ws.on_upgrade(move |socket| handle_websocket_axum(socket, state)).into_response()
 }
 
 /// Handle WebSocket connection using Axum's WebSocket type
@@ -319,6 +390,100 @@ async fn handle_websocket_axum(ws: WebSocket, state: Arc<WebSocketState>) {
                                 error!("Invalid JWT: {}", e);
                             }
                         }
+                    }
+                    AxumMessage::Binary(data) => {
+                        // Handle binary message
+                        if let Some(response) = handle_binary_message(
+                            &connection_state,
+                            &state.server_state,
+                            data,
+                            state.nats_connection.clone(),
+                        )
+                        .await
+                        {
+                            // Convert tokio_tungstenite Message to Axum message and send via channel
+                            let _ = connection_state.outgoing_tx.send(response);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Err(e) => {
+                eprintln!("Error reading message: {}", e);
+                break;
+            }
+        }
+    }
+
+    // Cancel the NATS subscription when the WebSocket connection closes
+    nats_task.abort();
+    if let Some(task) = public_id_nats_task {
+        task.abort();
+    }
+    outgoing_task.abort();
+}
+
+/// Handle WebSocket connection with pre-validated NTDF claims
+async fn handle_websocket_axum_with_ntdf(
+    ws: WebSocket,
+    state: Arc<WebSocketState>,
+    ntdf_claims: ntdf_token::NtdfTokenPayload,
+) {
+    // Split the WebSocket into sender and receiver
+    let (mut ws_sender, mut ws_receiver) = ws.split();
+
+    // Create channel for outgoing messages
+    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
+
+    // Create ConnectionState with NTDF claims
+    let connection_state = Arc::new(ConnectionState::new_with_ntdf_claims(outgoing_tx, ntdf_claims.clone()));
+
+    // Set up NATS subscription for this connection
+    let nats_task = tokio::spawn(handle_nats_subscription(
+        state.nats_connection.clone(),
+        state.server_state.settings.nats_subject.clone(),
+        connection_state.clone(),
+    ));
+
+    // Subscribe to user-specific subject based on sub_id from NTDF token
+    let user_subject = format!("profile.{}", ntdf_claims.sub_id_hex());
+    info!("Subscribing to user subject: {}", user_subject);
+    let public_id_nats_task = Some(tokio::spawn(handle_nats_subscription(
+        state.nats_connection.clone(),
+        user_subject,
+        connection_state.clone(),
+    )));
+
+    // Spawn task to forward outgoing messages
+    let outgoing_task = tokio::spawn(async move {
+        while let Some(msg) = outgoing_rx.recv().await {
+            // Convert tokio_tungstenite Message to Axum WebSocket message
+            let axum_msg = match msg {
+                Message::Binary(data) => AxumMessage::Binary(data),
+                Message::Text(text) => AxumMessage::Text(text),
+                Message::Close(_) => AxumMessage::Close(None),
+                _ => continue,
+            };
+
+            if ws_sender.send(axum_msg).await.is_err() {
+                eprintln!("Failed to send outgoing message through WebSocket");
+                break;
+            }
+        }
+    });
+
+    // Handle incoming WebSocket messages
+    while let Some(result) = ws_receiver.next().await {
+        match result {
+            Ok(msg) => {
+                match msg {
+                    AxumMessage::Close(_) => {
+                        info!("Received a close message.");
+                        break;
+                    }
+                    AxumMessage::Text(_text) => {
+                        // JWT tokens not needed - already authenticated via NTDF
+                        // Could be used for other text-based messages in the future
                     }
                     AxumMessage::Binary(data) => {
                         // Handle binary message
@@ -2379,6 +2544,8 @@ struct ServerSettings {
     s3_bucket: String,
     /// Chain RPC URL for blockchain connectivity
     chain_rpc_url: String,
+    /// Expected audience for NTDF token validation
+    ntdf_expected_audience: String,
 }
 
 fn log_timing(settings: &ServerSettings, message: &str, duration: std::time::Duration) {
@@ -2430,6 +2597,8 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
         s3_bucket: env::var("S3_BUCKET").unwrap_or_else(|_| "default-bucket".to_string()),
         chain_rpc_url: env::var("CHAIN_RPC_URL")
             .unwrap_or_else(|_| "ws://chain.arkavo.net".to_string()),
+        ntdf_expected_audience: env::var("NTDF_EXPECTED_AUDIENCE")
+            .unwrap_or_else(|_| "https://100.arkavo.net".to_string()),
     })
 }
 
