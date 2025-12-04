@@ -369,8 +369,11 @@ async fn apple_app_site_association_handler(
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
-    env_logger::init();
+    // Initialize logging with default level if RUST_LOG not set
+    // Force unbuffered output to stderr for immediate log visibility
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_millis()
+        .init();
 
     // Install default crypto provider for rustls
     let _ = rustls::crypto::ring::default_provider().install_default();
