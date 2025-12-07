@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use super::session::RtmpSession;
+use super::stream_events::StreamEventBroadcaster;
 use super::DEFAULT_RTMP_PORT;
 
 /// RTMP server configuration and state
@@ -17,6 +18,8 @@ pub struct RtmpServer {
     pub redis_client: Arc<redis::Client>,
     /// KAS EC private key (32 bytes)
     pub kas_private_key: [u8; 32],
+    /// Stream event broadcaster for NATS
+    pub event_broadcaster: Option<Arc<StreamEventBroadcaster>>,
 }
 
 /// RTMP server error
@@ -44,6 +47,7 @@ impl RtmpServer {
             port: DEFAULT_RTMP_PORT,
             redis_client,
             kas_private_key,
+            event_broadcaster: None,
         }
     }
 
@@ -57,6 +61,22 @@ impl RtmpServer {
             port,
             redis_client,
             kas_private_key,
+            event_broadcaster: None,
+        }
+    }
+
+    /// Create a new RTMP server with event broadcasting
+    pub fn with_broadcaster(
+        port: u16,
+        redis_client: Arc<redis::Client>,
+        kas_private_key: [u8; 32],
+        event_broadcaster: Arc<StreamEventBroadcaster>,
+    ) -> Self {
+        RtmpServer {
+            port,
+            redis_client,
+            kas_private_key,
+            event_broadcaster: Some(event_broadcaster),
         }
     }
 
@@ -73,10 +93,14 @@ impl RtmpServer {
         log::info!("NTDF-RTMP server listening on {}", addr);
         log::info!("Protocol: NTDF-RTMP (NanoTDF over RTMP)");
         log::info!("Features: End-to-end encryption, manifest caching for late joiners");
+        if self.event_broadcaster.is_some() {
+            log::info!("Stream events: NATS broadcasting enabled");
+        }
 
         // Wrap shared state in Arc for cloning to spawned tasks
         let redis_client = self.redis_client;
         let kas_private_key = self.kas_private_key;
+        let event_broadcaster = self.event_broadcaster;
 
         loop {
             match listener.accept().await {
@@ -86,10 +110,11 @@ impl RtmpServer {
                     // Clone shared state for this connection
                     let redis = redis_client.clone();
                     let kas_key = kas_private_key;
+                    let broadcaster = event_broadcaster.clone();
 
                     // Spawn session handler
                     tokio::spawn(async move {
-                        let session = RtmpSession::new(redis, kas_key);
+                        let session = RtmpSession::new(redis, kas_key, broadcaster);
 
                         if let Err(e) = session.handle_connection(socket).await {
                             log::error!("RTMP session error from {}: {}", addr, e);
@@ -121,6 +146,7 @@ impl RtmpServer {
 
         let redis_client = self.redis_client;
         let kas_private_key = self.kas_private_key;
+        let event_broadcaster = self.event_broadcaster;
 
         loop {
             tokio::select! {
@@ -131,9 +157,10 @@ impl RtmpServer {
 
                             let redis = redis_client.clone();
                             let kas_key = kas_private_key;
+                            let broadcaster = event_broadcaster.clone();
 
                             tokio::spawn(async move {
-                                let session = RtmpSession::new(redis, kas_key);
+                                let session = RtmpSession::new(redis, kas_key, broadcaster);
                                 if let Err(e) = session.handle_connection(socket).await {
                                     log::error!("RTMP session error from {}: {}", addr, e);
                                 }

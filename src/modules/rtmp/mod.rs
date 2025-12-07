@@ -18,8 +18,10 @@ pub mod encryption;
 pub mod manifest;
 pub mod server;
 pub mod session;
+pub mod stream_events;
 
 pub use server::RtmpServer;
+pub use stream_events::StreamEventBroadcaster;
 
 /// RTMP default port
 pub const DEFAULT_RTMP_PORT: u16 = 1935;

@@ -24,6 +24,7 @@ use super::encryption::{
     create_decryptor_kas, decrypt_item, encrypt_item, rotation_threshold_reached,
 };
 use super::manifest::{delete_cached_manifest, get_cached_manifest, NanoTdfManifest};
+use super::stream_events::StreamEventBroadcaster;
 
 /// RTMP session role
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +100,10 @@ pub struct RtmpSession {
     subscribers: Vec<tokio::sync::mpsc::Sender<RelayFrame>>,
     /// Whether we've received onMetaData
     metadata_received: bool,
+    /// Stream event broadcaster for NATS notifications
+    event_broadcaster: Option<Arc<StreamEventBroadcaster>>,
+    /// Whether stream_started event has been sent
+    started_event_sent: bool,
 }
 
 /// Frame to relay to subscribers
@@ -122,7 +127,12 @@ impl RtmpSession {
     /// # Arguments
     /// * `redis_client` - Redis client for manifest caching
     /// * `kas_private_key` - KAS EC private key raw bytes (32 bytes for P-256)
-    pub fn new(redis_client: Arc<redis::Client>, kas_private_key: [u8; 32]) -> Self {
+    /// * `event_broadcaster` - Optional stream event broadcaster for NATS notifications
+    pub fn new(
+        redis_client: Arc<redis::Client>,
+        kas_private_key: [u8; 32],
+        event_broadcaster: Option<Arc<StreamEventBroadcaster>>,
+    ) -> Self {
         // Convert raw 32-byte key to PKCS#8 DER format for opentdf-rs
         // The EcdhKem::derive_key_with_private accepts SEC1 DER or PKCS#8 DER
         let secret_key =
@@ -144,6 +154,8 @@ impl RtmpSession {
             redis_client,
             subscribers: Vec::new(),
             metadata_received: false,
+            event_broadcaster,
+            started_event_sent: false,
         }
     }
 
@@ -251,6 +263,13 @@ impl RtmpSession {
             if let Some(ref stream_key) = self.stream_key {
                 let _ = delete_cached_manifest(&self.redis_client, stream_key).await;
                 log::info!("Publisher disconnected, cleaned up stream: {}", stream_key);
+
+                // Broadcast stream_stopped event if stream was started
+                if self.started_event_sent {
+                    if let Some(ref broadcaster) = self.event_broadcaster {
+                        broadcaster.stream_stopped(stream_key).await;
+                    }
+                }
             }
         }
 
@@ -438,6 +457,9 @@ impl RtmpSession {
     ) -> Result<(), SessionError> {
         match self.role {
             SessionRole::Publisher => {
+                // Emit stream_started event on first video frame
+                self.emit_stream_started_if_needed().await;
+
                 match self.encryption_mode {
                     EncryptionMode::Encrypted => {
                         // Encrypt video frame with Collection
@@ -631,6 +653,34 @@ impl RtmpSession {
     /// Get stream key
     pub fn stream_key(&self) -> Option<&str> {
         self.stream_key.as_deref()
+    }
+
+    /// Emit stream_started event if not already sent
+    async fn emit_stream_started_if_needed(&mut self) {
+        if self.started_event_sent {
+            return;
+        }
+
+        if self.role != SessionRole::Publisher {
+            return;
+        }
+
+        if let Some(ref stream_key) = self.stream_key {
+            if let Some(ref broadcaster) = self.event_broadcaster {
+                // Get manifest header if available (for NTDF streams)
+                let manifest_header = self
+                    .manifest
+                    .as_ref()
+                    .map(|m| base64::Engine::encode(&base64::prelude::BASE64_STANDARD, &m.header_bytes));
+
+                broadcaster
+                    .stream_started(stream_key, manifest_header.as_deref(), None)
+                    .await;
+
+                self.started_event_sent = true;
+                log::info!("Emitted stream_started event for {}", stream_key);
+            }
+        }
     }
 }
 

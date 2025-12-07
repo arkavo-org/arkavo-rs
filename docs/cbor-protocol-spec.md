@@ -166,6 +166,37 @@ route_event = {
 }
 ```
 
+### Stream Events
+
+Stream events are broadcast via NATS/WebSocket to notify clients of live stream lifecycle changes.
+
+#### `stream_started` (Server → Client)
+
+Broadcast when a publisher starts an NTDF-RTMP stream.
+
+```cddl
+stream_started = {
+  type: "stream_started",
+  stream_key: tstr,            ; Stream key (e.g., "live/abc123")
+  rtmp_url: tstr,              ; Full RTMP URL for playback
+  ? manifest_header: tstr,     ; Base64-encoded NanoTDF manifest header
+  ? title: tstr,               ; Optional stream title
+  timestamp: uint,             ; Milliseconds since Unix epoch
+}
+```
+
+#### `stream_stopped` (Server → Client)
+
+Broadcast when a publisher disconnects or stops streaming.
+
+```cddl
+stream_stopped = {
+  type: "stream_stopped",
+  stream_key: tstr,            ; Stream key that stopped
+  timestamp: uint,             ; Milliseconds since Unix epoch
+}
+```
+
 ### Errors
 
 #### `error` (Server → Client)

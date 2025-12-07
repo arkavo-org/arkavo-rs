@@ -835,9 +835,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let rtmp_redis_client = Arc::new(server_state.redis_client.clone());
         let rtmp_kas_key = kas_private_key_array;
 
+        // Get NATS client for stream event broadcasting
+        let rtmp_nats_client = nats_connection.get_client().await;
+        let rtmp_base_url = env::var("RTMP_BASE_URL")
+            .unwrap_or_else(|_| format!("rtmp://localhost:{}", rtmp_port));
+
+        // Create stream event broadcaster
+        let event_broadcaster = Arc::new(modules::rtmp::StreamEventBroadcaster::new(
+            rtmp_nats_client,
+            settings.nats_subject.clone(),
+            rtmp_base_url,
+        ));
+
         tokio::spawn(async move {
-            let rtmp_server =
-                modules::rtmp::RtmpServer::with_port(rtmp_port, rtmp_redis_client, rtmp_kas_key);
+            let rtmp_server = modules::rtmp::RtmpServer::with_broadcaster(
+                rtmp_port,
+                rtmp_redis_client,
+                rtmp_kas_key,
+                event_broadcaster,
+            );
             if let Err(e) = rtmp_server.run().await {
                 error!("RTMP server error: {}", e);
             }
