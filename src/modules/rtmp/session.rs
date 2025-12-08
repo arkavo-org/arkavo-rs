@@ -112,6 +112,12 @@ pub struct RtmpSession {
     event_broadcaster: Option<Arc<StreamEventBroadcaster>>,
     /// Whether stream_started event has been sent
     started_event_sent: bool,
+    /// Cached video sequence header for late joiner (set during subscribe)
+    cached_video_header: Option<Vec<u8>>,
+    /// Cached audio sequence header for late joiner (set during subscribe)
+    cached_audio_header: Option<Vec<u8>>,
+    /// Whether cached headers have been sent to subscriber
+    headers_sent: bool,
 }
 
 /// Frame to relay to subscribers
@@ -169,6 +175,9 @@ impl RtmpSession {
             metadata_received: false,
             event_broadcaster,
             started_event_sent: false,
+            cached_video_header: None,
+            cached_audio_header: None,
+            headers_sent: false,
         }
     }
 
@@ -252,6 +261,33 @@ impl RtmpSession {
             // Check if we're a subscriber with an active receiver
             if self.role == SessionRole::Subscriber {
                 if let Some(ref mut receiver) = self.frame_receiver {
+                    // Send cached sequence headers to late joiner (once)
+                    if !self.headers_sent {
+                        if let Some(stream_id) = self.subscriber_stream_id {
+                            // Send video sequence header first
+                            if let Some(ref video_header) = self.cached_video_header {
+                                log::info!("Sending cached video sequence header to late joiner ({} bytes)", video_header.len());
+                                let timestamp = RtmpTimestamp::new(0);
+                                let data = Bytes::from(video_header.clone());
+                                let packet = session
+                                    .send_video_data(stream_id, data, timestamp, false)
+                                    .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
+                                socket.write_all(&packet.bytes).await?;
+                            }
+                            // Send audio sequence header
+                            if let Some(ref audio_header) = self.cached_audio_header {
+                                log::info!("Sending cached audio sequence header to late joiner ({} bytes)", audio_header.len());
+                                let timestamp = RtmpTimestamp::new(0);
+                                let data = Bytes::from(audio_header.clone());
+                                let packet = session
+                                    .send_audio_data(stream_id, data, timestamp, false)
+                                    .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
+                                socket.write_all(&packet.bytes).await?;
+                            }
+                        }
+                        self.headers_sent = true;
+                    }
+
                     // Use select to handle both socket reads and frame reception
                     tokio::select! {
                         // Handle incoming socket data
@@ -445,10 +481,19 @@ impl RtmpSession {
                 log::info!("Play requested: {} (request_id: {}, stream_id: {})", full_key, request_id, stream_id);
 
                 // Subscribe to the stream registry to receive frames from publisher
-                if let Some((receiver, _video_header, _audio_header)) =
+                if let Some((receiver, video_header, audio_header)) =
                     self.stream_registry.subscribe(&full_key).await
                 {
                     self.frame_receiver = Some(receiver);
+                    // Cache headers for late joiner - will be sent after play is accepted
+                    if video_header.is_some() {
+                        log::info!("Got cached video sequence header for late joiner");
+                    }
+                    if audio_header.is_some() {
+                        log::info!("Got cached audio sequence header for late joiner");
+                    }
+                    self.cached_video_header = video_header;
+                    self.cached_audio_header = audio_header;
                     log::info!("Subscribed to live stream: {}", full_key);
                 } else {
                     log::warn!("Stream {} not currently live", full_key);
@@ -549,6 +594,42 @@ impl RtmpSession {
         Ok(())
     }
 
+    /// Check if video data is a sequence header (AVC/HEVC decoder configuration)
+    ///
+    /// FLV video tag format:
+    /// - Byte 0: Frame type (4 bits) + Codec ID (4 bits)
+    ///   - Frame types: 1=keyframe, 2=inter, etc.
+    ///   - Codec IDs: 7=AVC (H.264), 12=HEVC (H.265)
+    /// - Byte 1: AVC packet type (0=sequence header, 1=NAL units, 2=end of sequence)
+    fn is_video_sequence_header(data: &[u8]) -> bool {
+        if data.len() < 2 {
+            return false;
+        }
+        let frame_type = (data[0] >> 4) & 0x0F;
+        let codec_id = data[0] & 0x0F;
+        let avc_packet_type = data[1];
+
+        // Keyframe (1) + AVC (7) or HEVC (12) + Sequence header (0)
+        frame_type == 1 && (codec_id == 7 || codec_id == 12) && avc_packet_type == 0
+    }
+
+    /// Check if audio data is a sequence header (AAC decoder configuration)
+    ///
+    /// FLV audio tag format:
+    /// - Byte 0: Sound format (4 bits) + rate (2 bits) + size (1 bit) + type (1 bit)
+    ///   - Sound format 10 = AAC
+    /// - Byte 1: AAC packet type (0=sequence header, 1=raw data)
+    fn is_audio_sequence_header(data: &[u8]) -> bool {
+        if data.len() < 2 {
+            return false;
+        }
+        let sound_format = (data[0] >> 4) & 0x0F;
+        let aac_packet_type = data[1];
+
+        // AAC (10) + Sequence header (0)
+        sound_format == 10 && aac_packet_type == 0
+    }
+
     /// Handle video data
     async fn handle_video_data(
         &mut self,
@@ -559,6 +640,16 @@ impl RtmpSession {
             SessionRole::Publisher => {
                 // Emit stream_started event on first video frame
                 self.emit_stream_started_if_needed().await;
+
+                // Check if this is a sequence header and cache it for late joiners
+                if Self::is_video_sequence_header(data) {
+                    if let Some(ref stream_key) = self.stream_key {
+                        log::info!("Caching video sequence header for {}", stream_key);
+                        self.stream_registry
+                            .set_video_sequence_header(stream_key, data.to_vec())
+                            .await;
+                    }
+                }
 
                 match self.encryption_mode {
                     EncryptionMode::Encrypted => {
@@ -643,6 +734,16 @@ impl RtmpSession {
     ) -> Result<(), SessionError> {
         match self.role {
             SessionRole::Publisher => {
+                // Check if this is a sequence header and cache it for late joiners
+                if Self::is_audio_sequence_header(data) {
+                    if let Some(ref stream_key) = self.stream_key {
+                        log::info!("Caching audio sequence header for {}", stream_key);
+                        self.stream_registry
+                            .set_audio_sequence_header(stream_key, data.to_vec())
+                            .await;
+                    }
+                }
+
                 match self.encryption_mode {
                     EncryptionMode::Encrypted => {
                         if let Some(ref collection) = self.collection {
