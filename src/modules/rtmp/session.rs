@@ -8,9 +8,11 @@
 //! - Passthrough mode for standard cleartext RTMP streams
 
 use bytes::Bytes;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use opentdf_crypto::tdf::{NanoTdfCollection, NanoTdfCollectionDecryptor};
 use p256::pkcs8::EncodePrivateKey;
 use p256::SecretKey;
+use rml_rtmp::chunk_io::Packet;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult, StreamMetadata,
@@ -116,8 +118,16 @@ pub struct RtmpSession {
     cached_video_header: Option<Vec<u8>>,
     /// Cached audio sequence header for late joiner (set during subscribe)
     cached_audio_header: Option<Vec<u8>>,
+    /// Cached stream metadata for late joiner (set during subscribe)
+    cached_metadata: Option<StreamMetadata>,
     /// Whether cached headers have been sent to subscriber
     headers_sent: bool,
+    /// Frame counter for debugging (video + audio)
+    frame_count: u64,
+    /// Last frame count log time
+    last_frame_log: std::time::Instant,
+    /// Bytes received counter
+    bytes_received: u64,
 }
 
 /// Frame to relay to subscribers
@@ -177,7 +187,11 @@ impl RtmpSession {
             started_event_sent: false,
             cached_video_header: None,
             cached_audio_header: None,
+            cached_metadata: None,
             headers_sent: false,
+            frame_count: 0,
+            last_frame_log: std::time::Instant::now(),
+            bytes_received: 0,
         }
     }
 
@@ -242,9 +256,7 @@ impl RtmpSession {
 
         // Process any bytes left over from handshake
         if !remaining_bytes.is_empty() {
-            let results = session
-                .handle_input(&remaining_bytes)
-                .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
+            let results = Self::safe_handle_input(&mut session, &remaining_bytes)?;
 
             for result in results {
                 if let Some(request_id) = self.process_result(&mut socket, &result).await? {
@@ -261,10 +273,18 @@ impl RtmpSession {
             // Check if we're a subscriber with an active receiver
             if self.role == SessionRole::Subscriber {
                 if let Some(ref mut receiver) = self.frame_receiver {
-                    // Send cached sequence headers to late joiner (once)
+                    // Send cached metadata and sequence headers to late joiner (once)
                     if !self.headers_sent {
                         if let Some(stream_id) = self.subscriber_stream_id {
-                            // Send video sequence header first
+                            // Send metadata first (onMetaData) - required by most players
+                            if let Some(ref metadata) = self.cached_metadata {
+                                log::info!("Sending cached metadata to late joiner");
+                                let packet = session
+                                    .send_metadata(stream_id, metadata)
+                                    .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
+                                socket.write_all(&packet.bytes).await?;
+                            }
+                            // Send video sequence header
                             if let Some(ref video_header) = self.cached_video_header {
                                 log::info!("Sending cached video sequence header to late joiner ({} bytes)", video_header.len());
                                 let timestamp = RtmpTimestamp::new(0);
@@ -298,9 +318,7 @@ impl RtmpSession {
                                 break;
                             }
 
-                            let results = session
-                                .handle_input(&buf[..n])
-                                .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
+                            let results = Self::safe_handle_input(&mut session, &buf[..n])?;
 
                             for result in results {
                                 if let Some(request_id) = self.process_result(&mut socket, &result).await? {
@@ -322,14 +340,13 @@ impl RtmpSession {
                                         let timestamp = RtmpTimestamp::new(frame.timestamp);
                                         let data = Bytes::from(frame.data);
 
+                                        // Wrap send calls with panic catching (rml_rtmp bug workaround)
                                         let packet = match frame.frame_type {
                                             FrameType::Video => {
-                                                session.send_video_data(stream_id, data, timestamp, false)
-                                                    .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?
+                                                Self::safe_send_video(&mut session, stream_id, data, timestamp)?
                                             }
                                             FrameType::Audio => {
-                                                session.send_audio_data(stream_id, data, timestamp, false)
-                                                    .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?
+                                                Self::safe_send_audio(&mut session, stream_id, data, timestamp)?
                                             }
                                         };
 
@@ -358,10 +375,24 @@ impl RtmpSession {
                 break;
             }
 
-            // Process bytes through RTMP session
-            let results = session
-                .handle_input(&buf[..n])
-                .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
+            // Track bytes received for debugging
+            self.bytes_received += n as u64;
+
+            // Log periodic stats every 5 seconds for publishers
+            if self.role == SessionRole::Publisher && self.last_frame_log.elapsed().as_secs() >= 5
+            {
+                log::info!(
+                    "Publisher stats for {:?}: frames={}, bytes_received={}, role={:?}",
+                    self.stream_key,
+                    self.frame_count,
+                    self.bytes_received,
+                    self.role
+                );
+                self.last_frame_log = std::time::Instant::now();
+            }
+
+            // Process bytes through RTMP session (with panic catching for rml_rtmp bug)
+            let results = Self::safe_handle_input(&mut session, &buf[..n])?;
 
             for result in results {
                 if let Some(request_id) = self.process_result(&mut socket, &result).await? {
@@ -429,6 +460,120 @@ impl RtmpSession {
         Ok(())
     }
 
+    /// Safely handle RTMP input bytes with panic catching
+    ///
+    /// The rml_rtmp library has a known bug (deserializer.rs:371) where extended timestamp
+    /// handling can cause an arithmetic underflow panic. This wrapper catches such panics
+    /// and converts them to recoverable errors.
+    fn safe_handle_input(
+        session: &mut ServerSession,
+        input: &[u8],
+    ) -> Result<Vec<ServerSessionResult>, SessionError> {
+        let input_len = input.len();
+        let result = catch_unwind(AssertUnwindSafe(|| session.handle_input(input)));
+        match result {
+            Ok(Ok(results)) => {
+                log::trace!(
+                    "RTMP input processed: {} bytes, {} results",
+                    input_len,
+                    results.len()
+                );
+                Ok(results)
+            }
+            Ok(Err(e)) => {
+                // Log detailed error info for debugging
+                let first_bytes: Vec<u8> = input.iter().take(32).copied().collect();
+                log::error!(
+                    "RTMP chunk error: {:?}, input_len={}, first_bytes={:02x?}",
+                    e,
+                    input_len,
+                    first_bytes
+                );
+                Err(SessionError::RtmpError(format!("{:?}", e)))
+            }
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "Unknown panic in RTMP deserializer".to_string()
+                };
+                let first_bytes: Vec<u8> = input.iter().take(32).copied().collect();
+                log::error!(
+                    "RTMP deserializer panic: {}, input_len={}, first_bytes={:02x?}",
+                    msg,
+                    input_len,
+                    first_bytes
+                );
+                Err(SessionError::RtmpError(format!(
+                    "RTMP deserializer panic: {}",
+                    msg
+                )))
+            }
+        }
+    }
+
+    /// Safely send video data with panic catching (rml_rtmp bug workaround)
+    fn safe_send_video(
+        session: &mut ServerSession,
+        stream_id: u32,
+        data: Bytes,
+        timestamp: RtmpTimestamp,
+    ) -> Result<Packet, SessionError> {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            session.send_video_data(stream_id, data, timestamp, false)
+        }));
+        match result {
+            Ok(Ok(packet)) => Ok(packet),
+            Ok(Err(e)) => Err(SessionError::RtmpError(format!("{:?}", e))),
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "Unknown panic in RTMP video send".to_string()
+                };
+                log::error!("RTMP send_video_data panic (rml_rtmp bug): {}", msg);
+                Err(SessionError::RtmpError(format!(
+                    "RTMP send panic: {}",
+                    msg
+                )))
+            }
+        }
+    }
+
+    /// Safely send audio data with panic catching (rml_rtmp bug workaround)
+    fn safe_send_audio(
+        session: &mut ServerSession,
+        stream_id: u32,
+        data: Bytes,
+        timestamp: RtmpTimestamp,
+    ) -> Result<Packet, SessionError> {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            session.send_audio_data(stream_id, data, timestamp, false)
+        }));
+        match result {
+            Ok(Ok(packet)) => Ok(packet),
+            Ok(Err(e)) => Err(SessionError::RtmpError(format!("{:?}", e))),
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "Unknown panic in RTMP audio send".to_string()
+                };
+                log::error!("RTMP send_audio_data panic (rml_rtmp bug): {}", msg);
+                Err(SessionError::RtmpError(format!(
+                    "RTMP send panic: {}",
+                    msg
+                )))
+            }
+        }
+    }
+
     /// Handle an RTMP session event, returning request_id if acceptance is needed
     async fn handle_event(
         &mut self,
@@ -481,7 +626,7 @@ impl RtmpSession {
                 log::info!("Play requested: {} (request_id: {}, stream_id: {})", full_key, request_id, stream_id);
 
                 // Subscribe to the stream registry to receive frames from publisher
-                if let Some((receiver, video_header, audio_header)) =
+                if let Some((receiver, video_header, audio_header, metadata)) =
                     self.stream_registry.subscribe(&full_key).await
                 {
                     self.frame_receiver = Some(receiver);
@@ -492,8 +637,12 @@ impl RtmpSession {
                     if audio_header.is_some() {
                         log::info!("Got cached audio sequence header for late joiner");
                     }
+                    if metadata.is_some() {
+                        log::info!("Got cached stream metadata for late joiner");
+                    }
                     self.cached_video_header = video_header;
                     self.cached_audio_header = audio_header;
+                    self.cached_metadata = metadata;
                     log::info!("Subscribed to live stream: {}", full_key);
                 } else {
                     log::warn!("Stream {} not currently live", full_key);
@@ -570,13 +719,22 @@ impl RtmpSession {
     /// NTDF-aware encoders will need to inject ntdf_header via custom AMF data
     /// which will be parsed separately. Standard RTMP clients default to passthrough.
     async fn handle_metadata(&mut self, metadata: &StreamMetadata) -> Result<(), SessionError> {
-        // Log standard metadata for debugging
-        log::debug!(
-            "Stream metadata: video={}x{}, audio_rate={:?}",
+        // Log standard metadata for debugging including encoder info
+        log::info!(
+            "Stream metadata: video={}x{}, audio_rate={:?}, encoder={:?}",
             metadata.video_width.unwrap_or(0),
             metadata.video_height.unwrap_or(0),
-            metadata.audio_sample_rate
+            metadata.audio_sample_rate,
+            metadata.encoder
         );
+
+        // Cache metadata in registry for late-joining subscribers
+        if let Some(ref stream_key) = self.stream_key {
+            self.stream_registry
+                .set_stream_metadata(stream_key, metadata.clone())
+                .await;
+            log::debug!("Cached stream metadata for late joiners: {}", stream_key);
+        }
 
         // StreamMetadata from rml_rtmp doesn't expose custom fields like ntdf_header.
         // For NTDF-aware streams, the encoder needs to send a custom AMF data message
@@ -636,6 +794,9 @@ impl RtmpSession {
         data: &Bytes,
         timestamp: &RtmpTimestamp,
     ) -> Result<(), SessionError> {
+        // Increment frame counter
+        self.frame_count += 1;
+
         match self.role {
             SessionRole::Publisher => {
                 // Emit stream_started event on first video frame
@@ -732,6 +893,9 @@ impl RtmpSession {
         data: &Bytes,
         timestamp: &RtmpTimestamp,
     ) -> Result<(), SessionError> {
+        // Increment frame counter
+        self.frame_count += 1;
+
         match self.role {
             SessionRole::Publisher => {
                 // Check if this is a sequence header and cache it for late joiners

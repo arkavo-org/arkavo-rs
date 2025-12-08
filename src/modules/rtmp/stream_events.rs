@@ -89,6 +89,7 @@ fn current_timestamp() -> u64 {
 
 /// Stream event errors
 #[derive(Debug, thiserror::Error)]
+#[allow(clippy::enum_variant_names)]
 pub enum StreamEventError {
     #[error("Failed to encode stream event: {0}")]
     EncodeError(String),

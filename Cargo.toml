@@ -89,9 +89,9 @@ async-trait = "0.1"
 ciborium = "0.2"
 serde_bytes = "0.11"
 
-# RTMP protocol support
-rml_rtmp = "0.8"
-rml_amf0 = "0.3"
+# RTMP protocol support (using fork with deserializer overflow fix)
+rml_rtmp = { git = "https://github.com/arkavo-org/rust-media-libs", branch = "fix-deserializer-overflow" }
+rml_amf0 = { git = "https://github.com/arkavo-org/rust-media-libs", branch = "fix-deserializer-overflow" }
 bytes = "1.0"
 
 [features]

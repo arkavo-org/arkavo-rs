@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
+use rml_rtmp::sessions::StreamMetadata;
+
 use super::session::RelayFrame;
 
 /// Broadcast channel capacity for frame relay
@@ -21,6 +23,8 @@ pub struct ActiveStream {
     /// Cached metadata for late joiners (video sequence header, audio sequence header)
     pub video_sequence_header: Option<Vec<u8>>,
     pub audio_sequence_header: Option<Vec<u8>>,
+    /// Cached stream metadata (onMetaData) for late joiners
+    pub stream_metadata: Option<StreamMetadata>,
 }
 
 impl ActiveStream {
@@ -31,6 +35,7 @@ impl ActiveStream {
             frame_sender,
             video_sequence_header: None,
             audio_sequence_header: None,
+            stream_metadata: None,
         }
     }
 }
@@ -86,7 +91,8 @@ impl StreamRegistry {
     /// Subscribe to a stream
     ///
     /// Returns a receiver for frames if the stream exists, None otherwise.
-    pub async fn subscribe(&self, stream_key: &str) -> Option<(broadcast::Receiver<RelayFrame>, Option<Vec<u8>>, Option<Vec<u8>>)> {
+    /// Also returns cached video/audio sequence headers and stream metadata for late joiners.
+    pub async fn subscribe(&self, stream_key: &str) -> Option<(broadcast::Receiver<RelayFrame>, Option<Vec<u8>>, Option<Vec<u8>>, Option<StreamMetadata>)> {
         let streams = self.streams.read().await;
 
         if let Some(stream) = streams.get(stream_key) {
@@ -94,9 +100,10 @@ impl StreamRegistry {
             let receiver = stream.frame_sender.subscribe();
             let video_header = stream.video_sequence_header.clone();
             let audio_header = stream.audio_sequence_header.clone();
+            let metadata = stream.stream_metadata.clone();
 
             log::info!("Subscriber connected to: {}", stream_key);
-            Some((receiver, video_header, audio_header))
+            Some((receiver, video_header, audio_header, metadata))
         } else {
             log::debug!("Stream not found for subscription: {}", stream_key);
             None
@@ -118,6 +125,15 @@ impl StreamRegistry {
         if let Some(stream) = streams.get(stream_key) {
             let mut stream = stream.write().await;
             stream.audio_sequence_header = Some(header);
+        }
+    }
+
+    /// Update stream metadata for late joiners
+    pub async fn set_stream_metadata(&self, stream_key: &str, metadata: StreamMetadata) {
+        let streams = self.streams.read().await;
+        if let Some(stream) = streams.get(stream_key) {
+            let mut stream = stream.write().await;
+            stream.stream_metadata = Some(metadata);
         }
     }
 
@@ -150,7 +166,7 @@ mod tests {
         let result = registry.subscribe("live/test").await;
         assert!(result.is_some());
 
-        let (mut receiver, _, _) = result.unwrap();
+        let (mut receiver, _, _, _) = result.unwrap();
 
         // Send a frame
         let frame = RelayFrame {

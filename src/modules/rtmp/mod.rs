@@ -21,7 +21,6 @@ pub mod server;
 pub mod session;
 pub mod stream_events;
 
-pub use registry::StreamRegistry;
 pub use server::RtmpServer;
 pub use stream_events::StreamEventBroadcaster;
 
