@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
+use super::registry::StreamRegistry;
 use super::session::RtmpSession;
 use super::stream_events::StreamEventBroadcaster;
 use super::DEFAULT_RTMP_PORT;
@@ -20,6 +21,8 @@ pub struct RtmpServer {
     pub kas_private_key: [u8; 32],
     /// Stream event broadcaster for NATS
     pub event_broadcaster: Option<Arc<StreamEventBroadcaster>>,
+    /// Stream registry for publisher-subscriber linking
+    pub stream_registry: Arc<StreamRegistry>,
 }
 
 /// RTMP server error
@@ -48,6 +51,7 @@ impl RtmpServer {
             redis_client,
             kas_private_key,
             event_broadcaster: None,
+            stream_registry: Arc::new(StreamRegistry::new()),
         }
     }
 
@@ -62,6 +66,7 @@ impl RtmpServer {
             redis_client,
             kas_private_key,
             event_broadcaster: None,
+            stream_registry: Arc::new(StreamRegistry::new()),
         }
     }
 
@@ -77,6 +82,7 @@ impl RtmpServer {
             redis_client,
             kas_private_key,
             event_broadcaster: Some(event_broadcaster),
+            stream_registry: Arc::new(StreamRegistry::new()),
         }
     }
 
@@ -101,6 +107,7 @@ impl RtmpServer {
         let redis_client = self.redis_client;
         let kas_private_key = self.kas_private_key;
         let event_broadcaster = self.event_broadcaster;
+        let stream_registry = self.stream_registry;
 
         loop {
             match listener.accept().await {
@@ -111,10 +118,11 @@ impl RtmpServer {
                     let redis = redis_client.clone();
                     let kas_key = kas_private_key;
                     let broadcaster = event_broadcaster.clone();
+                    let registry = stream_registry.clone();
 
                     // Spawn session handler
                     tokio::spawn(async move {
-                        let session = RtmpSession::new(redis, kas_key, broadcaster);
+                        let session = RtmpSession::new(redis, kas_key, broadcaster, registry);
 
                         if let Err(e) = session.handle_connection(socket).await {
                             log::error!("RTMP session error from {}: {}", addr, e);
@@ -147,6 +155,7 @@ impl RtmpServer {
         let redis_client = self.redis_client;
         let kas_private_key = self.kas_private_key;
         let event_broadcaster = self.event_broadcaster;
+        let stream_registry = self.stream_registry;
 
         loop {
             tokio::select! {
@@ -158,9 +167,10 @@ impl RtmpServer {
                             let redis = redis_client.clone();
                             let kas_key = kas_private_key;
                             let broadcaster = event_broadcaster.clone();
+                            let registry = stream_registry.clone();
 
                             tokio::spawn(async move {
-                                let session = RtmpSession::new(redis, kas_key, broadcaster);
+                                let session = RtmpSession::new(redis, kas_key, broadcaster, registry);
                                 if let Err(e) = session.handle_connection(socket).await {
                                     log::error!("RTMP session error from {}: {}", addr, e);
                                 }

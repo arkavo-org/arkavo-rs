@@ -19,11 +19,13 @@ use rml_rtmp::time::RtmpTimestamp;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::broadcast;
 
 use super::encryption::{
     create_decryptor_kas, decrypt_item, encrypt_item, rotation_threshold_reached,
 };
 use super::manifest::{delete_cached_manifest, get_cached_manifest, NanoTdfManifest};
+use super::registry::StreamRegistry;
 use super::stream_events::StreamEventBroadcaster;
 
 /// RTMP session role
@@ -96,8 +98,14 @@ pub struct RtmpSession {
     kas_private_key: Vec<u8>,
     /// Redis client for manifest caching
     redis_client: Arc<redis::Client>,
-    /// Subscribers to relay encrypted frames to
-    subscribers: Vec<tokio::sync::mpsc::Sender<RelayFrame>>,
+    /// Stream registry for publisher-subscriber linking
+    stream_registry: Arc<StreamRegistry>,
+    /// Broadcast sender for publisher to send frames (only set for publishers)
+    frame_sender: Option<broadcast::Sender<RelayFrame>>,
+    /// Broadcast receiver for subscriber to receive frames (only set for subscribers)
+    frame_receiver: Option<broadcast::Receiver<RelayFrame>>,
+    /// Stream ID for subscriber (needed to send video/audio data)
+    subscriber_stream_id: Option<u32>,
     /// Whether we've received onMetaData
     metadata_received: bool,
     /// Stream event broadcaster for NATS notifications
@@ -128,10 +136,12 @@ impl RtmpSession {
     /// * `redis_client` - Redis client for manifest caching
     /// * `kas_private_key` - KAS EC private key raw bytes (32 bytes for P-256)
     /// * `event_broadcaster` - Optional stream event broadcaster for NATS notifications
+    /// * `stream_registry` - Shared stream registry for publisher-subscriber linking
     pub fn new(
         redis_client: Arc<redis::Client>,
         kas_private_key: [u8; 32],
         event_broadcaster: Option<Arc<StreamEventBroadcaster>>,
+        stream_registry: Arc<StreamRegistry>,
     ) -> Self {
         // Convert raw 32-byte key to PKCS#8 DER format for opentdf-rs
         // The EcdhKem::derive_key_with_private accepts SEC1 DER or PKCS#8 DER
@@ -152,7 +162,10 @@ impl RtmpSession {
             decryptor: None,
             kas_private_key: kas_private_key_der,
             redis_client,
-            subscribers: Vec::new(),
+            stream_registry,
+            frame_sender: None,
+            frame_receiver: None,
+            subscriber_stream_id: None,
             metadata_received: false,
             event_broadcaster,
             started_event_sent: false,
@@ -234,8 +247,75 @@ impl RtmpSession {
             }
         }
 
-        // Main session loop
+        // Main session loop - handles both socket reads and frame relay for subscribers
         loop {
+            // Check if we're a subscriber with an active receiver
+            if self.role == SessionRole::Subscriber {
+                if let Some(ref mut receiver) = self.frame_receiver {
+                    // Use select to handle both socket reads and frame reception
+                    tokio::select! {
+                        // Handle incoming socket data
+                        read_result = socket.read(&mut buf) => {
+                            let n = read_result?;
+                            if n == 0 {
+                                log::info!("RTMP connection closed: {}", peer_addr);
+                                break;
+                            }
+
+                            let results = session
+                                .handle_input(&buf[..n])
+                                .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
+
+                            for result in results {
+                                if let Some(request_id) = self.process_result(&mut socket, &result).await? {
+                                    let accept_results = session
+                                        .accept_request(request_id)
+                                        .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
+                                    Self::send_responses(&mut socket, accept_results).await?;
+                                    log::info!("Request {} accepted", request_id);
+                                }
+                            }
+                        }
+
+                        // Handle frames from publisher
+                        frame_result = receiver.recv() => {
+                            match frame_result {
+                                Ok(frame) => {
+                                    // Get stream ID for sending
+                                    if let Some(stream_id) = self.subscriber_stream_id {
+                                        let timestamp = RtmpTimestamp::new(frame.timestamp);
+                                        let data = Bytes::from(frame.data);
+
+                                        let packet = match frame.frame_type {
+                                            FrameType::Video => {
+                                                session.send_video_data(stream_id, data, timestamp, false)
+                                                    .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?
+                                            }
+                                            FrameType::Audio => {
+                                                session.send_audio_data(stream_id, data, timestamp, false)
+                                                    .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?
+                                            }
+                                        };
+
+                                        // Send the RTMP packet to subscriber
+                                        socket.write_all(&packet.bytes).await?;
+                                    }
+                                }
+                                Err(broadcast::error::RecvError::Lagged(n)) => {
+                                    log::warn!("Subscriber lagged, dropped {} frames", n);
+                                }
+                                Err(broadcast::error::RecvError::Closed) => {
+                                    log::info!("Publisher stream ended");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            // For publishers and subscribers without active stream - just read socket
             let n = socket.read(&mut buf).await?;
             if n == 0 {
                 log::info!("RTMP connection closed: {}", peer_addr);
@@ -261,6 +341,9 @@ impl RtmpSession {
         // Cleanup on disconnect
         if self.role == SessionRole::Publisher {
             if let Some(ref stream_key) = self.stream_key {
+                // Unregister from stream registry
+                self.stream_registry.unregister_publisher(stream_key).await;
+
                 let _ = delete_cached_manifest(&self.redis_client, stream_key).await;
                 log::info!("Publisher disconnected, cleaned up stream: {}", stream_key);
 
@@ -331,11 +414,16 @@ impl RtmpSession {
                 mode: _,
             } => {
                 self.role = SessionRole::Publisher;
-                self.stream_key = Some(format!("{}/{}", app_name, stream_key));
+                let full_key = format!("{}/{}", app_name, stream_key);
+                self.stream_key = Some(full_key.clone());
+
+                // Register with stream registry and get broadcast sender
+                let sender = self.stream_registry.register_publisher(&full_key).await;
+                self.frame_sender = Some(sender);
+
                 log::info!(
-                    "Publish requested: {}/{} (request_id: {})",
-                    app_name,
-                    stream_key,
+                    "Publish requested: {} (request_id: {})",
+                    full_key,
                     request_id
                 );
                 Ok(Some(*request_id))
@@ -348,12 +436,23 @@ impl RtmpSession {
                 start_at: _,
                 duration: _,
                 reset: _,
-                stream_id: _,
+                stream_id,
             } => {
                 self.role = SessionRole::Subscriber;
                 let full_key = format!("{}/{}", app_name, stream_key);
                 self.stream_key = Some(full_key.clone());
-                log::info!("Play requested: {} (request_id: {})", full_key, request_id);
+                self.subscriber_stream_id = Some(*stream_id);
+                log::info!("Play requested: {} (request_id: {}, stream_id: {})", full_key, request_id, stream_id);
+
+                // Subscribe to the stream registry to receive frames from publisher
+                if let Some((receiver, _video_header, _audio_header)) =
+                    self.stream_registry.subscribe(&full_key).await
+                {
+                    self.frame_receiver = Some(receiver);
+                    log::info!("Subscribed to live stream: {}", full_key);
+                } else {
+                    log::warn!("Stream {} not currently live", full_key);
+                }
 
                 // Try to fetch cached manifest for late joiner
                 match get_cached_manifest(&self.redis_client, &full_key).await {
@@ -362,7 +461,8 @@ impl RtmpSession {
                         self.set_manifest_subscriber(manifest)?;
                     }
                     Err(_) => {
-                        log::debug!("No cached manifest found, waiting for live manifest");
+                        log::debug!("No cached manifest found, using passthrough mode");
+                        self.encryption_mode = EncryptionMode::Passthrough;
                     }
                 }
                 Ok(Some(*request_id))
@@ -480,8 +580,7 @@ impl RtmpSession {
                                 frame_type: FrameType::Video,
                                 timestamp: timestamp.value,
                                 data: encrypted,
-                            })
-                            .await;
+                            });
                         }
                     }
                     EncryptionMode::Passthrough => {
@@ -490,8 +589,7 @@ impl RtmpSession {
                             frame_type: FrameType::Video,
                             timestamp: timestamp.value,
                             data: data.to_vec(),
-                        })
-                        .await;
+                        });
                     }
                     EncryptionMode::Pending => {
                         // First video frame before metadata - auto-set passthrough
@@ -505,8 +603,7 @@ impl RtmpSession {
                                 frame_type: FrameType::Video,
                                 timestamp: timestamp.value,
                                 data: data.to_vec(),
-                            })
-                            .await;
+                            });
                         }
                     }
                 }
@@ -556,8 +653,7 @@ impl RtmpSession {
                                 frame_type: FrameType::Audio,
                                 timestamp: timestamp.value,
                                 data: encrypted,
-                            })
-                            .await;
+                            });
                         }
                     }
                     EncryptionMode::Passthrough => {
@@ -566,8 +662,7 @@ impl RtmpSession {
                             frame_type: FrameType::Audio,
                             timestamp: timestamp.value,
                             data: data.to_vec(),
-                        })
-                        .await;
+                        });
                     }
                     EncryptionMode::Pending => {
                         // Pending - will be handled when mode is set
@@ -615,20 +710,12 @@ impl RtmpSession {
         log::debug!("Collection set for publisher encryption");
     }
 
-    /// Relay frame to all subscribers
-    async fn relay_frame(&mut self, frame: RelayFrame) {
-        // Remove disconnected subscribers
-        self.subscribers.retain(|tx| !tx.is_closed());
-
-        // Send to all subscribers
-        for tx in &self.subscribers {
-            let _ = tx.send(frame.clone()).await;
+    /// Relay frame to all subscribers via broadcast channel
+    fn relay_frame(&self, frame: RelayFrame) {
+        if let Some(ref sender) = self.frame_sender {
+            // Broadcast to all subscribers - ignore errors (no subscribers or lagging)
+            let _ = sender.send(frame);
         }
-    }
-
-    /// Add a subscriber channel for relay
-    pub fn add_subscriber(&mut self, tx: tokio::sync::mpsc::Sender<RelayFrame>) {
-        self.subscribers.push(tx);
     }
 
     /// Get current manifest if available
