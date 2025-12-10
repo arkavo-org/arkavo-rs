@@ -7,6 +7,7 @@ use aes_gcm::aead::KeyInit;
 use aes_gcm::aead::{Aead, Key};
 use aes_gcm::Aes256Gcm;
 use hkdf::Hkdf;
+use p256::pkcs8::{DecodePublicKey, EncodePublicKey};
 use p256::{PublicKey, SecretKey};
 use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
@@ -229,19 +230,27 @@ mod tests {
 
 // ==================== Utility Functions ====================
 
-/// Parse a PEM-formatted P-256 public key
-pub fn parse_pem_public_key(pem: &str) -> Result<PublicKey, Box<dyn Error>> {
-    let pem_parsed = pem::parse(pem)?;
+/// Parse a PEM-formatted P-256 public key (SPKI or raw SEC1 format)
+pub fn parse_pem_public_key(pem_str: &str) -> Result<PublicKey, Box<dyn Error>> {
+    // First try SPKI format (standard from WebCrypto/OpenSSL)
+    if let Ok(pk) = PublicKey::from_public_key_pem(pem_str) {
+        return Ok(pk);
+    }
+
+    // Fallback to raw SEC1 bytes in PEM wrapper (legacy non-standard)
+    let pem_parsed = pem::parse(pem_str)?;
     let public_key = PublicKey::from_sec1_bytes(pem_parsed.contents())?;
     Ok(public_key)
 }
 
 /// Convert a P-256 public key to PEM format
 pub fn public_key_to_pem(public_key: &PublicKey) -> Result<String, Box<dyn Error>> {
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
-    let encoded_point = public_key.to_encoded_point(false);
-    let sec1_bytes = encoded_point.as_bytes();
-    let pem_encoded = pem::Pem::new("PUBLIC KEY", sec1_bytes.to_vec());
+    // Use SPKI format (SubjectPublicKeyInfo) for proper DER encoding
+    // This produces a ~91 byte DER structure that CryptoKit can parse
+    let spki_doc = public_key
+        .to_public_key_der()
+        .map_err(|e| format!("Failed to encode public key as SPKI DER: {}", e))?;
+    let pem_encoded = pem::Pem::new("PUBLIC KEY", spki_doc.as_bytes().to_vec());
     Ok(pem::encode(&pem_encoded))
 }
 
