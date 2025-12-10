@@ -12,6 +12,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use opentdf_crypto::tdf::{NanoTdfCollection, NanoTdfCollectionDecryptor};
 use p256::pkcs8::EncodePrivateKey;
 use p256::SecretKey;
+use rml_amf0::Amf0Value;
 use rml_rtmp::chunk_io::Packet;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
@@ -120,6 +121,8 @@ pub struct RtmpSession {
     cached_audio_header: Option<Vec<u8>>,
     /// Cached stream metadata for late joiner (set during subscribe)
     cached_metadata: Option<StreamMetadata>,
+    /// Cached NanoTDF header (base64-encoded) for late joiner (set during subscribe)
+    cached_ntdf_header: Option<String>,
     /// Whether cached headers have been sent to subscriber
     headers_sent: bool,
     /// Frame counter for debugging (video + audio)
@@ -188,6 +191,7 @@ impl RtmpSession {
             cached_video_header: None,
             cached_audio_header: None,
             cached_metadata: None,
+            cached_ntdf_header: None,
             headers_sent: false,
             frame_count: 0,
             last_frame_log: std::time::Instant::now(),
@@ -277,10 +281,24 @@ impl RtmpSession {
                     if !self.headers_sent {
                         if let Some(stream_id) = self.subscriber_stream_id {
                             // Send metadata first (onMetaData) - required by most players
+                            // The metadata now includes custom_fields (like ntdf_header) automatically
                             if let Some(ref metadata) = self.cached_metadata {
-                                log::info!("Sending cached metadata to late joiner");
+                                // If we have a cached ntdf_header, add it to the metadata
+                                let mut meta_with_ntdf = metadata.clone();
+                                if let Some(ref ntdf_header) = self.cached_ntdf_header {
+                                    meta_with_ntdf.custom_fields.insert(
+                                        "ntdf_header".to_string(),
+                                        ntdf_header.clone(),
+                                    );
+                                    log::info!(
+                                        "Sending cached metadata with ntdf_header to late joiner ({} chars)",
+                                        ntdf_header.len()
+                                    );
+                                } else {
+                                    log::info!("Sending cached metadata to late joiner");
+                                }
                                 let packet = session
-                                    .send_metadata(stream_id, metadata)
+                                    .send_metadata(stream_id, &meta_with_ntdf)
                                     .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
                                 socket.write_all(&packet.bytes).await?;
                             }
@@ -626,7 +644,7 @@ impl RtmpSession {
                 log::info!("Play requested: {} (request_id: {}, stream_id: {})", full_key, request_id, stream_id);
 
                 // Subscribe to the stream registry to receive frames from publisher
-                if let Some((receiver, video_header, audio_header, metadata)) =
+                if let Some((receiver, video_header, audio_header, metadata, ntdf_header)) =
                     self.stream_registry.subscribe(&full_key).await
                 {
                     self.frame_receiver = Some(receiver);
@@ -640,9 +658,13 @@ impl RtmpSession {
                     if metadata.is_some() {
                         log::info!("Got cached stream metadata for late joiner");
                     }
+                    if ntdf_header.is_some() {
+                        log::info!("Got cached ntdf_header for late joiner");
+                    }
                     self.cached_video_header = video_header;
                     self.cached_audio_header = audio_header;
                     self.cached_metadata = metadata;
+                    self.cached_ntdf_header = ntdf_header;
                     log::info!("Subscribed to live stream: {}", full_key);
                 } else {
                     log::warn!("Stream {} not currently live", full_key);
@@ -697,9 +719,15 @@ impl RtmpSession {
                 command_name,
                 transaction_id: _,
                 command_object: _,
-                additional_values: _,
+                additional_values,
             } => {
                 log::debug!("Unhandled AMF0 command: {}", command_name);
+
+                // Check for @setDataFrame or onMetaData containing ntdf_header
+                if command_name == "@setDataFrame" || command_name == "onMetaData" {
+                    self.extract_ntdf_header_from_amf(additional_values).await;
+                }
+
                 Ok(None)
             }
 
@@ -715,17 +743,17 @@ impl RtmpSession {
     /// Checks for `ntdf_header` key containing base64-encoded NanoTDF header.
     /// If found, initializes encryption context. Otherwise, sets passthrough mode.
     ///
-    /// NOTE: The rml_rtmp StreamMetadata struct doesn't expose custom fields.
-    /// NTDF-aware encoders will need to inject ntdf_header via custom AMF data
-    /// which will be parsed separately. Standard RTMP clients default to passthrough.
+    /// Handle stream metadata from publisher.
+    /// Extracts ntdf_header from custom_fields if present for NTDF-RTMP streams.
     async fn handle_metadata(&mut self, metadata: &StreamMetadata) -> Result<(), SessionError> {
         // Log standard metadata for debugging including encoder info
         log::info!(
-            "Stream metadata: video={}x{}, audio_rate={:?}, encoder={:?}",
+            "Stream metadata: video={}x{}, audio_rate={:?}, encoder={:?}, custom_fields={:?}",
             metadata.video_width.unwrap_or(0),
             metadata.video_height.unwrap_or(0),
             metadata.audio_sample_rate,
-            metadata.encoder
+            metadata.encoder,
+            metadata.custom_fields.keys().collect::<Vec<_>>()
         );
 
         // Cache metadata in registry for late-joining subscribers
@@ -734,17 +762,35 @@ impl RtmpSession {
                 .set_stream_metadata(stream_key, metadata.clone())
                 .await;
             log::debug!("Cached stream metadata for late joiners: {}", stream_key);
+
+            // Check for ntdf_header in custom_fields (NTDF-RTMP streams)
+            if let Some(ntdf_header) = metadata.custom_fields.get("ntdf_header") {
+                log::info!(
+                    "Found ntdf_header in metadata: {}... ({} chars)",
+                    &ntdf_header[..ntdf_header.len().min(50)],
+                    ntdf_header.len()
+                );
+                self.stream_registry
+                    .set_ntdf_header(stream_key, ntdf_header.clone())
+                    .await;
+
+                // Set encryption mode to encrypted (NTDF stream detected)
+                if self.encryption_mode == EncryptionMode::Pending {
+                    self.encryption_mode = EncryptionMode::Encrypted;
+                    log::info!(
+                        "NTDF metadata received; enabling encrypted mode for {:?}",
+                        self.stream_key
+                    );
+                }
+                return Ok(());
+            }
         }
 
-        // StreamMetadata from rml_rtmp doesn't expose custom fields like ntdf_header.
-        // For NTDF-aware streams, the encoder needs to send a custom AMF data message
-        // with the ntdf_header field, which we handle in UnhandleableAmf0Command.
-        //
-        // For now, standard RTMP streams (FFmpeg, OBS) default to passthrough mode.
+        // No ntdf_header found - default to passthrough mode for standard RTMP streams
         if self.encryption_mode == EncryptionMode::Pending {
             self.encryption_mode = EncryptionMode::Passthrough;
             log::info!(
-                "Standard metadata received; defaulting to passthrough mode for {:?}",
+                "Standard metadata received (no ntdf_header); defaulting to passthrough mode for {:?}",
                 self.stream_key
             );
         }
@@ -1034,6 +1080,63 @@ impl RtmpSession {
             }
         }
     }
+
+    /// Extract ntdf_header from AMF0 values (from @setDataFrame or onMetaData)
+    ///
+    /// The ntdf_header is a base64-encoded NanoTDF header sent by NTDF-aware publishers.
+    /// It can be found in:
+    /// - An Object with "ntdf_header" key
+    /// - A nested structure where the second value is an Object containing "ntdf_header"
+    async fn extract_ntdf_header_from_amf(&mut self, values: &[Amf0Value]) {
+        // Log what we received for debugging
+        log::debug!("Extracting ntdf_header from {} AMF values", values.len());
+
+        for (i, value) in values.iter().enumerate() {
+            log::trace!("AMF value {}: {:?}", i, value);
+
+            // Check if this value is an Object containing ntdf_header
+            if let Some(ntdf_header) = Self::extract_ntdf_from_value(value) {
+                log::info!("Found ntdf_header in AMF value {}: {}...", i, &ntdf_header[..ntdf_header.len().min(50)]);
+
+                // Cache in registry for late joiners
+                if let Some(ref stream_key) = self.stream_key {
+                    self.stream_registry.set_ntdf_header(stream_key, ntdf_header).await;
+                }
+                return;
+            }
+        }
+
+        log::debug!("No ntdf_header found in AMF values");
+    }
+
+    /// Recursively extract ntdf_header from an Amf0Value
+    fn extract_ntdf_from_value(value: &Amf0Value) -> Option<String> {
+        match value {
+            Amf0Value::Object(map) => {
+                // Check if this object has ntdf_header
+                if let Some(Amf0Value::Utf8String(header)) = map.get("ntdf_header") {
+                    return Some(header.clone());
+                }
+                // Check nested objects
+                for v in map.values() {
+                    if let Some(header) = Self::extract_ntdf_from_value(v) {
+                        return Some(header);
+                    }
+                }
+                None
+            }
+            Amf0Value::StrictArray(arr) => {
+                for v in arr {
+                    if let Some(header) = Self::extract_ntdf_from_value(v) {
+                        return Some(header);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
 }
 
 #[cfg(test)]

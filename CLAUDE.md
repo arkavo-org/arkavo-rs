@@ -241,6 +241,9 @@ export C2PA_ALLOWED_CREATORS=creator1@example.com,creator2@example.com  # Option
 # FairPlay Streaming Configuration (optional, requires --features fairplay)
 export FAIRPLAY_CREDENTIALS_PATH=/path/to/fps/credentials
 # See "FairPlay SDK Installation" section above for library setup
+
+# Chain Validation Configuration (optional - blockchain-based session validation)
+export CHAIN_RPC_URL=ws://chain.arkavo.net          # Optional, disables chain validation if not set
 ```
 
 **Note:** For RSA key support (Standard TDF / OpenTDFKit compatibility):
@@ -260,6 +263,12 @@ export FAIRPLAY_CREDENTIALS_PATH=/path/to/fps/credentials
 - Install libfpscrypto library as described in the "FairPlay SDK Installation" section above
 - Set FAIRPLAY_CREDENTIALS_PATH to your FairPlay credentials directory
 - Build with `cargo build --features fairplay`
+
+**Note:** For Chain Validation (blockchain-based session validation):
+- Chain validation is optional and disabled if `CHAIN_RPC_URL` is not set
+- When enabled, rewrap requests require a `chain_session_id` in the JWT payload
+- The KAS queries the arkavo-node blockchain to validate session grants
+- Session data is cached with a 6-second TTL for performance
 
 ## FlatBuffers Schema Compilation
 

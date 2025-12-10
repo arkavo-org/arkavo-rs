@@ -25,6 +25,8 @@ pub struct ActiveStream {
     pub audio_sequence_header: Option<Vec<u8>>,
     /// Cached stream metadata (onMetaData) for late joiners
     pub stream_metadata: Option<StreamMetadata>,
+    /// Cached NanoTDF header (base64-encoded) for late joiners
+    pub ntdf_header: Option<String>,
 }
 
 impl ActiveStream {
@@ -36,6 +38,7 @@ impl ActiveStream {
             video_sequence_header: None,
             audio_sequence_header: None,
             stream_metadata: None,
+            ntdf_header: None,
         }
     }
 }
@@ -91,8 +94,9 @@ impl StreamRegistry {
     /// Subscribe to a stream
     ///
     /// Returns a receiver for frames if the stream exists, None otherwise.
-    /// Also returns cached video/audio sequence headers and stream metadata for late joiners.
-    pub async fn subscribe(&self, stream_key: &str) -> Option<(broadcast::Receiver<RelayFrame>, Option<Vec<u8>>, Option<Vec<u8>>, Option<StreamMetadata>)> {
+    /// Also returns cached video/audio sequence headers, stream metadata, and ntdf_header for late joiners.
+    #[allow(clippy::type_complexity)]
+    pub async fn subscribe(&self, stream_key: &str) -> Option<(broadcast::Receiver<RelayFrame>, Option<Vec<u8>>, Option<Vec<u8>>, Option<StreamMetadata>, Option<String>)> {
         let streams = self.streams.read().await;
 
         if let Some(stream) = streams.get(stream_key) {
@@ -101,9 +105,10 @@ impl StreamRegistry {
             let video_header = stream.video_sequence_header.clone();
             let audio_header = stream.audio_sequence_header.clone();
             let metadata = stream.stream_metadata.clone();
+            let ntdf_header = stream.ntdf_header.clone();
 
             log::info!("Subscriber connected to: {}", stream_key);
-            Some((receiver, video_header, audio_header, metadata))
+            Some((receiver, video_header, audio_header, metadata, ntdf_header))
         } else {
             log::debug!("Stream not found for subscription: {}", stream_key);
             None
@@ -137,6 +142,16 @@ impl StreamRegistry {
         }
     }
 
+    /// Update NanoTDF header for late joiners
+    pub async fn set_ntdf_header(&self, stream_key: &str, ntdf_header: String) {
+        let streams = self.streams.read().await;
+        if let Some(stream) = streams.get(stream_key) {
+            let mut stream = stream.write().await;
+            stream.ntdf_header = Some(ntdf_header);
+            log::info!("Cached ntdf_header for stream: {}", stream_key);
+        }
+    }
+
     /// Check if a stream is currently active
     pub async fn is_stream_active(&self, stream_key: &str) -> bool {
         let streams = self.streams.read().await;
@@ -166,7 +181,7 @@ mod tests {
         let result = registry.subscribe("live/test").await;
         assert!(result.is_some());
 
-        let (mut receiver, _, _, _) = result.unwrap();
+        let (mut receiver, _, _, _, _) = result.unwrap();
 
         // Send a frame
         let frame = RelayFrame {

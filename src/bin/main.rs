@@ -557,33 +557,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     info!("Successfully connected to Redis server");
 
-    // Initialize chain client for blockchain-driven session validation
-    info!("Initializing chain client for {}", settings.chain_rpc_url);
-    let chain_client = Arc::new(chain::ChainClient::new(settings.chain_rpc_url.clone()));
+    // Initialize chain validator only if CHAIN_RPC_URL is configured
+    let chain_validator: Option<Arc<dyn chain::SessionValidator>> =
+        if let Some(ref chain_url) = settings.chain_rpc_url {
+            info!("Initializing chain client for {}", chain_url);
+            let chain_client = Arc::new(chain::ChainClient::new(chain_url.clone()));
 
-    // Generate server secret for cache integrity (random 32 bytes)
-    let mut server_secret = [0u8; 32];
-    OsRng.fill_bytes(&mut server_secret);
+            // Generate server secret for cache integrity (random 32 bytes)
+            let mut server_secret = [0u8; 32];
+            OsRng.fill_bytes(&mut server_secret);
 
-    // Initialize session cache with 6-second TTL
-    let session_cache = Arc::new(chain::SessionCache::new(
-        server_secret,
-        Arc::new(redis_client.clone()),
-    ));
+            // Initialize session cache with 6-second TTL
+            let session_cache = Arc::new(chain::SessionCache::new(
+                server_secret,
+                Arc::new(redis_client.clone()),
+            ));
 
-    // Create chain validator
-    let chain_validator: Arc<dyn chain::SessionValidator> = Arc::new(chain::ChainValidator::new(
-        chain_client.clone(),
-        session_cache,
-    ));
+            // Create chain validator
+            let validator: Arc<dyn chain::SessionValidator> =
+                Arc::new(chain::ChainValidator::new(chain_client, session_cache));
 
-    info!("Chain validation initialized (cache TTL: 6s)");
+            info!("Chain validation initialized (cache TTL: 6s)");
+            Some(validator)
+        } else {
+            info!("Chain validation disabled (CHAIN_RPC_URL not set)");
+            None
+        };
 
     let server_state = Arc::new(
         ServerState::new(
             settings.clone(),
             redis_client,
-            Some(chain_validator.clone()),
+            chain_validator.clone(),
         )
         .await?,
     );
@@ -678,7 +683,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         kas_rsa_private_key,
         kas_rsa_public_key_pem,
         oauth_public_key_pem,
-        chain_validator: Some(chain_validator.clone()),
+        chain_validator: chain_validator.clone(),
     });
 
     // Initialize media DRM components
@@ -746,7 +751,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         fairplay_handler: Some(fairplay_handler),
         #[cfg(not(feature = "fairplay"))]
         fairplay_handler: None,
-        chain_validator: Some(chain_validator.clone()),
+        chain_validator: chain_validator.clone(),
     });
 
     // Initialize C2PA signing state (optional - only if configured)
@@ -2558,8 +2563,8 @@ struct ServerSettings {
     jwt_validation_disabled: bool,
     jwt_public_key_path: Option<String>,
     s3_bucket: String,
-    /// Chain RPC URL for blockchain connectivity
-    chain_rpc_url: String,
+    /// Chain RPC URL for blockchain connectivity (optional - disables chain validation if not set)
+    chain_rpc_url: Option<String>,
     /// Expected audience for NTDF token validation
     ntdf_expected_audience: String,
 }
@@ -2611,8 +2616,7 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
             .unwrap_or(true),
         jwt_public_key_path: env::var("JWT_PUBLIC_KEY_PATH").ok(),
         s3_bucket: env::var("S3_BUCKET").unwrap_or_else(|_| "default-bucket".to_string()),
-        chain_rpc_url: env::var("CHAIN_RPC_URL")
-            .unwrap_or_else(|_| "ws://chain.arkavo.net".to_string()),
+        chain_rpc_url: env::var("CHAIN_RPC_URL").ok(),
         ntdf_expected_audience: env::var("NTDF_EXPECTED_AUDIENCE")
             .unwrap_or_else(|_| "https://100.arkavo.net".to_string()),
     })
@@ -2691,17 +2695,19 @@ fn validate_config(settings: &ServerSettings) -> Result<(), Box<dyn std::error::
         return Err("S3_BUCKET must not be empty".into());
     }
 
-    // Validate Chain RPC URL format
-    if !settings.chain_rpc_url.starts_with("ws://")
-        && !settings.chain_rpc_url.starts_with("wss://")
-        && !settings.chain_rpc_url.starts_with("http://")
-        && !settings.chain_rpc_url.starts_with("https://")
-    {
-        return Err(format!(
-            "CHAIN_RPC_URL must be a valid WebSocket or HTTP URL: {}",
-            settings.chain_rpc_url
-        )
-        .into());
+    // Validate Chain RPC URL format (only if configured)
+    if let Some(ref chain_url) = settings.chain_rpc_url {
+        if !chain_url.starts_with("ws://")
+            && !chain_url.starts_with("wss://")
+            && !chain_url.starts_with("http://")
+            && !chain_url.starts_with("https://")
+        {
+            return Err(format!(
+                "CHAIN_RPC_URL must be a valid WebSocket or HTTP URL: {}",
+                chain_url
+            )
+            .into());
+        }
     }
 
     info!("✓ Configuration validation passed");
