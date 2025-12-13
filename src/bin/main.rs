@@ -269,14 +269,22 @@ async fn ws_handler(
                             Ok(arr) => arr,
                             Err(_) => {
                                 warn!("Invalid KAS private key length");
-                                return (StatusCode::INTERNAL_SERVER_ERROR, "Server configuration error").into_response();
+                                return (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "Server configuration error",
+                                )
+                                    .into_response();
                             }
                         };
                         let kas_private_key = match SecretKey::from_bytes(&kas_key_array.into()) {
                             Ok(key) => key,
                             Err(_) => {
                                 warn!("Invalid KAS private key");
-                                return (StatusCode::INTERNAL_SERVER_ERROR, "Server configuration error").into_response();
+                                return (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "Server configuration error",
+                                )
+                                    .into_response();
                             }
                         };
 
@@ -286,23 +294,27 @@ async fn ws_handler(
                             &state.server_state.settings.ntdf_expected_audience,
                         ) {
                             Ok(claims) => {
-                                info!(
-                                    "NTDF token validated: sub_id={}",
-                                    claims.sub_id_hex()
-                                );
-                                return ws.on_upgrade(move |socket| {
-                                    handle_websocket_axum_with_ntdf(socket, state, claims)
-                                }).into_response();
+                                info!("NTDF token validated: sub_id={}", claims.sub_id_hex());
+                                return ws
+                                    .on_upgrade(move |socket| {
+                                        handle_websocket_axum_with_ntdf(socket, state, claims)
+                                    })
+                                    .into_response();
                             }
                             Err(e) => {
                                 warn!("NTDF token validation failed: {:?}", e);
-                                return (StatusCode::UNAUTHORIZED, format!("Invalid NTDF token: {}", e)).into_response();
+                                return (
+                                    StatusCode::UNAUTHORIZED,
+                                    format!("Invalid NTDF token: {}", e),
+                                )
+                                    .into_response();
                             }
                         }
                     }
                     None => {
                         warn!("KAS private key not initialized");
-                        return (StatusCode::INTERNAL_SERVER_ERROR, "Server not ready").into_response();
+                        return (StatusCode::INTERNAL_SERVER_ERROR, "Server not ready")
+                            .into_response();
                     }
                 }
             }
@@ -310,7 +322,8 @@ async fn ws_handler(
     }
 
     // No NTDF token - allow for backward compatibility
-    ws.on_upgrade(move |socket| handle_websocket_axum(socket, state)).into_response()
+    ws.on_upgrade(move |socket| handle_websocket_axum(socket, state))
+        .into_response()
 }
 
 /// Handle WebSocket connection using Axum's WebSocket type
@@ -436,7 +449,10 @@ async fn handle_websocket_axum_with_ntdf(
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
 
     // Create ConnectionState with NTDF claims
-    let connection_state = Arc::new(ConnectionState::new_with_ntdf_claims(outgoing_tx, ntdf_claims.clone()));
+    let connection_state = Arc::new(ConnectionState::new_with_ntdf_claims(
+        outgoing_tx,
+        ntdf_claims.clone(),
+    ));
 
     // Set up NATS subscription for this connection
     let nats_task = tokio::spawn(handle_nats_subscription(
@@ -584,14 +600,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
         };
 
-    let server_state = Arc::new(
-        ServerState::new(
-            settings.clone(),
-            redis_client,
-            chain_validator.clone(),
-        )
-        .await?,
-    );
+    let server_state =
+        Arc::new(ServerState::new(settings.clone(), redis_client, chain_validator.clone()).await?);
     // Load and cache the apple-app-site-association.json file
     let apple_app_site_association = load_apple_app_site_association().await;
     // Initialize KAS keys
@@ -842,8 +852,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Get NATS client for stream event broadcasting
         let rtmp_nats_client = nats_connection.get_client().await;
-        let rtmp_base_url = env::var("RTMP_BASE_URL")
-            .unwrap_or_else(|_| format!("rtmp://localhost:{}", rtmp_port));
+        let rtmp_base_url =
+            env::var("RTMP_BASE_URL").unwrap_or_else(|_| format!("rtmp://localhost:{}", rtmp_port));
 
         // Create stream event broadcaster
         let event_broadcaster = Arc::new(modules::rtmp::StreamEventBroadcaster::new(

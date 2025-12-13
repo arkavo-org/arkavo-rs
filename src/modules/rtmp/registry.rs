@@ -96,7 +96,16 @@ impl StreamRegistry {
     /// Returns a receiver for frames if the stream exists, None otherwise.
     /// Also returns cached video/audio sequence headers, stream metadata, and ntdf_header for late joiners.
     #[allow(clippy::type_complexity)]
-    pub async fn subscribe(&self, stream_key: &str) -> Option<(broadcast::Receiver<RelayFrame>, Option<Vec<u8>>, Option<Vec<u8>>, Option<StreamMetadata>, Option<String>)> {
+    pub async fn subscribe(
+        &self,
+        stream_key: &str,
+    ) -> Option<(
+        broadcast::Receiver<RelayFrame>,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<StreamMetadata>,
+        Option<String>,
+    )> {
         let streams = self.streams.read().await;
 
         if let Some(stream) = streams.get(stream_key) {

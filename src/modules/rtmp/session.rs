@@ -8,7 +8,6 @@
 //! - Passthrough mode for standard cleartext RTMP streams
 
 use bytes::Bytes;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use opentdf_crypto::tdf::{NanoTdfCollection, NanoTdfCollectionDecryptor};
 use p256::pkcs8::EncodePrivateKey;
 use p256::SecretKey;
@@ -19,6 +18,7 @@ use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult, StreamMetadata,
 };
 use rml_rtmp::time::RtmpTimestamp;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -286,10 +286,9 @@ impl RtmpSession {
                                 // If we have a cached ntdf_header, add it to the metadata
                                 let mut meta_with_ntdf = metadata.clone();
                                 if let Some(ref ntdf_header) = self.cached_ntdf_header {
-                                    meta_with_ntdf.custom_fields.insert(
-                                        "ntdf_header".to_string(),
-                                        ntdf_header.clone(),
-                                    );
+                                    meta_with_ntdf
+                                        .custom_fields
+                                        .insert("ntdf_header".to_string(), ntdf_header.clone());
                                     log::info!(
                                         "Sending cached metadata with ntdf_header to late joiner ({} chars)",
                                         ntdf_header.len()
@@ -397,8 +396,7 @@ impl RtmpSession {
             self.bytes_received += n as u64;
 
             // Log periodic stats every 5 seconds for publishers
-            if self.role == SessionRole::Publisher && self.last_frame_log.elapsed().as_secs() >= 5
-            {
+            if self.role == SessionRole::Publisher && self.last_frame_log.elapsed().as_secs() >= 5 {
                 log::info!(
                     "Publisher stats for {:?}: frames={}, bytes_received={}, role={:?}",
                     self.stream_key,
@@ -554,10 +552,7 @@ impl RtmpSession {
                     "Unknown panic in RTMP video send".to_string()
                 };
                 log::error!("RTMP send_video_data panic (rml_rtmp bug): {}", msg);
-                Err(SessionError::RtmpError(format!(
-                    "RTMP send panic: {}",
-                    msg
-                )))
+                Err(SessionError::RtmpError(format!("RTMP send panic: {}", msg)))
             }
         }
     }
@@ -584,10 +579,7 @@ impl RtmpSession {
                     "Unknown panic in RTMP audio send".to_string()
                 };
                 log::error!("RTMP send_audio_data panic (rml_rtmp bug): {}", msg);
-                Err(SessionError::RtmpError(format!(
-                    "RTMP send panic: {}",
-                    msg
-                )))
+                Err(SessionError::RtmpError(format!("RTMP send panic: {}", msg)))
             }
         }
     }
@@ -641,7 +633,12 @@ impl RtmpSession {
                 let full_key = format!("{}/{}", app_name, stream_key);
                 self.stream_key = Some(full_key.clone());
                 self.subscriber_stream_id = Some(*stream_id);
-                log::info!("Play requested: {} (request_id: {}, stream_id: {})", full_key, request_id, stream_id);
+                log::info!(
+                    "Play requested: {} (request_id: {}, stream_id: {})",
+                    full_key,
+                    request_id,
+                    stream_id
+                );
 
                 // Subscribe to the stream registry to receive frames from publisher
                 if let Some((receiver, video_header, audio_header, metadata, ntdf_header)) =
@@ -1111,10 +1108,9 @@ impl RtmpSession {
         if let Some(ref stream_key) = self.stream_key {
             if let Some(ref broadcaster) = self.event_broadcaster {
                 // Get manifest header if available (for NTDF streams)
-                let manifest_header = self
-                    .manifest
-                    .as_ref()
-                    .map(|m| base64::Engine::encode(&base64::prelude::BASE64_STANDARD, &m.header_bytes));
+                let manifest_header = self.manifest.as_ref().map(|m| {
+                    base64::Engine::encode(&base64::prelude::BASE64_STANDARD, &m.header_bytes)
+                });
 
                 broadcaster
                     .stream_started(stream_key, manifest_header.as_deref(), None)
@@ -1141,11 +1137,17 @@ impl RtmpSession {
 
             // Check if this value is an Object containing ntdf_header
             if let Some(ntdf_header) = Self::extract_ntdf_from_value(value) {
-                log::info!("Found ntdf_header in AMF value {}: {}...", i, &ntdf_header[..ntdf_header.len().min(50)]);
+                log::info!(
+                    "Found ntdf_header in AMF value {}: {}...",
+                    i,
+                    &ntdf_header[..ntdf_header.len().min(50)]
+                );
 
                 // Cache in registry for late joiners
                 if let Some(ref stream_key) = self.stream_key {
-                    self.stream_registry.set_ntdf_header(stream_key, ntdf_header).await;
+                    self.stream_registry
+                        .set_ntdf_header(stream_key, ntdf_header)
+                        .await;
                 }
                 return;
             }
@@ -1181,7 +1183,6 @@ impl RtmpSession {
             _ => None,
         }
     }
-
 }
 
 #[cfg(test)]

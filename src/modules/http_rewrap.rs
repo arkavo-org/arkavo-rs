@@ -195,12 +195,18 @@ pub async fn kas_public_key_handler(
             });
         }
     } else if is_ec {
-        (state.kas_ec_public_key_pem.clone(), "ec:secp256r1".to_string())
+        (
+            state.kas_ec_public_key_pem.clone(),
+            "ec:secp256r1".to_string(),
+        )
     } else {
         warn!("Unsupported algorithm requested: {}", algorithm);
         return Err(ErrorResponse {
             error: "invalid_argument".to_string(),
-            message: format!("Unsupported algorithm: {}. Use 'ec:secp256r1' or 'rsa:2048'", algorithm),
+            message: format!(
+                "Unsupported algorithm: {}. Use 'ec:secp256r1' or 'rsa:2048'",
+                algorithm
+            ),
         });
     };
 

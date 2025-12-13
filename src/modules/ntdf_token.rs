@@ -224,23 +224,24 @@ impl NtdfTokenPayload {
         cursor
             .read_exact(&mut device_id_present)
             .map_err(|_| NtdfTokenError::PayloadTooShort)?;
-        let device_id = if device_id_present[0] != 0 {
-            let mut len_byte = [0u8; 1];
-            cursor
-                .read_exact(&mut len_byte)
-                .map_err(|_| NtdfTokenError::PayloadTooShort)?;
-            let len = len_byte[0] as usize;
+        let device_id =
+            if device_id_present[0] != 0 {
+                let mut len_byte = [0u8; 1];
+                cursor
+                    .read_exact(&mut len_byte)
+                    .map_err(|_| NtdfTokenError::PayloadTooShort)?;
+                let len = len_byte[0] as usize;
 
-            let mut device_id_bytes = vec![0u8; len];
-            cursor
-                .read_exact(&mut device_id_bytes)
-                .map_err(|_| NtdfTokenError::PayloadTooShort)?;
-            Some(String::from_utf8(device_id_bytes).map_err(|_| {
-                NtdfTokenError::InvalidPayload("Invalid UTF-8 in device_id".into())
-            })?)
-        } else {
-            None
-        };
+                let mut device_id_bytes = vec![0u8; len];
+                cursor
+                    .read_exact(&mut device_id_bytes)
+                    .map_err(|_| NtdfTokenError::PayloadTooShort)?;
+                Some(String::from_utf8(device_id_bytes).map_err(|_| {
+                    NtdfTokenError::InvalidPayload("Invalid UTF-8 in device_id".into())
+                })?)
+            } else {
+                None
+            };
 
         // did_present (1 byte)
         let mut did_present = [0u8; 1];
