@@ -138,37 +138,87 @@ impl IntoResponse for ErrorResponse {
 }
 
 /// Query parameters for public key endpoint
+/// Matches OpenTDF spec: algorithm (rsa:2048, ec:secp256r1), fmt (pkcs8, jwk), v (legacy)
 #[derive(Debug, Deserialize)]
 pub struct PublicKeyQuery {
-    pub algorithm: Option<String>, // "ec" or "rsa", defaults to "ec"
+    /// Algorithm: "rsa:2048", "ec:secp256r1", or legacy "ec"/"rsa"
+    pub algorithm: Option<String>,
+    /// Format: "pkcs8" (default) or "jwk" (RSA only)
+    pub fmt: Option<String>,
+    /// Legacy version flag: when "1", hides kid in response
+    pub v: Option<String>,
+}
+
+/// Response structure matching OpenTDF spec
+#[derive(Debug, Serialize)]
+pub struct PublicKeyResponse {
+    /// PEM-encoded public key (or JWK for RSA with fmt=jwk)
+    pub public_key: String,
+    /// Key identifier (omitted when v=1 for legacy clients)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
 }
 
 /// KAS public key endpoint handler
-/// GET /kas/v2/kas_public_key?algorithm=rsa
+/// GET /kas/v2/kas_public_key?algorithm=ec:secp256r1
+/// Implements OpenTDF spec: https://github.com/opentdf/spec
 pub async fn kas_public_key_handler(
     State(state): State<Arc<RewrapState>>,
     Query(params): Query<PublicKeyQuery>,
-) -> Result<String, ErrorResponse> {
-    // Determine which key to return based on algorithm parameter
-    let algorithm = params.algorithm.as_deref().unwrap_or("ec");
+) -> Result<Json<PublicKeyResponse>, ErrorResponse> {
+    // Parse algorithm - support both OpenTDF format (ec:secp256r1) and legacy (ec)
+    let algorithm = params.algorithm.as_deref().unwrap_or("ec:secp256r1");
+    let format = params.fmt.as_deref().unwrap_or("pkcs8");
+    let is_legacy = params.v.as_deref() == Some("1");
 
-    match algorithm {
-        "rsa" => {
-            if let Some(ref rsa_public_key_pem) = state.kas_rsa_public_key_pem {
-                Ok(rsa_public_key_pem.clone())
-            } else {
-                Err(ErrorResponse {
-                    error: "not_configured".to_string(),
-                    message: "RSA keys not configured. Set KAS_RSA_KEY_PATH environment variable to enable RSA support.".to_string(),
-                })
+    info!(
+        "KAS public key request: algorithm={}, fmt={}, legacy={}",
+        algorithm, format, is_legacy
+    );
+
+    // Normalize algorithm to determine key type
+    let is_rsa = algorithm.starts_with("rsa") || algorithm == "rsa";
+    let is_ec = algorithm.starts_with("ec") || algorithm == "ec" || algorithm.contains("secp256");
+
+    let (public_key, kid) = if is_rsa {
+        if let Some(ref rsa_public_key_pem) = state.kas_rsa_public_key_pem {
+            // TODO: Support JWK format for RSA when fmt=jwk
+            if format == "jwk" {
+                warn!("JWK format requested but not yet implemented, returning PKCS8");
             }
+            (rsa_public_key_pem.clone(), "rsa:2048".to_string())
+        } else {
+            warn!("RSA key requested but not configured");
+            return Err(ErrorResponse {
+                error: "not_found".to_string(),
+                message: "no default key for algorithm rsa:2048".to_string(),
+            });
         }
-        "ec" => Ok(state.kas_ec_public_key_pem.clone()),
-        _ => Err(ErrorResponse {
-            error: "invalid_algorithm".to_string(),
-            message: format!("Unsupported algorithm: {}. Use 'ec' or 'rsa'", algorithm),
-        }),
-    }
+    } else if is_ec {
+        (
+            state.kas_ec_public_key_pem.clone(),
+            "ec:secp256r1".to_string(),
+        )
+    } else {
+        warn!("Unsupported algorithm requested: {}", algorithm);
+        return Err(ErrorResponse {
+            error: "invalid_argument".to_string(),
+            message: format!(
+                "Unsupported algorithm: {}. Use 'ec:secp256r1' or 'rsa:2048'",
+                algorithm
+            ),
+        });
+    };
+
+    // Hide kid for legacy clients (v=1)
+    let kid = if is_legacy {
+        warn!("hiding kid in public key response for legacy client");
+        None
+    } else {
+        Some(kid)
+    };
+
+    Ok(Json(PublicKeyResponse { public_key, kid }))
 }
 
 /// Main rewrap endpoint handler

@@ -275,8 +275,8 @@ impl<'a> BinaryParser<'a> {
                 ECDSAParams::Secp521r1 => 132,
             }
         } else {
-            // GMAC Tag Binding
-            16
+            // GMAC Tag Binding - 64 bits (8 bytes) per NanoTDF spec section 3.3.1.3
+            8
         };
 
         // println!("bindingSize: {}", binding_size);

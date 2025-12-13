@@ -76,7 +76,7 @@ pub fn custom_ecdh(
 }
 
 /// Performs NanoTDF-compatible rewrap operation
-/// Encrypts the DEK (Data Encryption Key) using HKDF-derived symmetric key
+/// Derives the actual DEK from ECDH shared secret, then wraps it for transport
 ///
 /// # Arguments
 /// * `dek_shared_secret` - The shared secret from ECDH between KAS and TDF ephemeral keys
@@ -92,22 +92,31 @@ pub fn rewrap_dek(
     salt: &[u8],
     info: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>), Box<dyn Error>> {
-    // Derive symmetric key using HKDF
-    let hkdf = Hkdf::<Sha256>::new(Some(salt), session_shared_secret);
-    let mut derived_key = [0u8; 32];
-    hkdf.expand(info, &mut derived_key)
-        .map_err(|e| format!("HKDF expansion failed: {}", e))?;
+    // Step 1: Derive the actual DEK from the TDF ECDH shared secret
+    // This matches what the publisher did: HKDF(salt, dek_shared_secret) -> DEK
+    let dek_hkdf = Hkdf::<Sha256>::new(Some(salt), dek_shared_secret);
+    let mut dek = [0u8; 32];
+    dek_hkdf
+        .expand(info, &mut dek)
+        .map_err(|e| format!("DEK derivation failed: {}", e))?;
+
+    // Step 2: Derive the wrapping key from the session shared secret
+    let session_hkdf = Hkdf::<Sha256>::new(Some(salt), session_shared_secret);
+    let mut wrapping_key = [0u8; 32];
+    session_hkdf
+        .expand(info, &mut wrapping_key)
+        .map_err(|e| format!("Wrapping key derivation failed: {}", e))?;
 
     // Generate random nonce (12 bytes for AES-GCM)
     let mut nonce = [0u8; 12];
     OsRng.fill_bytes(&mut nonce);
     let nonce_ga = GenericArray::from_slice(&nonce);
 
-    // Encrypt DEK with AES-256-GCM
-    let key = Key::<Aes256Gcm>::from(derived_key);
+    // Wrap the derived DEK with AES-256-GCM
+    let key = Key::<Aes256Gcm>::from(wrapping_key);
     let cipher = Aes256Gcm::new(&key);
     let wrapped_dek = cipher
-        .encrypt(nonce_ga, dek_shared_secret)
+        .encrypt(nonce_ga, &dek[..])
         .map_err(|e| format!("AES-GCM encryption failed: {}", e))?;
 
     Ok((nonce.to_vec(), wrapped_dek))

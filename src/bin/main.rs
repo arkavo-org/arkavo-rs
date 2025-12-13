@@ -10,7 +10,7 @@ mod modules;
 
 #[cfg(feature = "c2pa_signing")]
 use modules::c2pa_signing;
-use modules::{cbor_protocol, crypto, http_rewrap, media_api};
+use modules::{cbor_protocol, crypto, http_rewrap, media_api, ntdf_token};
 
 use crate::contracts::content_rating::content_rating::{
     AgeLevel, ContentRating, Rating, RatingLevel,
@@ -25,11 +25,13 @@ use async_nats::{Client as NatsClient, PublishError};
 use aws_sdk_s3 as s3;
 use axum::extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
+use axum::http::header::AUTHORIZATION;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use flatbuffers::root;
 use futures_util::{SinkExt, StreamExt};
 use jsonwebtoken::{decode, DecodingKey, Validation};
-use log::{error, info};
+use log::{error, info, warn};
 use nanotdf::{BinaryParser, PolicyType, ProtocolEnum, ResourceLocator};
 use once_cell::sync::OnceCell;
 use p256::ecdh::EphemeralSecret;
@@ -113,6 +115,8 @@ struct ConnectionState {
     salt_lock: RwLock<Option<Vec<u8>>>,
     shared_secret_lock: RwLock<Option<Vec<u8>>>,
     claims_lock: RwLock<Option<Claims>>,
+    #[allow(dead_code)] // Used for future policy enforcement
+    ntdf_claims_lock: RwLock<Option<ntdf_token::NtdfTokenPayload>>,
     outgoing_tx: mpsc::UnboundedSender<Message>,
 }
 
@@ -122,6 +126,20 @@ impl ConnectionState {
             salt_lock: RwLock::new(None),
             shared_secret_lock: RwLock::new(None),
             claims_lock: RwLock::new(None),
+            ntdf_claims_lock: RwLock::new(None),
+            outgoing_tx,
+        }
+    }
+
+    fn new_with_ntdf_claims(
+        outgoing_tx: mpsc::UnboundedSender<Message>,
+        ntdf_claims: ntdf_token::NtdfTokenPayload,
+    ) -> Self {
+        ConnectionState {
+            salt_lock: RwLock::new(None),
+            shared_secret_lock: RwLock::new(None),
+            claims_lock: RwLock::new(None),
+            ntdf_claims_lock: RwLock::new(Some(ntdf_claims)),
             outgoing_tx,
         }
     }
@@ -237,9 +255,75 @@ async fn log_request_middleware(
 /// WebSocket upgrade handler for Axum
 async fn ws_handler(
     State(state): State<Arc<WebSocketState>>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
+    // Check for NTDF token in Authorization header
+    if let Some(auth_header) = headers.get(AUTHORIZATION) {
+        if let Ok(auth_str) = auth_header.to_str() {
+            if auth_str.starts_with("NTDF ") {
+                // Validate NTDF token
+                match get_kas_private_key_bytes() {
+                    Some(kas_key_bytes) => {
+                        let kas_key_array: [u8; 32] = match kas_key_bytes.try_into() {
+                            Ok(arr) => arr,
+                            Err(_) => {
+                                warn!("Invalid KAS private key length");
+                                return (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "Server configuration error",
+                                )
+                                    .into_response();
+                            }
+                        };
+                        let kas_private_key = match SecretKey::from_bytes(&kas_key_array.into()) {
+                            Ok(key) => key,
+                            Err(_) => {
+                                warn!("Invalid KAS private key");
+                                return (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "Server configuration error",
+                                )
+                                    .into_response();
+                            }
+                        };
+
+                        match ntdf_token::validate_ntdf_token(
+                            auth_str,
+                            &kas_private_key,
+                            &state.server_state.settings.ntdf_expected_audience,
+                        ) {
+                            Ok(claims) => {
+                                info!("NTDF token validated: sub_id={}", claims.sub_id_hex());
+                                return ws
+                                    .on_upgrade(move |socket| {
+                                        handle_websocket_axum_with_ntdf(socket, state, claims)
+                                    })
+                                    .into_response();
+                            }
+                            Err(e) => {
+                                warn!("NTDF token validation failed: {:?}", e);
+                                return (
+                                    StatusCode::UNAUTHORIZED,
+                                    format!("Invalid NTDF token: {}", e),
+                                )
+                                    .into_response();
+                            }
+                        }
+                    }
+                    None => {
+                        warn!("KAS private key not initialized");
+                        return (StatusCode::INTERNAL_SERVER_ERROR, "Server not ready")
+                            .into_response();
+                    }
+                }
+            }
+        }
+    }
+
+    // No NTDF token - allow for backward compatibility
     ws.on_upgrade(move |socket| handle_websocket_axum(socket, state))
+        .into_response()
 }
 
 /// Handle WebSocket connection using Axum's WebSocket type
@@ -352,6 +436,103 @@ async fn handle_websocket_axum(ws: WebSocket, state: Arc<WebSocketState>) {
     outgoing_task.abort();
 }
 
+/// Handle WebSocket connection with pre-validated NTDF claims
+async fn handle_websocket_axum_with_ntdf(
+    ws: WebSocket,
+    state: Arc<WebSocketState>,
+    ntdf_claims: ntdf_token::NtdfTokenPayload,
+) {
+    // Split the WebSocket into sender and receiver
+    let (mut ws_sender, mut ws_receiver) = ws.split();
+
+    // Create channel for outgoing messages
+    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
+
+    // Create ConnectionState with NTDF claims
+    let connection_state = Arc::new(ConnectionState::new_with_ntdf_claims(
+        outgoing_tx,
+        ntdf_claims.clone(),
+    ));
+
+    // Set up NATS subscription for this connection
+    let nats_task = tokio::spawn(handle_nats_subscription(
+        state.nats_connection.clone(),
+        state.server_state.settings.nats_subject.clone(),
+        connection_state.clone(),
+    ));
+
+    // Subscribe to user-specific subject based on sub_id from NTDF token
+    let user_subject = format!("profile.{}", ntdf_claims.sub_id_hex());
+    info!("Subscribing to user subject: {}", user_subject);
+    let public_id_nats_task = Some(tokio::spawn(handle_nats_subscription(
+        state.nats_connection.clone(),
+        user_subject,
+        connection_state.clone(),
+    )));
+
+    // Spawn task to forward outgoing messages
+    let outgoing_task = tokio::spawn(async move {
+        while let Some(msg) = outgoing_rx.recv().await {
+            // Convert tokio_tungstenite Message to Axum WebSocket message
+            let axum_msg = match msg {
+                Message::Binary(data) => AxumMessage::Binary(data),
+                Message::Text(text) => AxumMessage::Text(text),
+                Message::Close(_) => AxumMessage::Close(None),
+                _ => continue,
+            };
+
+            if ws_sender.send(axum_msg).await.is_err() {
+                eprintln!("Failed to send outgoing message through WebSocket");
+                break;
+            }
+        }
+    });
+
+    // Handle incoming WebSocket messages
+    while let Some(result) = ws_receiver.next().await {
+        match result {
+            Ok(msg) => {
+                match msg {
+                    AxumMessage::Close(_) => {
+                        info!("Received a close message.");
+                        break;
+                    }
+                    AxumMessage::Text(_text) => {
+                        // JWT tokens not needed - already authenticated via NTDF
+                        // Could be used for other text-based messages in the future
+                    }
+                    AxumMessage::Binary(data) => {
+                        // Handle binary message
+                        if let Some(response) = handle_binary_message(
+                            &connection_state,
+                            &state.server_state,
+                            data,
+                            state.nats_connection.clone(),
+                        )
+                        .await
+                        {
+                            // Convert tokio_tungstenite Message to Axum message and send via channel
+                            let _ = connection_state.outgoing_tx.send(response);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Err(e) => {
+                eprintln!("Error reading message: {}", e);
+                break;
+            }
+        }
+    }
+
+    // Cancel the NATS subscription when the WebSocket connection closes
+    nats_task.abort();
+    if let Some(task) = public_id_nats_task {
+        task.abort();
+    }
+    outgoing_task.abort();
+}
+
 /// Apple App Site Association handler
 async fn apple_app_site_association_handler(
     State(state): State<Arc<WebSocketState>>,
@@ -369,8 +550,11 @@ async fn apple_app_site_association_handler(
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
-    env_logger::init();
+    // Initialize logging with default level if RUST_LOG not set
+    // Force unbuffered output to stderr for immediate log visibility
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_millis()
+        .init();
 
     // Install default crypto provider for rustls
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -389,36 +573,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     info!("Successfully connected to Redis server");
 
-    // Initialize chain client for blockchain-driven session validation
-    info!("Initializing chain client for {}", settings.chain_rpc_url);
-    let chain_client = Arc::new(chain::ChainClient::new(settings.chain_rpc_url.clone()));
+    // Initialize chain validator only if CHAIN_RPC_URL is configured
+    let chain_validator: Option<Arc<dyn chain::SessionValidator>> =
+        if let Some(ref chain_url) = settings.chain_rpc_url {
+            info!("Initializing chain client for {}", chain_url);
+            let chain_client = Arc::new(chain::ChainClient::new(chain_url.clone()));
 
-    // Generate server secret for cache integrity (random 32 bytes)
-    let mut server_secret = [0u8; 32];
-    OsRng.fill_bytes(&mut server_secret);
+            // Generate server secret for cache integrity (random 32 bytes)
+            let mut server_secret = [0u8; 32];
+            OsRng.fill_bytes(&mut server_secret);
 
-    // Initialize session cache with 6-second TTL
-    let session_cache = Arc::new(chain::SessionCache::new(
-        server_secret,
-        Arc::new(redis_client.clone()),
-    ));
+            // Initialize session cache with 6-second TTL
+            let session_cache = Arc::new(chain::SessionCache::new(
+                server_secret,
+                Arc::new(redis_client.clone()),
+            ));
 
-    // Create chain validator
-    let chain_validator: Arc<dyn chain::SessionValidator> = Arc::new(chain::ChainValidator::new(
-        chain_client.clone(),
-        session_cache,
-    ));
+            // Create chain validator
+            let validator: Arc<dyn chain::SessionValidator> =
+                Arc::new(chain::ChainValidator::new(chain_client, session_cache));
 
-    info!("Chain validation initialized (cache TTL: 6s)");
+            info!("Chain validation initialized (cache TTL: 6s)");
+            Some(validator)
+        } else {
+            info!("Chain validation disabled (CHAIN_RPC_URL not set)");
+            None
+        };
 
-    let server_state = Arc::new(
-        ServerState::new(
-            settings.clone(),
-            redis_client,
-            Some(chain_validator.clone()),
-        )
-        .await?,
-    );
+    let server_state =
+        Arc::new(ServerState::new(settings.clone(), redis_client, chain_validator.clone()).await?);
     // Load and cache the apple-app-site-association.json file
     let apple_app_site_association = load_apple_app_site_association().await;
     // Initialize KAS keys
@@ -510,7 +693,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         kas_rsa_private_key,
         kas_rsa_public_key_pem,
         oauth_public_key_pem,
-        chain_validator: Some(chain_validator.clone()),
+        chain_validator: chain_validator.clone(),
     });
 
     // Initialize media DRM components
@@ -578,7 +761,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         fairplay_handler: Some(fairplay_handler),
         #[cfg(not(feature = "fairplay"))]
         fairplay_handler: None,
-        chain_validator: Some(chain_validator.clone()),
+        chain_validator: chain_validator.clone(),
     });
 
     // Initialize C2PA signing state (optional - only if configured)
@@ -667,9 +850,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let rtmp_redis_client = Arc::new(server_state.redis_client.clone());
         let rtmp_kas_key = kas_private_key_array;
 
+        // Get NATS client for stream event broadcasting
+        let rtmp_nats_client = nats_connection.get_client().await;
+        let rtmp_base_url =
+            env::var("RTMP_BASE_URL").unwrap_or_else(|_| format!("rtmp://localhost:{}", rtmp_port));
+
+        // Create stream event broadcaster
+        let event_broadcaster = Arc::new(modules::rtmp::StreamEventBroadcaster::new(
+            rtmp_nats_client,
+            settings.nats_subject.clone(),
+            rtmp_base_url,
+        ));
+
         tokio::spawn(async move {
-            let rtmp_server =
-                modules::rtmp::RtmpServer::with_port(rtmp_port, rtmp_redis_client, rtmp_kas_key);
+            let rtmp_server = modules::rtmp::RtmpServer::with_broadcaster(
+                rtmp_port,
+                rtmp_redis_client,
+                rtmp_kas_key,
+                event_broadcaster,
+            );
             if let Err(e) = rtmp_server.run().await {
                 error!("RTMP server error: {}", e);
             }
@@ -2374,8 +2573,10 @@ struct ServerSettings {
     jwt_validation_disabled: bool,
     jwt_public_key_path: Option<String>,
     s3_bucket: String,
-    /// Chain RPC URL for blockchain connectivity
-    chain_rpc_url: String,
+    /// Chain RPC URL for blockchain connectivity (optional - disables chain validation if not set)
+    chain_rpc_url: Option<String>,
+    /// Expected audience for NTDF token validation
+    ntdf_expected_audience: String,
 }
 
 fn log_timing(settings: &ServerSettings, message: &str, duration: std::time::Duration) {
@@ -2425,8 +2626,9 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
             .unwrap_or(true),
         jwt_public_key_path: env::var("JWT_PUBLIC_KEY_PATH").ok(),
         s3_bucket: env::var("S3_BUCKET").unwrap_or_else(|_| "default-bucket".to_string()),
-        chain_rpc_url: env::var("CHAIN_RPC_URL")
-            .unwrap_or_else(|_| "ws://chain.arkavo.net".to_string()),
+        chain_rpc_url: env::var("CHAIN_RPC_URL").ok(),
+        ntdf_expected_audience: env::var("NTDF_EXPECTED_AUDIENCE")
+            .unwrap_or_else(|_| "https://100.arkavo.net".to_string()),
     })
 }
 
@@ -2503,17 +2705,19 @@ fn validate_config(settings: &ServerSettings) -> Result<(), Box<dyn std::error::
         return Err("S3_BUCKET must not be empty".into());
     }
 
-    // Validate Chain RPC URL format
-    if !settings.chain_rpc_url.starts_with("ws://")
-        && !settings.chain_rpc_url.starts_with("wss://")
-        && !settings.chain_rpc_url.starts_with("http://")
-        && !settings.chain_rpc_url.starts_with("https://")
-    {
-        return Err(format!(
-            "CHAIN_RPC_URL must be a valid WebSocket or HTTP URL: {}",
-            settings.chain_rpc_url
-        )
-        .into());
+    // Validate Chain RPC URL format (only if configured)
+    if let Some(ref chain_url) = settings.chain_rpc_url {
+        if !chain_url.starts_with("ws://")
+            && !chain_url.starts_with("wss://")
+            && !chain_url.starts_with("http://")
+            && !chain_url.starts_with("https://")
+        {
+            return Err(format!(
+                "CHAIN_RPC_URL must be a valid WebSocket or HTTP URL: {}",
+                chain_url
+            )
+            .into());
+        }
     }
 
     info!("✓ Configuration validation passed");
