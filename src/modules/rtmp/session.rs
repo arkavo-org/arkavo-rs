@@ -817,6 +817,17 @@ impl RtmpSession {
         frame_type == 1 && (codec_id == 7 || codec_id == 12) && avc_packet_type == 0
     }
 
+    /// Check if this is an NTDF header frame (magic bytes "NTDF" at offset 5)
+    /// Format: [FLV header 5 bytes][Magic "NTDF" 4 bytes][length 2 bytes][header bytes]
+    fn is_ntdf_header_frame(data: &[u8]) -> bool {
+        // Need at least 9 bytes: 5 FLV header + 4 magic
+        if data.len() < 9 {
+            return false;
+        }
+        // Check for NTDF magic at offset 5 (0x4E 0x54 0x44 0x46 = "NTDF")
+        data[5] == 0x4E && data[6] == 0x54 && data[7] == 0x44 && data[8] == 0x46
+    }
+
     /// Check if audio data is a sequence header (AAC decoder configuration)
     ///
     /// FLV audio tag format:
@@ -843,6 +854,16 @@ impl RtmpSession {
         // Increment frame counter
         self.frame_count += 1;
 
+        // Debug: log timestamps for first 10 frames and every 100th
+        if self.frame_count <= 10 || self.frame_count % 100 == 0 {
+            log::info!(
+                "📹 Video frame #{}: timestamp={} ms, size={} bytes",
+                self.frame_count,
+                timestamp.value,
+                data.len()
+            );
+        }
+
         match self.role {
             SessionRole::Publisher => {
                 // Emit stream_started event on first video frame
@@ -858,9 +879,17 @@ impl RtmpSession {
                     }
                 }
 
+                // Check if this is an NTDF header frame (magic bytes "NTDF" at offset 5)
+                if Self::is_ntdf_header_frame(data) {
+                    log::info!(
+                        "📤 NTDF header frame detected in video data ({} bytes), relaying to subscribers",
+                        data.len()
+                    );
+                }
+
                 match self.encryption_mode {
                     EncryptionMode::Encrypted => {
-                        // Encrypt video frame with Collection
+                        // Encrypt video frame with Collection (server-side encryption)
                         if let Some(ref collection) = self.collection {
                             // Check rotation threshold
                             if rotation_threshold_reached(collection) {
@@ -878,6 +907,14 @@ impl RtmpSession {
                                 frame_type: FrameType::Video,
                                 timestamp: timestamp.value,
                                 data: encrypted,
+                            });
+                        } else {
+                            // Client-side encryption (NTDF): relay frames as-is
+                            // The client has already encrypted the data before sending
+                            self.relay_frame(RelayFrame {
+                                frame_type: FrameType::Video,
+                                timestamp: timestamp.value,
+                                data: data.to_vec(),
                             });
                         }
                     }
@@ -957,6 +994,7 @@ impl RtmpSession {
                 match self.encryption_mode {
                     EncryptionMode::Encrypted => {
                         if let Some(ref collection) = self.collection {
+                            // Server-side encryption
                             let encrypted = encrypt_item(collection, data)
                                 .map_err(|e| SessionError::EncryptionError(e.to_string()))?;
 
@@ -964,6 +1002,13 @@ impl RtmpSession {
                                 frame_type: FrameType::Audio,
                                 timestamp: timestamp.value,
                                 data: encrypted,
+                            });
+                        } else {
+                            // Client-side encryption (NTDF): relay frames as-is
+                            self.relay_frame(RelayFrame {
+                                frame_type: FrameType::Audio,
+                                timestamp: timestamp.value,
+                                data: data.to_vec(),
                             });
                         }
                     }
