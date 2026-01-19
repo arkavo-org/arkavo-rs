@@ -3,6 +3,9 @@
 /// Provides dedicated endpoints optimized for streaming media key delivery,
 /// session management, and rental window tracking.
 use crate::modules::crypto;
+use opentdf_kas::{
+    compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek, NanoTdfVersion,
+};
 use crate::modules::fairplay::MediaProtocol;
 use crate::modules::http_rewrap::RewrapState;
 use axum::{
@@ -1169,17 +1172,17 @@ fn process_nanotdf_header(
     let tdf_ephemeral_public_key = P256PublicKey::from_sec1_bytes(tdf_ephemeral_key_bytes)?;
 
     // Perform ECDH between KAS private key and TDF ephemeral public key
-    let dek_shared_secret = crypto::custom_ecdh(kas_private_key, &tdf_ephemeral_public_key)?;
+    let dek_shared_secret = custom_ecdh(kas_private_key, &tdf_ephemeral_public_key)?;
 
     // Detect NanoTDF version and compute salt
-    let nanotdf_salt = if let Some(version) = crypto::detect_nanotdf_version(&header_bytes) {
-        crypto::compute_nanotdf_salt(version)
+    let nanotdf_salt = if let Some(version) = detect_nanotdf_version(&header_bytes) {
+        compute_nanotdf_salt(version)
     } else {
-        crypto::compute_nanotdf_salt(crypto::NANOTDF_VERSION_V12)
+        compute_nanotdf_salt(NanoTdfVersion::V12)
     };
 
     // Rewrap DEK
-    let (nonce, wrapped_dek) = crypto::rewrap_dek(
+    let (nonce, wrapped_dek) = rewrap_dek(
         &dek_shared_secret,
         session_shared_secret,
         &nanotdf_salt,

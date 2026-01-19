@@ -10,7 +10,10 @@ mod modules;
 
 #[cfg(feature = "c2pa_signing")]
 use modules::c2pa_signing;
-use modules::{cbor_protocol, crypto, http_rewrap, media_api, ntdf_token};
+use modules::{cbor_protocol, http_rewrap, media_api, ntdf_token};
+use opentdf_kas::{
+    compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek, NanoTdfVersion,
+};
 
 use crate::contracts::content_rating::content_rating::{
     AgeLevel, ContentRating, Rating, RatingLevel,
@@ -1578,7 +1581,7 @@ async fn handle_rewrap(
     // Perform custom ECDH
     let ecdh_start = Instant::now();
     let dek_shared_secret_bytes =
-        match crypto::custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
+        match custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
             Ok(secret) => secret,
             Err(e) => {
                 info!("Error performing ECDH: {:?}", e);
@@ -1589,18 +1592,18 @@ async fn handle_rewrap(
     log_timing(settings, "Time for ECDH operation", ecdh_time);
 
     // Determine HKDF salt based on NanoTDF version
-    let nanotdf_salt = if let Some(version) = crypto::detect_nanotdf_version(payload) {
-        crypto::compute_nanotdf_salt(version)
+    let nanotdf_salt = if let Some(version) = detect_nanotdf_version(payload) {
+        compute_nanotdf_salt(version)
     } else {
         // Fallback to v12 for backward compatibility
-        crypto::compute_nanotdf_salt(crypto::NANOTDF_VERSION_V12)
+        compute_nanotdf_salt(NanoTdfVersion::V12)
     };
 
     // Use NanoTDF-compatible HKDF: empty info parameter per spec section 4
     let info = b"";
 
     let encryption_start = Instant::now();
-    let (nonce_vec, wrapped_dek) = match crypto::rewrap_dek(
+    let (nonce_vec, wrapped_dek) = match rewrap_dek(
         &dek_shared_secret_bytes,
         &session_shared_secret,
         &nanotdf_salt,
@@ -1909,7 +1912,7 @@ async fn handle_chain_rewrap(
     };
 
     let dek_shared_secret_bytes =
-        match crypto::custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
+        match custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
             Ok(secret) => secret,
             Err(e) => {
                 error!("ECDH failed: {:?}", e);
@@ -1921,13 +1924,13 @@ async fn handle_chain_rewrap(
         };
 
     // Determine HKDF salt based on NanoTDF version
-    let nanotdf_salt = if let Some(version) = crypto::detect_nanotdf_version(header) {
-        crypto::compute_nanotdf_salt(version)
+    let nanotdf_salt = if let Some(version) = detect_nanotdf_version(header) {
+        compute_nanotdf_salt(version)
     } else {
-        crypto::compute_nanotdf_salt(crypto::NANOTDF_VERSION_V12)
+        compute_nanotdf_salt(NanoTdfVersion::V12)
     };
 
-    let (nonce_vec, wrapped_dek) = match crypto::rewrap_dek(
+    let (nonce_vec, wrapped_dek) = match rewrap_dek(
         &dek_shared_secret_bytes,
         &session_shared_secret,
         &nanotdf_salt,
@@ -2810,7 +2813,7 @@ mod tests {
             .expect("Error deserializing client public key");
 
         // Run custom ECDH
-        let result = crypto::custom_ecdh(&secret_key, &public_key).expect("Error performing ECDH");
+        let result = custom_ecdh(&secret_key, &public_key).expect("Error performing ECDH");
 
         let computed_secret = hex::encode(result);
         // println!("Computed shared secret: {}", computed_secret);
@@ -2859,7 +2862,7 @@ mod tests {
         // println!("KAS Public Key Hex: {}", hex::encode(compressed_public_key_bytes));
         assert_eq!(hex::encode(compressed_public_key_bytes), server_public);
 
-        let result = crypto::custom_ecdh(&server_secret_key, &client_public_key).unwrap();
+        let result = custom_ecdh(&server_secret_key, &client_public_key).unwrap();
         assert_eq!(hex::encode(result), expected_shared_secret);
         Ok(())
     }

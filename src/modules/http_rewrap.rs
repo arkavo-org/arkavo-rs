@@ -1,4 +1,8 @@
 use crate::modules::crypto;
+use opentdf_kas::{
+    compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek, rewrap_dek_simple,
+    NanoTdfVersion,
+};
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -517,17 +521,17 @@ fn process_ec_unwrap(
     let tdf_ephemeral_public_key = P256PublicKey::from_sec1_bytes(tdf_ephemeral_key_bytes)?;
 
     // Perform ECDH between KAS private key and TDF ephemeral public key
-    let dek_shared_secret = crypto::custom_ecdh(kas_private_key, &tdf_ephemeral_public_key)?;
+    let dek_shared_secret = custom_ecdh(kas_private_key, &tdf_ephemeral_public_key)?;
 
     // Detect NanoTDF version and compute appropriate salt
-    let nanotdf_salt = if let Some(version) = crypto::detect_nanotdf_version(&header_bytes) {
-        crypto::compute_nanotdf_salt(version)
+    let nanotdf_salt = if let Some(version) = detect_nanotdf_version(&header_bytes) {
+        compute_nanotdf_salt(version)
     } else {
-        crypto::compute_nanotdf_salt(crypto::NANOTDF_VERSION_V12)
+        compute_nanotdf_salt(NanoTdfVersion::V12)
     };
 
     // Rewrap DEK using NanoTDF-compatible HKDF (empty info)
-    let (nonce, wrapped_dek) = crypto::rewrap_dek(
+    let (nonce, wrapped_dek) = rewrap_dek(
         &dek_shared_secret,
         session_shared_secret,
         &nanotdf_salt,
@@ -573,7 +577,7 @@ fn process_rsa_unwrap(
         .map_err(|e| format!("RSA decryption failed: {}", e))?;
 
     // Re-wrap DEK with session shared secret using AES-256-GCM
-    let (nonce, wrapped_dek) = crypto::rewrap_dek_simple(&dek, session_shared_secret)?;
+    let (nonce, wrapped_dek) = rewrap_dek_simple(&dek, session_shared_secret)?;
 
     // Combine nonce + wrapped_dek and encode as base64
     let mut combined = Vec::new();
