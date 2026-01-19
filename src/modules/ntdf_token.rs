@@ -5,7 +5,7 @@
 //!
 //! Wire format: `Authorization: NTDF <Z85-encoded-nanotdf>`
 
-use crate::modules::crypto::custom_ecdh;
+use opentdf_kas::custom_ecdh;
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::KeyInit;
 use aes_gcm::aead::{Aead, Key};
