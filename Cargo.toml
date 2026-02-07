@@ -45,7 +45,7 @@ rustls-pemfile = "2.0"
 env_logger = "0.11.5"
 log = "0.4.22"
 ink = "5.0.0"
-jsonwebtoken = "9.3.0"
+jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 async-nats = "0.38.0"
 redis = { version = "0.27.2", features = ["tokio-comp"] }
 flatbuffers = "24.12.23"
@@ -63,7 +63,7 @@ aws-config = { version = "1.5.13", features = ["behavior-version-latest"] }
 aws-sdk-s3 = "1.68.0"
 uuid = { version = "1.11", features = ["v4"] }
 fairplay-wrapper = { path = "crates/fairplay-wrapper", optional = true }
-c2pa = { version = "0.37.1", features = ["file_io", "unstable_api"], optional = true }
+c2pa = { version = "0.75", features = ["file_io"], optional = true }
 mp4parse = { version = "0.17", optional = true }
 # opentdf-rs v0.11.0 - NanoTDF and KAS support
 # Source: https://github.com/arkavo-org/opentdf-rs/releases/tag/0.11.0

@@ -608,12 +608,9 @@ fn verify_and_decode_jwt(
         })?
     } else {
         // Development mode: skip signature validation
-        validation.insecure_disable_signature_validation();
-        decode::<JWTClaims>(token, &DecodingKey::from_secret(&[]), &validation).map_err(|e| {
-            ErrorResponse {
-                error: "authentication_failed".to_string(),
-                message: format!("Invalid JWT: {}", e),
-            }
+        jsonwebtoken::dangerous::insecure_decode::<JWTClaims>(token).map_err(|e| ErrorResponse {
+            error: "authentication_failed".to_string(),
+            message: format!("Invalid JWT: {}", e),
         })?
     };
 

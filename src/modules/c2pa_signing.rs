@@ -11,9 +11,10 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use c2pa::{Builder, SigningAlg};
+use c2pa::{Builder, HashRange, Reader, SigningAlg};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
+use std::io::Cursor;
 use std::sync::Arc;
 
 // ==================== Configuration ====================
@@ -312,43 +313,46 @@ pub async fn validate_manifest(
 
 // ==================== C2PA Implementation ====================
 
-/// Build and sign a C2PA manifest
+/// Build and sign a C2PA manifest using the hashed-data signing workflow.
+///
+/// The client computes a content hash with exclusion ranges and sends it to the server.
+/// The server constructs a C2PA manifest with assertions, signs it using the configured
+/// credentials, and returns the signed JUMBF manifest bytes for the client to embed.
 async fn build_c2pa_manifest(
     config: &C2paConfig,
     req: &C2paSignRequest,
 ) -> Result<(String, String), String> {
-    // Load signing credentials
     info!("Loading C2PA signing credentials...");
-    info!("Certificate path: {}", config.signing_cert_path);
-    info!("Private key path: {}", config.signing_key_path);
 
     let cert_chain = std::fs::read(&config.signing_cert_path)
         .map_err(|e| format!("Failed to read certificate: {}", e))?;
 
-    info!("Certificate chain loaded: {} bytes", cert_chain.len());
-
     let private_key = std::fs::read(&config.signing_key_path)
         .map_err(|e| format!("Failed to read private key: {}", e))?;
 
-    info!("Private key loaded: {} bytes", private_key.len());
-
-    // Determine MIME type based on container format (reserved for future use)
-    let _mime_type = match req.container_format {
+    // Use "c2pa" format for sign_data_hashed_embeddable to produce standalone JUMBF.
+    // The client is responsible for embedding the JUMBF into the actual container
+    // format (MP4, MOV, etc.) at the correct location.
+    let _container_format = match req.container_format {
         ContainerFormat::Mp4 => "video/mp4",
         ContainerFormat::Mov => "video/quicktime",
         ContainerFormat::Avi => "video/avi",
     };
+    let mime_type = "c2pa";
 
-    // Create C2PA Builder
-    let mut builder = Builder::default();
+    // Build a C2PA manifest with assertions
+    let mut builder = Builder::new();
 
-    // Set basic metadata
-    builder.add_assertion("c2pa.created", &serde_json::json!({
-        "timestamp": req.metadata.timestamp.as_ref().unwrap_or(&chrono::Utc::now().to_rfc3339()),
-    }))
-    .map_err(|e| format!("Failed to add created assertion: {}", e))?;
+    builder
+        .add_assertion(
+            "c2pa.created",
+            &serde_json::json!({
+                "timestamp": req.metadata.timestamp.as_ref()
+                    .unwrap_or(&chrono::Utc::now().to_rfc3339()),
+            }),
+        )
+        .map_err(|e| format!("Failed to add created assertion: {}", e))?;
 
-    // Add creator assertion
     builder
         .add_assertion(
             "c2pa.claim.creator",
@@ -358,7 +362,6 @@ async fn build_c2pa_manifest(
         )
         .map_err(|e| format!("Failed to add creator assertion: {}", e))?;
 
-    // Add title if present
     if !req.metadata.title.is_empty() {
         builder
             .add_assertion(
@@ -370,7 +373,6 @@ async fn build_c2pa_manifest(
             .map_err(|e| format!("Failed to add title assertion: {}", e))?;
     }
 
-    // Add AI-generated flag if specified
     if let Some(ai_generated) = req.metadata.ai_generated {
         builder
             .add_assertion(
@@ -382,7 +384,6 @@ async fn build_c2pa_manifest(
             .map_err(|e| format!("Failed to add AI assertion: {}", e))?;
     }
 
-    // Add software info if present
     if let Some(ref software) = req.metadata.software {
         builder
             .add_assertion(
@@ -394,7 +395,7 @@ async fn build_c2pa_manifest(
             .map_err(|e| format!("Failed to add software assertion: {}", e))?;
     }
 
-    // Add hash assertion with exclusion ranges
+    // Store content hash as a custom assertion so it can be retrieved during validation
     builder
         .add_assertion(
             "org.arkavo.c2pa.content_hash",
@@ -406,164 +407,156 @@ async fn build_c2pa_manifest(
         )
         .map_err(|e| format!("Failed to add hash assertion: {}", e))?;
 
-    // Create signer using ES256 (ECDSA with SHA-256)
-    // Note: Signer creation validates keys/certs but actual signing is simplified for this implementation
+    // Build DataHash from client-provided hash and exclusion ranges.
+    // Name must be "jumbf manifest" to match what sign_data_hashed_embeddable expects.
+    let mut data_hash = c2pa::assertions::DataHash::new("jumbf manifest", "sha256");
+
+    let content_hash_bytes = hex::decode(&req.content_hash)
+        .map_err(|e| format!("Failed to decode content hash: {}", e))?;
+    data_hash.set_hash(content_hash_bytes);
+
+    for range in &req.exclusion_ranges {
+        let length = range.end.saturating_sub(range.start);
+        data_hash.add_exclusion(HashRange::new(range.start, length));
+    }
+
+    // Add DataHash as the required hash binding assertion (c2pa.hash.data).
+    // This is required by sign_data_hashed_embeddable to indicate how the
+    // manifest is bound to the asset's content.
+    builder
+        .add_assertion(c2pa::assertions::DataHash::LABEL, &data_hash)
+        .map_err(|e| format!("Failed to add data hash assertion: {}", e))?;
+
+    // Create signer using ES256 (ECDSA with P-256)
     info!("Creating C2PA signer with ES256...");
-    let _signer =
-        c2pa::create_signer::from_keys(&cert_chain, &private_key, SigningAlg::Es256, None)
-            .map_err(|e| {
-                error!("Failed to create C2PA signer: {}", e);
-                format!("Failed to create signer: {}", e)
-            })?;
+    let signer = c2pa::create_signer::from_keys(&cert_chain, &private_key, SigningAlg::Es256, None)
+        .map_err(|e| format!("Failed to create signer: {}", e))?;
 
-    info!("C2PA signer created successfully");
+    // Sign with the hashed-data workflow: produces JUMBF bytes for client embedding
+    info!("Signing C2PA manifest with data-hashed workflow...");
+    let manifest_bytes = builder
+        .sign_data_hashed_embeddable(&*signer, &data_hash, mime_type)
+        .map_err(|e| format!("C2PA signing failed: {}", e))?;
 
-    // Generate manifest as JSON (simplified for server-side signing)
-    // Note: This is a simplified implementation. In production, you would:
-    // 1. Use ManifestStore::from_manifest_and_asset with actual asset data
-    // 2. Generate proper JUMBF boxes for embedding
-    // 3. Handle signing with proper certificate chains
+    info!(
+        "C2PA manifest signed: {} bytes of JUMBF data",
+        manifest_bytes.len()
+    );
 
-    // For now, we create a minimal JSON representation that clients can use
-    // to understand what assertions were signed
-    let manifest_json = serde_json::json!({
-        "assertions": [
-            {
-                "label": "c2pa.created",
-                "data": {
-                    "timestamp": req.metadata.timestamp.as_ref().map(|s| s.as_str()).unwrap_or("2025-10-26T00:00:00Z")
-                }
-            },
-            {
-                "label": "c2pa.claim.creator",
-                "data": {
-                    "name": req.metadata.creator
-                }
-            },
-            {
-                "label": "dc.title",
-                "data": {
-                    "title": req.metadata.title
-                }
-            },
-            {
-                "label": "c2pa.ai_generated",
-                "data": {
-                    "ai_generated": req.metadata.ai_generated.unwrap_or(false)
-                }
-            },
-            {
-                "label": "org.arkavo.c2pa.content_hash",
-                "data": {
-                    "hash": req.content_hash,
-                    "algorithm": "sha256",
-                    "exclusion_ranges": req.exclusion_ranges
-                }
-            }
-        ],
-        "signed_at": "generated_on_server",
-        "signer": "Arkavo KAS"
-    });
-
-    let manifest_str = serde_json::to_string_pretty(&manifest_json)
-        .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
-
-    let manifest_bytes = manifest_str.as_bytes();
     let manifest_b64 =
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, manifest_bytes);
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &manifest_bytes);
 
     // Compute manifest hash for verification
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(manifest_bytes);
+    hasher.update(&manifest_bytes);
     let manifest_hash = hex::encode(hasher.finalize());
 
     Ok((manifest_b64, manifest_hash))
 }
 
-/// Validate a C2PA manifest
+/// Validate a C2PA manifest by parsing JUMBF data and verifying the signature chain.
+///
+/// Server-side validation verifies the COSE signature chain and extracts metadata.
+/// Full asset-hash binding verification requires the actual asset (done client-side).
 fn validate_c2pa_manifest(
     manifest_bytes: &[u8],
     expected_hash: &str,
 ) -> Result<C2paValidateResponse, String> {
-    // Parse manifest JSON
-    let manifest_str = std::str::from_utf8(manifest_bytes)
-        .map_err(|e| format!("Invalid UTF-8 in manifest: {}", e))?;
-
-    let manifest: serde_json::Value =
-        serde_json::from_str(manifest_str).map_err(|e| format!("Invalid JSON manifest: {}", e))?;
+    // Use Reader to parse JUMBF and verify signature chain.
+    // We provide an empty stream since the actual asset is on the client side;
+    // the Reader will still verify COSE signatures on the manifest itself.
+    let empty_stream = Cursor::new(Vec::<u8>::new());
+    let reader = Reader::from_manifest_data_and_stream(manifest_bytes, "video/mp4", empty_stream)
+        .map_err(|e| format!("Failed to parse C2PA manifest: {}", e))?;
 
     let mut errors = Vec::new();
     let mut creator = None;
     let mut ai_generated = None;
+    let mut provenance_chain = Vec::new();
 
-    // Extract creator
-    if let Some(creator_assertion) = manifest
-        .get("assertions")
-        .and_then(|a| a.as_array())
-        .and_then(|arr| {
-            arr.iter()
-                .find(|a| a.get("label") == Some(&serde_json::json!("c2pa.claim.creator")))
-        })
-    {
-        creator = creator_assertion
-            .get("data")
-            .and_then(|d| d.get("name"))
-            .and_then(|n| n.as_str())
-            .map(|s| s.to_string());
+    // Check validation status from c2pa-rs signature verification
+    if let Some(statuses) = reader.validation_status() {
+        for status in statuses {
+            // validation_status returns errors/warnings - any entry indicates a problem
+            errors.push(format!("C2PA validation: {}", status.code()));
+        }
     }
 
-    // Extract AI-generated flag
-    if let Some(ai_assertion) = manifest
-        .get("assertions")
-        .and_then(|a| a.as_array())
-        .and_then(|arr| {
-            arr.iter()
-                .find(|a| a.get("label") == Some(&serde_json::json!("c2pa.ai_generated")))
-        })
-    {
-        ai_generated = ai_assertion
-            .get("data")
-            .and_then(|d| d.get("ai_generated"))
-            .and_then(|v| v.as_bool());
-    }
+    // Extract metadata from the active manifest
+    if let Some(manifest) = reader.active_manifest() {
+        // Extract assertions by iterating through all manifest assertions
+        for assertion in manifest.assertions() {
+            let label = assertion.label();
 
-    // Validate hash
-    if let Some(hash_assertion) = manifest
-        .get("assertions")
-        .and_then(|a| a.as_array())
-        .and_then(|arr| {
-            arr.iter().find(|a| {
-                a.get("label") == Some(&serde_json::json!("org.arkavo.c2pa.content_hash"))
-            })
-        })
-    {
-        if let Some(hash_value) = hash_assertion
-            .get("data")
-            .and_then(|d| d.get("hash"))
-            .and_then(|h| h.as_str())
-        {
-            if hash_value != expected_hash {
-                errors.push(format!(
-                    "Hash mismatch: expected {}, got {}",
-                    expected_hash, hash_value
-                ));
+            if label == "c2pa.claim.creator" {
+                if let Ok(data) = assertion.to_assertion::<serde_json::Value>() {
+                    creator = data.get("name").and_then(|n| n.as_str()).map(String::from);
+                }
             }
-        } else {
-            errors.push("Hash assertion missing hash value".to_string());
+
+            if label == "c2pa.ai_generated" {
+                if let Ok(data) = assertion.to_assertion::<serde_json::Value>() {
+                    ai_generated = data.get("ai_generated").and_then(|v| v.as_bool());
+                }
+            }
+
+            if label == "org.arkavo.c2pa.content_hash" {
+                if let Ok(data) = assertion.to_assertion::<serde_json::Value>() {
+                    if let Some(hash_value) = data.get("hash").and_then(|h| h.as_str()) {
+                        if hash_value != expected_hash {
+                            errors.push(format!(
+                                "Hash mismatch: expected {}, got {}",
+                                expected_hash, hash_value
+                            ));
+                        }
+                    } else {
+                        errors.push("Content hash assertion missing hash value".to_string());
+                    }
+                }
+            }
+
+            if label == "c2pa.created" {
+                if let Ok(data) = assertion.to_assertion::<serde_json::Value>() {
+                    let timestamp = data
+                        .get("timestamp")
+                        .and_then(|t| t.as_str())
+                        .map(String::from);
+                    provenance_chain.push(ProvenanceEntry {
+                        action: "created".to_string(),
+                        actor: creator.clone().unwrap_or_default(),
+                        timestamp,
+                        software: None,
+                    });
+                }
+            }
+
+            if label == "stds.exif" {
+                if let Ok(data) = assertion.to_assertion::<serde_json::Value>() {
+                    if let Some(sw) = data.get("Software").and_then(|s| s.as_str()) {
+                        // Update the last provenance entry with software info
+                        if let Some(last) = provenance_chain.last_mut() {
+                            last.software = Some(sw.to_string());
+                        }
+                    }
+                }
+            }
         }
     } else {
-        errors.push("Content hash assertion not found".to_string());
+        errors.push("No active manifest found".to_string());
     }
 
-    // TODO: Validate signature chain (requires full c2pa-rs integration)
-    // For now, we just validate the structure and hash
+    let chain = if provenance_chain.is_empty() {
+        None
+    } else {
+        Some(provenance_chain)
+    };
 
     Ok(C2paValidateResponse {
         valid: errors.is_empty(),
         errors,
         creator,
-        provenance_chain: None, // TODO: Extract provenance chain
+        provenance_chain: chain,
         ai_generated,
     })
 }
@@ -597,5 +590,384 @@ mod tests {
         };
         let json = serde_json::to_string(&metadata).unwrap();
         assert!(json.contains("\"ai_generated\":true"));
+    }
+
+    /// Generate a CA + end-entity EC cert chain for C2PA signing tests.
+    /// C2PA requires non-self-signed certificates.
+    /// Returns (cert_chain_pem_path, end_entity_key_pem_path) in a temp directory.
+    fn generate_test_certs() -> (std::path::PathBuf, std::path::PathBuf) {
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let thread_id = format!("{:?}", std::thread::current().id());
+        let dir = std::env::temp_dir().join(format!(
+            "c2pa_test_certs_{}_{}",
+            unique_id,
+            thread_id.replace(|c: char| !c.is_alphanumeric(), "_")
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let ca_key_path = dir.join("ca_key.pem");
+        let ca_cert_path = dir.join("ca_cert.pem");
+        let ee_key_path = dir.join("ee_key.pem");
+        let ee_csr_path = dir.join("ee_csr.pem");
+        let ee_cert_path = dir.join("ee_cert.pem");
+        let chain_path = dir.join("cert_chain.pem");
+
+        // Generate CA key
+        let status = std::process::Command::new("openssl")
+            .args([
+                "ecparam",
+                "-genkey",
+                "-name",
+                "prime256v1",
+                "-noout",
+                "-out",
+            ])
+            .arg(&ca_key_path)
+            .status()
+            .expect("openssl must be available for tests");
+        assert!(status.success(), "Failed to generate CA key");
+
+        // Generate self-signed CA cert (CA=TRUE)
+        let status = std::process::Command::new("openssl")
+            .args(["req", "-new", "-x509", "-key"])
+            .arg(&ca_key_path)
+            .args(["-out"])
+            .arg(&ca_cert_path)
+            .args([
+                "-days",
+                "1",
+                "-subj",
+                "/CN=Test CA/O=Arkavo Test CA/C=US",
+                "-addext",
+                "basicConstraints=critical,CA:TRUE",
+                "-addext",
+                "keyUsage=critical,keyCertSign,cRLSign",
+            ])
+            .status()
+            .expect("openssl must be available");
+        assert!(status.success(), "Failed to generate CA cert");
+
+        // Generate end-entity key
+        let status = std::process::Command::new("openssl")
+            .args([
+                "ecparam",
+                "-genkey",
+                "-name",
+                "prime256v1",
+                "-noout",
+                "-out",
+            ])
+            .arg(&ee_key_path)
+            .status()
+            .expect("openssl must be available");
+        assert!(status.success(), "Failed to generate EE key");
+
+        // Generate CSR for end-entity
+        let status = std::process::Command::new("openssl")
+            .args(["req", "-new", "-key"])
+            .arg(&ee_key_path)
+            .args(["-out"])
+            .arg(&ee_csr_path)
+            .args(["-subj", "/CN=C2PA Test Signer/O=Arkavo Test/C=US"])
+            .status()
+            .expect("openssl must be available");
+        assert!(status.success(), "Failed to generate CSR");
+
+        // Write extensions config for the end-entity cert.
+        // C2PA requires: digitalSignature key usage + emailProtection EKU.
+        let ext_path = dir.join("ee_ext.cnf");
+        std::fs::write(
+            &ext_path,
+            "keyUsage=critical,digitalSignature\n\
+             basicConstraints=CA:FALSE\n\
+             extendedKeyUsage=emailProtection\n\
+             subjectKeyIdentifier=hash\n\
+             authorityKeyIdentifier=keyid:always\n",
+        )
+        .unwrap();
+
+        // Sign end-entity cert with CA
+        let status = std::process::Command::new("openssl")
+            .args(["x509", "-req", "-in"])
+            .arg(&ee_csr_path)
+            .args(["-CA"])
+            .arg(&ca_cert_path)
+            .args(["-CAkey"])
+            .arg(&ca_key_path)
+            .args(["-CAcreateserial", "-out"])
+            .arg(&ee_cert_path)
+            .args(["-days", "1", "-extfile"])
+            .arg(&ext_path)
+            .status()
+            .expect("openssl must be available");
+        assert!(status.success(), "Failed to sign EE cert");
+
+        // Create cert chain (end-entity + CA)
+        let ee_cert = std::fs::read_to_string(&ee_cert_path).unwrap();
+        let ca_cert = std::fs::read_to_string(&ca_cert_path).unwrap();
+        std::fs::write(&chain_path, format!("{}{}", ee_cert, ca_cert)).unwrap();
+
+        (chain_path, ee_key_path)
+    }
+
+    fn make_test_config() -> C2paConfig {
+        let (cert_path, key_path) = generate_test_certs();
+        C2paConfig {
+            signing_key_path: key_path.to_str().unwrap().to_string(),
+            signing_cert_path: cert_path.to_str().unwrap().to_string(),
+            _require_validation: false,
+            allowed_creators: vec![],
+        }
+    }
+
+    fn make_test_request(content_hash: &str) -> C2paSignRequest {
+        C2paSignRequest {
+            content_hash: content_hash.to_string(),
+            exclusion_ranges: vec![ExclusionRange {
+                start: 100,
+                end: 500,
+                box_type: Some("uuid".to_string()),
+            }],
+            container_format: ContainerFormat::Mp4,
+            metadata: C2paMetadata {
+                title: "Test Video".to_string(),
+                creator: "test@example.com".to_string(),
+                description: Some("A test video".to_string()),
+                timestamp: Some("2025-10-26T12:00:00Z".to_string()),
+                ai_generated: Some(false),
+                software: Some("Arkavo Test Suite".to_string()),
+            },
+        }
+    }
+
+    /// Round-trip test: sign a manifest and validate it, checking metadata preservation.
+    #[tokio::test]
+    async fn test_c2pa_sign_and_validate_round_trip() {
+        let config = make_test_config();
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+        let req = make_test_request(hash);
+
+        // Sign
+        let (manifest_b64, manifest_hash) = build_c2pa_manifest(&config, &req)
+            .await
+            .expect("Signing should succeed");
+
+        // Manifest should be non-empty base64
+        assert!(!manifest_b64.is_empty(), "Manifest should not be empty");
+        assert!(
+            !manifest_hash.is_empty(),
+            "Manifest hash should not be empty"
+        );
+
+        // Decode and validate
+        let manifest_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
+                .expect("Should be valid base64");
+
+        // Verify the manifest hash matches
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&manifest_bytes);
+        let computed_hash = hex::encode(hasher.finalize());
+        assert_eq!(manifest_hash, computed_hash, "Manifest hash should match");
+
+        // Validate using c2pa-rs Reader
+        let result =
+            validate_c2pa_manifest(&manifest_bytes, hash).expect("Validation should not error");
+
+        // Check metadata was preserved
+        assert_eq!(
+            result.creator.as_deref(),
+            Some("test@example.com"),
+            "Creator should be preserved"
+        );
+        assert_eq!(
+            result.ai_generated,
+            Some(false),
+            "AI-generated flag should be preserved"
+        );
+
+        // Content hash should match
+        assert!(
+            !result.errors.iter().any(|e| e.contains("Hash mismatch")),
+            "Content hash should match: {:?}",
+            result.errors
+        );
+    }
+
+    /// Test that validation detects a content hash mismatch.
+    #[tokio::test]
+    async fn test_c2pa_hash_mismatch_detected() {
+        let config = make_test_config();
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+        let req = make_test_request(hash);
+
+        // Sign with one hash
+        let (manifest_b64, _) = build_c2pa_manifest(&config, &req)
+            .await
+            .expect("Signing should succeed");
+
+        let manifest_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
+                .unwrap();
+
+        // Validate with a different hash
+        let wrong_hash = "0000000000000000000000000000000000000000000000000000000000000000";
+        let result = validate_c2pa_manifest(&manifest_bytes, wrong_hash)
+            .expect("Validation should not error");
+
+        assert!(
+            result.errors.iter().any(|e| e.contains("Hash mismatch")),
+            "Should detect hash mismatch, got errors: {:?}",
+            result.errors
+        );
+    }
+
+    /// Test that signing produces valid JUMBF (not JSON).
+    #[tokio::test]
+    async fn test_c2pa_produces_jumbf_not_json() {
+        let config = make_test_config();
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+        let req = make_test_request(hash);
+
+        let (manifest_b64, _) = build_c2pa_manifest(&config, &req)
+            .await
+            .expect("Signing should succeed");
+
+        let manifest_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
+                .unwrap();
+
+        // JUMBF starts with a box header, not '{' (JSON) or other text
+        assert!(
+            manifest_bytes.len() > 8,
+            "JUMBF manifest should be non-trivial size"
+        );
+        // Verify it's NOT plain JSON (the old fake implementation)
+        let is_json = std::str::from_utf8(&manifest_bytes)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .is_some();
+        assert!(!is_json, "Manifest should be JUMBF binary, not JSON");
+    }
+
+    /// Test signing with AI-generated flag set to true.
+    #[tokio::test]
+    async fn test_c2pa_ai_generated_flag() {
+        let config = make_test_config();
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+        let mut req = make_test_request(hash);
+        req.metadata.ai_generated = Some(true);
+
+        let (manifest_b64, _) = build_c2pa_manifest(&config, &req)
+            .await
+            .expect("Signing should succeed");
+
+        let manifest_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
+                .unwrap();
+
+        let result =
+            validate_c2pa_manifest(&manifest_bytes, hash).expect("Validation should not error");
+
+        assert_eq!(
+            result.ai_generated,
+            Some(true),
+            "AI-generated=true should be preserved"
+        );
+    }
+
+    /// Test that invalid base64 is rejected during validation.
+    #[test]
+    fn test_c2pa_validate_invalid_jumbf() {
+        // Random bytes that aren't valid JUMBF
+        let invalid_bytes = b"this is not valid JUMBF data at all";
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+
+        let result = validate_c2pa_manifest(invalid_bytes, hash);
+        assert!(result.is_err(), "Should fail to parse invalid JUMBF");
+    }
+
+    /// c2patool interop: sign a manifest, write JUMBF to disk, validate with c2patool.
+    /// Skipped if c2patool is not installed.
+    #[tokio::test]
+    async fn test_c2patool_interop_validation() {
+        // Check if c2patool is available
+        let c2patool_check = std::process::Command::new("c2patool")
+            .arg("--version")
+            .output();
+        let c2patool_available = c2patool_check.map(|o| o.status.success()).unwrap_or(false);
+        if !c2patool_available {
+            eprintln!("SKIPPED: c2patool not installed");
+            return;
+        }
+
+        let config = make_test_config();
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+        let req = make_test_request(hash);
+
+        // Sign
+        let (manifest_b64, _) = build_c2pa_manifest(&config, &req)
+            .await
+            .expect("Signing should succeed");
+
+        let manifest_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
+                .unwrap();
+
+        // Write JUMBF to a .c2pa file for c2patool
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let jumbf_path = std::env::temp_dir().join(format!("c2pa_interop_{}.c2pa", unique_id));
+        std::fs::write(&jumbf_path, &manifest_bytes).unwrap();
+
+        // Run c2patool to read the manifest (detailed JSON output)
+        let output = std::process::Command::new("c2patool")
+            .arg(&jumbf_path)
+            .arg("--detailed")
+            .output()
+            .expect("Failed to run c2patool");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // c2patool should be able to parse the JUMBF and produce JSON output
+        assert!(
+            output.status.success(),
+            "c2patool should parse our JUMBF successfully.\nstdout: {}\nstderr: {}",
+            stdout,
+            stderr
+        );
+
+        // Verify the output is valid JSON with manifest data
+        let c2pa_output: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            panic!(
+                "c2patool output should be valid JSON: {}\noutput: {}",
+                e, stdout
+            )
+        });
+
+        // Should contain a manifests section or active_manifest
+        assert!(
+            c2pa_output.get("manifests").is_some() || c2pa_output.get("active_manifest").is_some(),
+            "c2patool output should contain manifest data: {}",
+            stdout
+        );
+
+        // Verify our creator assertion is present somewhere in the output
+        let output_str = stdout.to_string();
+        assert!(
+            output_str.contains("test@example.com"),
+            "c2patool output should contain our creator: {}",
+            stdout
+        );
+
+        // Clean up
+        let _ = std::fs::remove_file(&jumbf_path);
     }
 }

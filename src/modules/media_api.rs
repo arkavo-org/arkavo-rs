@@ -795,7 +795,7 @@ async fn handle_fairplay_key_request(
                     payload.asset_id, e
                 );
                 log_key_request_error(
-                    state,
+                    &state,
                     &payload,
                     KeyRequestResult::PolicyDenied,
                     timer.elapsed_ms(),
@@ -833,7 +833,7 @@ async fn handle_fairplay_key_request(
                     payload.asset_id, e
                 );
                 log_key_request_error(
-                    state,
+                    &state,
                     &payload,
                     KeyRequestResult::PolicyDenied,
                     timer.elapsed_ms(),
