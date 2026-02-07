@@ -202,22 +202,62 @@ export MEDIA_METRICS_SUBJECT=media.metrics
 
 ### Generating C2PA Signing Certificates
 
-C2PA uses ES256 (ECDSA with SHA-256) for signing. Generate a key pair:
+C2PA uses ES256 (ECDSA with SHA-256) for signing. **Important:** c2pa-rs rejects self-signed certificates. You must generate a CA + end-entity certificate chain with the `emailProtection` Extended Key Usage.
 
 ```bash
-# Generate EC private key (P-256 curve)
+# 1. Generate CA key and self-signed CA certificate
+openssl ecparam -genkey -name prime256v1 -noout -out c2pa_ca_key.pem
+openssl req -new -x509 -key c2pa_ca_key.pem -out c2pa_ca_cert.pem -days 365 \
+  -subj "/CN=My C2PA CA/O=My Org/C=US" \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign"
+
+# 2. Generate end-entity signing key and CSR
 openssl ecparam -genkey -name prime256v1 -noout -out c2pa_private_key.pem
+openssl req -new -key c2pa_private_key.pem -out c2pa_csr.pem \
+  -subj "/CN=My C2PA Signer/O=My Org/C=US"
 
-# Generate self-signed certificate (for development)
-openssl req -new -x509 -key c2pa_private_key.pem \
-  -out c2pa_cert.pem -days 365 \
-  -subj "/CN=Arkavo C2PA Signer/O=Arkavo/C=US"
+# 3. Create extensions config (emailProtection EKU required by c2pa-rs)
+cat > c2pa_ext.cnf << 'EOF'
+keyUsage=critical,digitalSignature
+basicConstraints=CA:FALSE
+extendedKeyUsage=emailProtection
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid:always
+EOF
 
-# Verify the key
-openssl ec -in c2pa_private_key.pem -text -noout
+# 4. Sign end-entity cert with CA
+openssl x509 -req -in c2pa_csr.pem \
+  -CA c2pa_ca_cert.pem -CAkey c2pa_ca_key.pem -CAcreateserial \
+  -out c2pa_cert.pem -days 365 -extfile c2pa_ext.cnf
+
+# 5. Create cert chain (end-entity first, then CA)
+cat c2pa_cert.pem c2pa_ca_cert.pem > c2pa_cert_chain.pem
+
+# 6. Verify
+openssl x509 -in c2pa_cert.pem -noout -subject -issuer -ext extendedKeyUsage
+# Should show: E-mail Protection
+
+# 7. Set permissions
+chmod 600 c2pa_private_key.pem c2pa_ca_key.pem
+
+# 8. Clean up
+rm c2pa_csr.pem c2pa_ext.cnf c2pa_ca_cert.srl
 ```
 
-**Production:** Obtain certificates from a recognized Certificate Authority or use the C2PA certificate infrastructure.
+**Certificate requirements:**
+- End-entity cert must NOT be self-signed (c2pa-rs rejects these)
+- Must have `extendedKeyUsage=emailProtection` (or `timeStamping` or `ocspSigning`)
+- Must have `keyUsage=digitalSignature`
+- Chain file: end-entity cert first, CA cert(s) after
+
+**Environment variables:**
+```bash
+export C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem
+export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert_chain.pem  # chain, not single cert
+```
+
+**Production:** Obtain certificates from a recognized Certificate Authority listed in the [C2PA Trust List](https://contentcredentials.org/trust-list). Self-issued CAs will produce `signingCredential.untrusted` validation warnings.
 
 ## Media Policy Integration
 
@@ -417,55 +457,134 @@ For MP4/MOV containers, C2PA uses box-based exclusion ranges to avoid circular d
 
 ## Testing
 
-### Manual Testing
+### Quick Start
 
-**1. Sign a test manifest:**
+**Base URL:** `https://100.arkavo.net` (production) or `http://localhost:8443` (local)
+
+**1. Sign a manifest:**
 ```bash
-curl -X POST http://localhost:8080/c2pa/v1/sign \
+curl -s -X POST https://100.arkavo.net/c2pa/v1/sign \
   -H "Content-Type: application/json" \
   -d '{
-    "content_hash": "a1b2c3d4e5f6789012345678901234567890123456789012345678901234567",
-    "exclusion_ranges": [{"start": 100, "end": 500}],
+    "content_hash": "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678",
+    "exclusion_ranges": [{"start": 100, "end": 500, "box_type": "uuid"}],
+    "container_format": "mp4",
+    "metadata": {
+      "title": "My Video",
+      "creator": "user@example.com",
+      "ai_generated": false,
+      "software": "My App v1.0"
+    }
+  }'
+```
+
+Response:
+```json
+{
+  "manifest": "<base64-encoded JUMBF>",
+  "manifest_hash": "<sha256 hex>",
+  "status": "success"
+}
+```
+
+**2. Validate a manifest (sign-then-validate round-trip):**
+```bash
+# Sign and capture manifest
+MANIFEST=$(curl -s -X POST https://100.arkavo.net/c2pa/v1/sign \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content_hash": "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678",
+    "exclusion_ranges": [{"start": 100, "end": 500, "box_type": "uuid"}],
     "container_format": "mp4",
     "metadata": {
       "title": "Test Video",
       "creator": "test@example.com",
       "ai_generated": false
     }
-  }'
-```
+  }' | python3 -c "import sys,json; print(json.load(sys.stdin)['manifest'])")
 
-**2. Validate a manifest:**
-```bash
-curl -X POST http://localhost:8080/c2pa/v1/validate \
+# Validate
+curl -s -X POST https://100.arkavo.net/c2pa/v1/validate \
   -H "Content-Type: application/json" \
-  -d '{
-    "manifest": "base64_encoded_manifest",
-    "content_hash": "a1b2c3d4e5f6789012345678901234567890123456789012345678901234567"
-  }'
+  -d "{
+    \"manifest\": \"$MANIFEST\",
+    \"content_hash\": \"a1b2c3d4e5f67890123456789012345678901234567890123456789012345678\"
+  }" | python3 -m json.tool
 ```
 
-### Integration Tests
+**3. Validate with c2patool (local interop):**
+```bash
+# Decode JUMBF and validate with c2patool
+echo "$MANIFEST" | base64 -d > manifest.c2pa
+c2patool manifest.c2pa --detailed
+```
 
-See `tests/c2pa_video_tests.rs` for automated integration tests.
+### Validation Status Codes
+
+The `/c2pa/v1/validate` endpoint uses c2pa-rs `Reader` for cryptographic verification. Expected validation statuses:
+
+| Status | Meaning | Action Required |
+|--------|---------|-----------------|
+| `claimSignature.validated` | COSE signature verified | None (success) |
+| `claimSignature.insideValidity` | Cert within validity period | None (success) |
+| `assertion.hashedURI.match` | Assertion integrity verified | None (success) |
+| `signingCredential.untrusted` | CA not in C2PA trust store | Use recognized CA for production |
+| `assertion.dataHash.mismatch` | Asset hash doesn't match | Expected for server-side validation (no asset present) |
+
+**Note on `valid` field:** Server-side validation verifies the COSE signature chain and assertion integrity. The `assertion.dataHash.mismatch` and `signingCredential.untrusted` statuses are expected when validating without the actual asset or with a self-issued CA. Clients should perform full asset-hash binding verification locally after embedding the JUMBF.
+
+### Client Integration Workflow
+
+```
+1. Client: Hash video content (SHA-256) with exclusion ranges
+2. Client: POST /c2pa/v1/sign with hash + metadata
+3. Server: Returns signed JUMBF manifest (base64)
+4. Client: Decode base64 → embed JUMBF into video container (uuid box)
+5. Client: Verify by re-hashing with exclusion ranges → should match
+6. Distribution: Upload signed video to CDN
+7. Playback: Extract JUMBF → POST /c2pa/v1/validate → display provenance
+```
+
+### Automated Tests
+
+- **Unit tests:** `cargo test --features c2pa_signing` — 8 tests covering sign/validate round-trip, hash mismatch, JUMBF format, AI flag, invalid input, c2patool interop
+- **Smoke tests:** `tests/c2pa_video_tests.rs` — 24 tests for JSON structure, policy logic, analytics events
+- **Live integration:** `curl` against `https://100.arkavo.net/c2pa/v1/sign` and `/validate`
+
+## Manifest Format
+
+The `/c2pa/v1/sign` endpoint returns a **base64-encoded JUMBF** (JPEG Universal Metadata Box Format) manifest. This is the standard C2PA binary format, not JSON.
+
+**What's inside the JUMBF:**
+- COSE-signed claim with ES256 signature
+- Assertion store: `c2pa.created`, `c2pa.claim.creator`, `dc.title`, `c2pa.ai_generated`, `stds.exif`, `c2pa.hash.data`, `org.arkavo.c2pa.content_hash`
+- Certificate chain (end-entity + CA)
+- Data hash binding with exclusion ranges
+
+**Interop:** The output is compatible with:
+- `c2patool` (Adobe/CAI CLI tool)
+- `c2pa-rs` Reader API
+- Any C2PA-compliant verifier
 
 ## Limitations
 
 ### Current Implementation
 
-- **Video formats:** MP4, MOV, AVI supported
-- **Signing algorithm:** ES256 (ECDSA with SHA-256) only
-- **Manifest storage:** Client-side embedding (server generates signed manifest)
-- **Hash computation:** Client-side (server validates format only)
+- **Video formats:** MP4, MOV, AVI container formats accepted (JUMBF output is format-independent)
+- **Signing algorithm:** ES256 (ECDSA with P-256/SHA-256) only
+- **Manifest delivery:** Client-side embedding (server generates signed JUMBF, client embeds in container)
+- **Hash computation:** Client-side (server signs the client-provided hash)
+- **Trust:** Self-issued CA produces `signingCredential.untrusted` — use a C2PA-recognized CA for production
 
 ### Future Enhancements
 
 - [ ] Support for additional C2PA signing algorithms (ES384, ES512)
+- [ ] `c2pa.actions` assertion with "created" action (resolves `assertion.action.malformed`)
 - [ ] Server-side video parsing and hashing (for trusted environments)
 - [ ] Sidecar manifest storage (external .c2pa files)
 - [ ] Support for MXF, MKV containers
 - [ ] C2PA manifest caching/CDN integration
-- [ ] Enhanced provenance chain visualization
+- [ ] Timestamp Authority (TSA) integration for trusted timestamps
 
 ## Troubleshooting
 
@@ -487,18 +606,37 @@ export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert.pem
 - Add creator to allowlist: `export C2PA_ALLOWED_CREATORS=creator@example.com`
 - Or remove allowlist to allow all creators (development only)
 
+### C2PA Signing Fails: "the certificate was self-signed"
+
+**Symptom:** Sign endpoint returns error about self-signed certificate.
+
+**Solution:** c2pa-rs rejects self-signed certificates. You must use a CA + end-entity chain. See "Generating C2PA Signing Certificates" above.
+
+### C2PA Signing Fails: "the certificate is invalid"
+
+**Symptom:** Sign endpoint returns error about invalid certificate.
+
+**Solution:** The end-entity certificate must have the `emailProtection` Extended Key Usage. Verify with:
+```bash
+openssl x509 -in c2pa_cert.pem -noout -ext extendedKeyUsage
+# Must show: E-mail Protection
+```
+
+If it shows `Code Signing` or another EKU, regenerate the cert with `extendedKeyUsage=emailProtection`.
+
 ### Invalid Hash Format
 
 **Symptom:** API returns: `{"error": "Invalid content hash format (expected 64 hex chars)"}`
 
-**Solution:** Ensure hash is 64-character hex string (SHA-256 output):
+**Solution:** Ensure hash is a 64-character lowercase hex string (SHA-256 output):
 ```bash
-# Correct format:
-"a1b2c3d4e5f6789012345678901234567890123456789012345678901234567"
+# Correct format (64 hex chars):
+"a1b2c3d4e5f67890123456789012345678901234567890123456789012345678"
 
 # Incorrect formats:
 "sha256:a1b2..."  # Remove prefix
 "A1B2C3..."       # Use lowercase
+"abc123"          # Must be exactly 64 chars
 ```
 
 ### C2PA Validation Failed in Playback
