@@ -3,9 +3,6 @@
 /// Provides dedicated endpoints optimized for streaming media key delivery,
 /// session management, and rental window tracking.
 use crate::modules::crypto;
-use opentdf_kas::{
-    compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek, NanoTdfVersion,
-};
 use crate::modules::fairplay::MediaProtocol;
 use crate::modules::http_rewrap::RewrapState;
 use axum::{
@@ -20,6 +17,9 @@ use chrono::Utc;
 use log::{error, info, warn};
 use nanotdf::chain::{ChainValidationRequest, SessionValidator, ValidationError};
 use nanotdf::BinaryParser;
+use opentdf_kas::{
+    compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek, NanoTdfVersion,
+};
 use p256::{ecdh::EphemeralSecret, PublicKey as P256PublicKey, SecretKey};
 use rand_core::OsRng;
 #[cfg(feature = "fairplay")]

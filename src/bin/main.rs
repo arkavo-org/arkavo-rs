@@ -1580,14 +1580,13 @@ async fn handle_rewrap(
 
     // Perform custom ECDH
     let ecdh_start = Instant::now();
-    let dek_shared_secret_bytes =
-        match custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
-            Ok(secret) => secret,
-            Err(e) => {
-                info!("Error performing ECDH: {:?}", e);
-                return None;
-            }
-        };
+    let dek_shared_secret_bytes = match custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
+        Ok(secret) => secret,
+        Err(e) => {
+            info!("Error performing ECDH: {:?}", e);
+            return None;
+        }
+    };
     let ecdh_time = ecdh_start.elapsed();
     log_timing(settings, "Time for ECDH operation", ecdh_time);
 
@@ -1911,17 +1910,16 @@ async fn handle_chain_rewrap(
         }
     };
 
-    let dek_shared_secret_bytes =
-        match custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
-            Ok(secret) => secret,
-            Err(e) => {
-                error!("ECDH failed: {:?}", e);
-                return Some(cbor_error_response(
-                    "internal_error",
-                    &format!("Key agreement failed: {}", e),
-                ));
-            }
-        };
+    let dek_shared_secret_bytes = match custom_ecdh(&kas_private_key, &tdf_ephemeral_public_key) {
+        Ok(secret) => secret,
+        Err(e) => {
+            error!("ECDH failed: {:?}", e);
+            return Some(cbor_error_response(
+                "internal_error",
+                &format!("Key agreement failed: {}", e),
+            ));
+        }
+    };
 
     // Determine HKDF salt based on NanoTDF version
     let nanotdf_salt = if let Some(version) = detect_nanotdf_version(header) {

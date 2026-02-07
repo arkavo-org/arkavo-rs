@@ -442,6 +442,12 @@ export MEDIA_METRICS_SUBJECT=media.metrics
 - KAS Public Key: `http://localhost:8443/kas/v2/kas_public_key`
 - Media Key Request: `http://localhost:8443/media/v1/key-request`
 
+## Important: Vendor Directory
+
+- `vendor/fpssdk/` contains Apple copyrighted FairPlay SDK code — **NEVER modify these files**
+- Do not run `cargo fmt --all` as it will reformat vendor code; use `cargo fmt --package arkavo-rs` instead
+- CI uses `cargo fmt --check --package arkavo-rs` to avoid formatting vendor files
+
 ## Security Notes
 
 - Private keys (KAS, TLS) must never be committed to version control
