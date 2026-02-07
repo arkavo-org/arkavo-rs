@@ -870,4 +870,85 @@ mod tests {
         let result = validate_c2pa_manifest(invalid_bytes, hash);
         assert!(result.is_err(), "Should fail to parse invalid JUMBF");
     }
+
+    /// c2patool interop: sign a manifest, write JUMBF to disk, validate with c2patool.
+    /// Skipped if c2patool is not installed.
+    #[tokio::test]
+    async fn test_c2patool_interop_validation() {
+        // Check if c2patool is available
+        let c2patool_check = std::process::Command::new("c2patool")
+            .arg("--version")
+            .output();
+        let c2patool_available = c2patool_check.map(|o| o.status.success()).unwrap_or(false);
+        if !c2patool_available {
+            eprintln!("SKIPPED: c2patool not installed");
+            return;
+        }
+
+        let config = make_test_config();
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+        let req = make_test_request(hash);
+
+        // Sign
+        let (manifest_b64, _) = build_c2pa_manifest(&config, &req)
+            .await
+            .expect("Signing should succeed");
+
+        let manifest_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
+                .unwrap();
+
+        // Write JUMBF to a .c2pa file for c2patool
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let jumbf_path = std::env::temp_dir().join(format!("c2pa_interop_{}.c2pa", unique_id));
+        std::fs::write(&jumbf_path, &manifest_bytes).unwrap();
+
+        // Run c2patool to read the manifest (detailed JSON output)
+        let output = std::process::Command::new("c2patool")
+            .arg(&jumbf_path)
+            .arg("--detailed")
+            .output()
+            .expect("Failed to run c2patool");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // c2patool should be able to parse the JUMBF and produce JSON output
+        assert!(
+            output.status.success(),
+            "c2patool should parse our JUMBF successfully.\nstdout: {}\nstderr: {}",
+            stdout,
+            stderr
+        );
+
+        // Verify the output is valid JSON with manifest data
+        let c2pa_output: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            panic!(
+                "c2patool output should be valid JSON: {}\noutput: {}",
+                e, stdout
+            )
+        });
+
+        // Should contain a manifests section or active_manifest
+        assert!(
+            c2pa_output.get("manifests").is_some()
+                || c2pa_output.get("active_manifest").is_some(),
+            "c2patool output should contain manifest data: {}",
+            stdout
+        );
+
+        // Verify our creator assertion is present somewhere in the output
+        let output_str = stdout.to_string();
+        assert!(
+            output_str.contains("test@example.com"),
+            "c2patool output should contain our creator: {}",
+            stdout
+        );
+
+        // Clean up
+        let _ = std::fs::remove_file(&jumbf_path);
+    }
 }
