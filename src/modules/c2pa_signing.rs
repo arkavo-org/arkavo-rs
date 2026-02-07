@@ -409,8 +409,7 @@ async fn build_c2pa_manifest(
 
     // Build DataHash from client-provided hash and exclusion ranges.
     // Name must be "jumbf manifest" to match what sign_data_hashed_embeddable expects.
-    let mut data_hash =
-        c2pa::assertions::DataHash::new("jumbf manifest", "sha256");
+    let mut data_hash = c2pa::assertions::DataHash::new("jumbf manifest", "sha256");
 
     let content_hash_bytes = hex::decode(&req.content_hash)
         .map_err(|e| format!("Failed to decode content hash: {}", e))?;
@@ -430,9 +429,8 @@ async fn build_c2pa_manifest(
 
     // Create signer using ES256 (ECDSA with P-256)
     info!("Creating C2PA signer with ES256...");
-    let signer =
-        c2pa::create_signer::from_keys(&cert_chain, &private_key, SigningAlg::Es256, None)
-            .map_err(|e| format!("Failed to create signer: {}", e))?;
+    let signer = c2pa::create_signer::from_keys(&cert_chain, &private_key, SigningAlg::Es256, None)
+        .map_err(|e| format!("Failed to create signer: {}", e))?;
 
     // Sign with the hashed-data workflow: produces JUMBF bytes for client embedding
     info!("Signing C2PA manifest with data-hashed workflow...");
@@ -445,10 +443,8 @@ async fn build_c2pa_manifest(
         manifest_bytes.len()
     );
 
-    let manifest_b64 = base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        &manifest_bytes,
-    );
+    let manifest_b64 =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &manifest_bytes);
 
     // Compute manifest hash for verification
     use sha2::{Digest, Sha256};
@@ -522,8 +518,10 @@ fn validate_c2pa_manifest(
 
             if label == "c2pa.created" {
                 if let Ok(data) = assertion.to_assertion::<serde_json::Value>() {
-                    let timestamp =
-                        data.get("timestamp").and_then(|t| t.as_str()).map(String::from);
+                    let timestamp = data
+                        .get("timestamp")
+                        .and_then(|t| t.as_str())
+                        .map(String::from);
                     provenance_chain.push(ProvenanceEntry {
                         action: "created".to_string(),
                         actor: creator.clone().unwrap_or_default(),
@@ -603,8 +601,11 @@ mod tests {
             .unwrap()
             .as_nanos();
         let thread_id = format!("{:?}", std::thread::current().id());
-        let dir = std::env::temp_dir()
-            .join(format!("c2pa_test_certs_{}_{}", unique_id, thread_id.replace(|c: char| !c.is_alphanumeric(), "_")));
+        let dir = std::env::temp_dir().join(format!(
+            "c2pa_test_certs_{}_{}",
+            unique_id,
+            thread_id.replace(|c: char| !c.is_alphanumeric(), "_")
+        ));
         std::fs::create_dir_all(&dir).unwrap();
 
         let ca_key_path = dir.join("ca_key.pem");
@@ -616,7 +617,14 @@ mod tests {
 
         // Generate CA key
         let status = std::process::Command::new("openssl")
-            .args(["ecparam", "-genkey", "-name", "prime256v1", "-noout", "-out"])
+            .args([
+                "ecparam",
+                "-genkey",
+                "-name",
+                "prime256v1",
+                "-noout",
+                "-out",
+            ])
             .arg(&ca_key_path)
             .status()
             .expect("openssl must be available for tests");
@@ -629,10 +637,14 @@ mod tests {
             .args(["-out"])
             .arg(&ca_cert_path)
             .args([
-                "-days", "1",
-                "-subj", "/CN=Test CA/O=Arkavo Test CA/C=US",
-                "-addext", "basicConstraints=critical,CA:TRUE",
-                "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+                "-days",
+                "1",
+                "-subj",
+                "/CN=Test CA/O=Arkavo Test CA/C=US",
+                "-addext",
+                "basicConstraints=critical,CA:TRUE",
+                "-addext",
+                "keyUsage=critical,keyCertSign,cRLSign",
             ])
             .status()
             .expect("openssl must be available");
@@ -640,7 +652,14 @@ mod tests {
 
         // Generate end-entity key
         let status = std::process::Command::new("openssl")
-            .args(["ecparam", "-genkey", "-name", "prime256v1", "-noout", "-out"])
+            .args([
+                "ecparam",
+                "-genkey",
+                "-name",
+                "prime256v1",
+                "-noout",
+                "-out",
+            ])
             .arg(&ee_key_path)
             .status()
             .expect("openssl must be available");
@@ -707,13 +726,11 @@ mod tests {
     fn make_test_request(content_hash: &str) -> C2paSignRequest {
         C2paSignRequest {
             content_hash: content_hash.to_string(),
-            exclusion_ranges: vec![
-                ExclusionRange {
-                    start: 100,
-                    end: 500,
-                    box_type: Some("uuid".to_string()),
-                },
-            ],
+            exclusion_ranges: vec![ExclusionRange {
+                start: 100,
+                end: 500,
+                box_type: Some("uuid".to_string()),
+            }],
             container_format: ContainerFormat::Mp4,
             metadata: C2paMetadata {
                 title: "Test Video".to_string(),
@@ -740,7 +757,10 @@ mod tests {
 
         // Manifest should be non-empty base64
         assert!(!manifest_b64.is_empty(), "Manifest should not be empty");
-        assert!(!manifest_hash.is_empty(), "Manifest hash should not be empty");
+        assert!(
+            !manifest_hash.is_empty(),
+            "Manifest hash should not be empty"
+        );
 
         // Decode and validate
         let manifest_bytes =
@@ -755,8 +775,8 @@ mod tests {
         assert_eq!(manifest_hash, computed_hash, "Manifest hash should match");
 
         // Validate using c2pa-rs Reader
-        let result = validate_c2pa_manifest(&manifest_bytes, hash)
-            .expect("Validation should not error");
+        let result =
+            validate_c2pa_manifest(&manifest_bytes, hash).expect("Validation should not error");
 
         // Check metadata was preserved
         assert_eq!(
@@ -850,8 +870,8 @@ mod tests {
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
 
-        let result = validate_c2pa_manifest(&manifest_bytes, hash)
-            .expect("Validation should not error");
+        let result =
+            validate_c2pa_manifest(&manifest_bytes, hash).expect("Validation should not error");
 
         assert_eq!(
             result.ai_generated,
@@ -934,8 +954,7 @@ mod tests {
 
         // Should contain a manifests section or active_manifest
         assert!(
-            c2pa_output.get("manifests").is_some()
-                || c2pa_output.get("active_manifest").is_some(),
+            c2pa_output.get("manifests").is_some() || c2pa_output.get("active_manifest").is_some(),
             "c2patool output should contain manifest data: {}",
             stdout
         );

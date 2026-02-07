@@ -1,4 +1,2 @@
 # Rust formatting configuration
-
-# Exclude vendor code from formatting (Apple FairPlay SDK - copyrighted code)
-ignore = ["vendor/fpssdk"]
+# Use `cargo fmt --package arkavo-rs --package fairplay-wrapper` to exclude vendor/fpssdk

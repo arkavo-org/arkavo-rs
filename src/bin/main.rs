@@ -976,22 +976,17 @@ fn verify_token(
     token: &str,
     settings: &ServerSettings,
 ) -> Result<Claims, jsonwebtoken::errors::Error> {
-    let mut validation = Validation::default();
-
     if settings.jwt_validation_disabled {
         // Development mode - disable signature validation
         log::warn!(
             "⚠️  JWT signature validation is DISABLED - for development only! \
              Set JWT_VALIDATION_DISABLED=false for production."
         );
-        validation.insecure_disable_signature_validation();
-        validation.validate_exp = false;
-        validation.validate_aud = false;
-        let secret = b"any_secret_key"; // The actual value doesn't matter when validation is disabled
-        let token_data = decode::<Claims>(token, &DecodingKey::from_secret(secret), &validation)?;
+        let token_data = jsonwebtoken::dangerous::insecure_decode::<Claims>(token)?;
         Ok(token_data.claims)
     } else {
         // Production mode - proper JWT validation
+        let mut validation = Validation::default();
         validation.validate_exp = true;
         validation.validate_aud = false; // Can be enabled if audience is specified
 

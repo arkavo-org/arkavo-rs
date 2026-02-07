@@ -48,11 +48,11 @@ cargo test [test_name]
 # Lint with clippy (same as CI)
 cargo clippy --lib --bin arks --all-features -- -D warnings
 
-# Check formatting
-cargo fmt --all --check
+# Check formatting (exclude vendor/fpssdk - Apple copyrighted code)
+cargo fmt --check --package arkavo-rs --package fairplay-wrapper
 
 # Apply formatting
-cargo fmt --all
+cargo fmt --package arkavo-rs --package fairplay-wrapper
 ```
 
 ### Benchmarking
@@ -445,8 +445,8 @@ export MEDIA_METRICS_SUBJECT=media.metrics
 ## Important: Vendor Directory
 
 - `vendor/fpssdk/` contains Apple copyrighted FairPlay SDK code — **NEVER modify these files**
-- Do not run `cargo fmt --all` as it will reformat vendor code; use `cargo fmt --package arkavo-rs` instead
-- CI uses `cargo fmt --check --package arkavo-rs` to avoid formatting vendor files
+- Do not run `cargo fmt --all` as it will reformat vendor code; use `cargo fmt --package arkavo-rs --package fairplay-wrapper` instead
+- CI uses `cargo fmt --check --package arkavo-rs --package fairplay-wrapper` to avoid formatting vendor files
 
 ## Security Notes
 

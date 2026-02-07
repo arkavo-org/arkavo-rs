@@ -45,7 +45,7 @@ rustls-pemfile = "2.0"
 env_logger = "0.11.5"
 log = "0.4.22"
 ink = "5.0.0"
-jsonwebtoken = "9.3.0"
+jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 async-nats = "0.38.0"
 redis = { version = "0.27.2", features = ["tokio-comp"] }
 flatbuffers = "24.12.23"
