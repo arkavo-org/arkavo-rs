@@ -1,21 +1,35 @@
+use p256::pkcs8::DecodePublicKey;
 use p256::PublicKey;
 use std::error::Error;
 
 // ==================== Utility Functions ====================
 
-/// Parse a PEM-formatted P-256 public key
-pub fn parse_pem_public_key(pem: &str) -> Result<PublicKey, Box<dyn Error>> {
-    let pem_parsed = pem::parse(pem)?;
-    let public_key = PublicKey::from_sec1_bytes(pem_parsed.contents())?;
-    Ok(public_key)
+/// Parse a PEM-formatted P-256 public key.
+/// Accepts both SPKI/DER format (from CryptoKit) and raw SEC1 format (legacy).
+pub fn parse_pem_public_key(pem_str: &str) -> Result<PublicKey, Box<dyn Error>> {
+    let pem_parsed = pem::parse(pem_str)?;
+    let contents = pem_parsed.contents();
+
+    // Try SEC1 first (65 bytes uncompressed, 33 bytes compressed)
+    if contents.len() == 65 || contents.len() == 33 {
+        return Ok(PublicKey::from_sec1_bytes(contents)?);
+    }
+
+    // Try SPKI/DER format (typically 91 bytes for P-256)
+    if let Ok(key) = PublicKey::from_public_key_der(contents) {
+        return Ok(key);
+    }
+
+    // Fallback: try SEC1 for any size (might be padded)
+    Ok(PublicKey::from_sec1_bytes(contents)?)
 }
 
-/// Convert a P-256 public key to PEM format
+/// Convert a P-256 public key to PEM format using SPKI/DER encoding.
+/// This is the standard format expected by most crypto libraries including CryptoKit.
 pub fn public_key_to_pem(public_key: &PublicKey) -> Result<String, Box<dyn Error>> {
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
-    let encoded_point = public_key.to_encoded_point(false);
-    let sec1_bytes = encoded_point.as_bytes();
-    let pem_encoded = pem::Pem::new("PUBLIC KEY", sec1_bytes.to_vec());
+    use p256::pkcs8::EncodePublicKey;
+    let spki_der = public_key.to_public_key_der()?;
+    let pem_encoded = pem::Pem::new("PUBLIC KEY", spki_der.as_bytes().to_vec());
     Ok(pem::encode(&pem_encoded))
 }
 
