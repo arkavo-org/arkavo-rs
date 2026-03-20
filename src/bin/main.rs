@@ -618,11 +618,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kas_private_key =
         SecretKey::from_bytes(&kas_private_key_array.into()).expect("Invalid KAS private key");
     let kas_public_key = kas_private_key.public_key();
-    let kas_public_key_pem = {
-        let encoded = kas_public_key.to_encoded_point(false);
-        let pem_data = pem::Pem::new("PUBLIC KEY", encoded.as_bytes().to_vec());
-        pem::encode(&pem_data)
-    };
+    let kas_public_key_pem =
+        modules::crypto::public_key_to_pem(&kas_public_key).expect("Failed to encode KAS public key");
 
     // Set up TLS if not disabled
     let tls_acceptor = if settings.tls_enabled {
@@ -1591,12 +1588,14 @@ async fn handle_rewrap(
     log_timing(settings, "Time for ECDH operation", ecdh_time);
 
     // Determine HKDF salt based on NanoTDF version
-    let nanotdf_salt = if let Some(version) = detect_nanotdf_version(payload) {
+    let dek_salt = if let Some(version) = detect_nanotdf_version(payload) {
         compute_nanotdf_salt(version)
     } else {
         // Fallback to v12 for backward compatibility
         compute_nanotdf_salt(NanoTdfVersion::V12)
     };
+    // Session salt is always v1.2 (matches Go reference KAS and all SDK clients)
+    let session_salt = compute_nanotdf_salt(NanoTdfVersion::V12);
 
     // Use NanoTDF-compatible HKDF: empty info parameter per spec section 4
     let info = b"";
@@ -1605,7 +1604,8 @@ async fn handle_rewrap(
     let (nonce_vec, wrapped_dek) = match rewrap_dek(
         &dek_shared_secret_bytes,
         &session_shared_secret,
-        &nanotdf_salt,
+        &dek_salt,
+        &session_salt,
         info,
     ) {
         Ok(result) => result,
@@ -1922,16 +1922,19 @@ async fn handle_chain_rewrap(
     };
 
     // Determine HKDF salt based on NanoTDF version
-    let nanotdf_salt = if let Some(version) = detect_nanotdf_version(header) {
+    let dek_salt = if let Some(version) = detect_nanotdf_version(header) {
         compute_nanotdf_salt(version)
     } else {
         compute_nanotdf_salt(NanoTdfVersion::V12)
     };
+    // Session salt is always v1.2 (matches Go reference KAS and all SDK clients)
+    let session_salt = compute_nanotdf_salt(NanoTdfVersion::V12);
 
     let (nonce_vec, wrapped_dek) = match rewrap_dek(
         &dek_shared_secret_bytes,
         &session_shared_secret,
-        &nanotdf_salt,
+        &dek_salt,
+        &session_salt,
         b"", // Empty info per NanoTDF spec
     ) {
         Ok(result) => result,

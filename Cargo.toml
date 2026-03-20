@@ -70,7 +70,7 @@ mp4parse = { version = "0.17", optional = true }
 opentdf = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.0" }
 opentdf-crypto = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.0", features = ["kem-ec"] }
 opentdf-protocol = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.0" }
-opentdf-kas = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.0" }
+opentdf-kas = { path = "../opentdf-rs/crates/kas" }
 rsa = { version = "0.9", features = ["sha2"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
 sha1 = "0.10"
