@@ -285,6 +285,41 @@ mod integration_tests {
         );
         assert_eq!(resp.text().await.unwrap(), r#"{"ok":true}"#);
     }
+
+    #[tokio::test]
+    async fn does_not_forward_host_or_hop_by_hop_headers() {
+        let upstream = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/kas/v2/rewrap"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&upstream)
+            .await;
+
+        let proxy_base = spawn_proxy(&upstream.uri()).await;
+
+        Client::new()
+            .get(format!("{proxy_base}/kas/v2/rewrap"))
+            .header("connection", "close")
+            .header("te", "trailers")
+            .send()
+            .await
+            .unwrap();
+
+        let received = upstream.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1);
+        let req = &received[0];
+
+        // Host should be the upstream host, not the proxy's listening address.
+        let host = req.headers.get("host").unwrap().to_str().unwrap();
+        assert!(
+            host.contains(&upstream.address().to_string()),
+            "expected upstream host, got {host}"
+        );
+
+        // Hop-by-hop headers must not be forwarded.
+        assert!(req.headers.get("connection").is_none());
+        assert!(req.headers.get("te").is_none());
+    }
 }
 
 #[cfg(test)]
