@@ -240,8 +240,8 @@ mod integration_tests {
     };
 
     /// Build an arks-side server with the proxy mounted at `/kas/v2/rewrap`
-    /// pointing at `upstream`. Returns the bound base URL.
-    async fn spawn_proxy(upstream: &str) -> String {
+    /// pointing at `upstream`. Returns the bound base URL and socket address.
+    async fn spawn_proxy(upstream: &str) -> (String, std::net::SocketAddr) {
         let state = PlatformProxyState::new(upstream).expect("valid upstream URL");
         let app = Router::new()
             .route("/kas/v2/rewrap", any(proxy))
@@ -252,7 +252,7 @@ mod integration_tests {
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
-        format!("http://{addr}")
+        (format!("http://{addr}"), addr)
     }
 
     #[tokio::test]
@@ -268,7 +268,7 @@ mod integration_tests {
             .mount(&upstream)
             .await;
 
-        let proxy_base = spawn_proxy(&upstream.uri()).await;
+        let (proxy_base, _) = spawn_proxy(&upstream.uri()).await;
 
         let resp = Client::new()
             .post(format!("{proxy_base}/kas/v2/rewrap"))
@@ -295,7 +295,7 @@ mod integration_tests {
             .mount(&upstream)
             .await;
 
-        let proxy_base = spawn_proxy(&upstream.uri()).await;
+        let (proxy_base, proxy_addr) = spawn_proxy(&upstream.uri()).await;
 
         Client::new()
             .get(format!("{proxy_base}/kas/v2/rewrap"))
@@ -315,6 +315,10 @@ mod integration_tests {
             host.contains(&upstream.address().to_string()),
             "expected upstream host, got {host}"
         );
+        assert!(
+            !host.contains(&proxy_addr.to_string()),
+            "host header leaked proxy address {proxy_addr}, got {host}"
+        );
 
         // Hop-by-hop headers must not be forwarded.
         assert!(req.headers.get("connection").is_none());
@@ -327,10 +331,11 @@ mod integration_tests {
         Mock::given(method("POST"))
             .and(path("/kas/v2/rewrap"))
             .respond_with(ResponseTemplate::new(403).set_body_string("forbidden"))
+            .expect(1)
             .mount(&upstream)
             .await;
 
-        let proxy_base = spawn_proxy(&upstream.uri()).await;
+        let (proxy_base, _) = spawn_proxy(&upstream.uri()).await;
         let resp = Client::new()
             .post(format!("{proxy_base}/kas/v2/rewrap"))
             .body("{}")
@@ -345,7 +350,7 @@ mod integration_tests {
     #[tokio::test]
     async fn returns_502_when_upstream_unreachable() {
         // Point at a port nobody is listening on.
-        let proxy_base = spawn_proxy("http://127.0.0.1:1").await;
+        let (proxy_base, _) = spawn_proxy("http://127.0.0.1:1").await;
 
         let resp = Client::new()
             .post(format!("{proxy_base}/kas/v2/rewrap"))
