@@ -6,7 +6,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::http::{header, HeaderMap, HeaderName};
+use axum::body::{Body, Bytes};
+use axum::extract::{Request, State};
+use axum::http::{header, HeaderMap, HeaderName, StatusCode};
+use axum::response::Response;
 use reqwest::Client;
 use url::Url;
 
@@ -72,6 +75,61 @@ impl PlatformProxyState {
             upstream_base,
         }))
     }
+}
+
+/// Per-request body cap (16 MiB). Matches `MAX_NANOTDF_SIZE` in `main.rs`
+/// and bounds memory used buffering an inbound request before forwarding.
+const MAX_PROXY_BODY: usize = 16 * 1024 * 1024;
+
+/// Axum handler that forwards any inbound request to `state.upstream_base + path_and_query`.
+pub async fn proxy(
+    State(state): State<Arc<PlatformProxyState>>,
+    req: Request,
+) -> Result<Response, StatusCode> {
+    let path_query = req
+        .uri()
+        .path_and_query()
+        .map(|p| p.as_str())
+        .unwrap_or("/");
+    let url = format!("{}{}", state.upstream_base, path_query);
+
+    let (parts, body) = req.into_parts();
+
+    let body_bytes: Bytes = axum::body::to_bytes(body, MAX_PROXY_BODY)
+        .await
+        .map_err(|e| {
+            log::warn!("proxy request body read error: {e}");
+            StatusCode::PAYLOAD_TOO_LARGE
+        })?;
+
+    let mut headers = parts.headers.clone();
+    strip_proxy_headers(&mut headers);
+
+    let upstream_resp = state
+        .client
+        .request(parts.method.clone(), &url)
+        .headers(headers)
+        .body(body_bytes)
+        .send()
+        .await
+        .map_err(|e| {
+            log::warn!("proxy upstream error: {e}");
+            StatusCode::BAD_GATEWAY
+        })?;
+
+    let status = upstream_resp.status();
+    let mut resp_headers = upstream_resp.headers().clone();
+    strip_proxy_headers(&mut resp_headers);
+
+    let bytes = upstream_resp.bytes().await.map_err(|e| {
+        log::warn!("proxy upstream body read error: {e}");
+        StatusCode::BAD_GATEWAY
+    })?;
+
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = status;
+    *response.headers_mut() = resp_headers;
+    Ok(response)
 }
 
 /// Headers we must not forward, per RFC 7230 §6.1, plus `Host`
@@ -167,6 +225,65 @@ mod mode_tests {
 
         assert!(ProxyMode::Both.forwards_connect());
         assert!(ProxyMode::Both.forwards_rest());
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use axum::{routing::any, Router};
+    use reqwest::Client;
+    use tokio::net::TcpListener;
+    use wiremock::{
+        matchers::{header, method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    /// Build an arks-side server with the proxy mounted at `/kas/v2/rewrap`
+    /// pointing at `upstream`. Returns the bound base URL.
+    async fn spawn_proxy(upstream: &str) -> String {
+        let state = PlatformProxyState::new(upstream).expect("valid upstream URL");
+        let app = Router::new()
+            .route("/kas/v2/rewrap", any(proxy))
+            .with_state(state);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn forwards_post_with_body_and_returns_upstream_response() {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/kas/v2/rewrap"))
+            .and(header("authorization", "Bearer test-jwt"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(r#"{"ok":true}"#, "application/json"),
+            )
+            .expect(1)
+            .mount(&upstream)
+            .await;
+
+        let proxy_base = spawn_proxy(&upstream.uri()).await;
+
+        let resp = Client::new()
+            .post(format!("{proxy_base}/kas/v2/rewrap"))
+            .header("authorization", "Bearer test-jwt")
+            .body(r#"{"signed_request_token":"abc"}"#)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "application/json"
+        );
+        assert_eq!(resp.text().await.unwrap(), r#"{"ok":true}"#);
     }
 }
 
