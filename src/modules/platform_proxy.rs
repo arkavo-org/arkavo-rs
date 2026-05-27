@@ -40,3 +40,47 @@ impl ProxyMode {
         matches!(self, ProxyMode::Rest | ProxyMode::Both)
     }
 }
+
+#[cfg(test)]
+mod mode_tests {
+    use super::*;
+
+    #[test]
+    fn parses_known_modes() {
+        assert_eq!(ProxyMode::from_str("off").unwrap(), ProxyMode::Off);
+        assert_eq!(ProxyMode::from_str("connect").unwrap(), ProxyMode::Connect);
+        assert_eq!(ProxyMode::from_str("rest").unwrap(), ProxyMode::Rest);
+        assert_eq!(ProxyMode::from_str("both").unwrap(), ProxyMode::Both);
+    }
+
+    #[test]
+    fn empty_string_defaults_to_off() {
+        assert_eq!(ProxyMode::from_str("").unwrap(), ProxyMode::Off);
+    }
+
+    #[test]
+    fn parse_is_case_insensitive() {
+        assert_eq!(ProxyMode::from_str("CONNECT").unwrap(), ProxyMode::Connect);
+        assert_eq!(ProxyMode::from_str("Both").unwrap(), ProxyMode::Both);
+    }
+
+    #[test]
+    fn rejects_unknown_mode() {
+        assert!(ProxyMode::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn forwarding_predicates() {
+        assert!(!ProxyMode::Off.forwards_connect());
+        assert!(!ProxyMode::Off.forwards_rest());
+
+        assert!(ProxyMode::Connect.forwards_connect());
+        assert!(!ProxyMode::Connect.forwards_rest());
+
+        assert!(!ProxyMode::Rest.forwards_connect());
+        assert!(ProxyMode::Rest.forwards_rest());
+
+        assert!(ProxyMode::Both.forwards_connect());
+        assert!(ProxyMode::Both.forwards_rest());
+    }
+}
