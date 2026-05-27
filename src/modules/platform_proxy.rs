@@ -3,6 +3,11 @@
 //! See `docs/platform-proxy.md` for operator config and design rationale.
 
 use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use reqwest::Client;
+use url::Url;
 
 /// Which arks routes get forwarded to opentdf-platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +43,62 @@ impl ProxyMode {
 
     pub fn forwards_rest(self) -> bool {
         matches!(self, ProxyMode::Rest | ProxyMode::Both)
+    }
+}
+
+/// Shared state for the reverse-proxy handler.
+#[derive(Debug)]
+pub struct PlatformProxyState {
+    pub client: Client,
+    /// Upstream base URL with no trailing slash, e.g. `https://platform.svc:8443`.
+    pub upstream_base: String,
+}
+
+impl PlatformProxyState {
+    pub fn new(upstream: &str) -> Result<Arc<Self>, String> {
+        let parsed = Url::parse(upstream).map_err(|e| format!("invalid upstream URL: {e}"))?;
+        if parsed.scheme() != "http" && parsed.scheme() != "https" {
+            return Err(format!("invalid upstream URL scheme: {}", parsed.scheme()));
+        }
+        let upstream_base = upstream.trim_end_matches('/').to_string();
+        let client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .pool_max_idle_per_host(16)
+            .build()
+            .map_err(|e| format!("failed to build reqwest client: {e}"))?;
+        Ok(Arc::new(Self {
+            client,
+            upstream_base,
+        }))
+    }
+}
+
+#[cfg(test)]
+mod state_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_invalid_url() {
+        let err = PlatformProxyState::new("not a url").unwrap_err();
+        assert!(err.to_string().contains("invalid"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_non_http_scheme() {
+        let err = PlatformProxyState::new("file:///etc/passwd").unwrap_err();
+        assert!(err.to_string().contains("scheme"), "got: {err}");
+    }
+
+    #[test]
+    fn accepts_https_url() {
+        let state = PlatformProxyState::new("https://platform.svc:8443").unwrap();
+        assert_eq!(state.upstream_base, "https://platform.svc:8443");
+    }
+
+    #[test]
+    fn strips_trailing_slash_from_upstream() {
+        let state = PlatformProxyState::new("https://platform.svc/").unwrap();
+        assert_eq!(state.upstream_base, "https://platform.svc");
     }
 }
 
