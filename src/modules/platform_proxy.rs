@@ -146,12 +146,27 @@ const HOP_BY_HOP: &[HeaderName] = &[
 ];
 
 /// Strip RFC 7230 hop-by-hop headers (including `Host`) and `keep-alive` from `headers` in place.
+/// Also parses the `Connection:` value and strips any headers named there (RFC 7230 §6.1).
 pub(crate) fn strip_proxy_headers(headers: &mut HeaderMap) {
+    // RFC 7230 §6.1: the Connection header lists additional hop-by-hop names
+    // for this specific message. Collect them before mutating, since the next
+    // loop removes Connection itself.
+    let mut connection_listed: Vec<HeaderName> = Vec::new();
+    if let Some(conn) = headers.get(header::CONNECTION) {
+        if let Ok(val) = conn.to_str() {
+            for name in val.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                if let Ok(hn) = HeaderName::from_str(name) {
+                    connection_listed.push(hn);
+                }
+            }
+        }
+    }
+    for h in &connection_listed {
+        headers.remove(h);
+    }
     for h in HOP_BY_HOP {
         headers.remove(h);
     }
-    // Also strip any header named in a Connection: header list (RFC 7230 §6.1).
-    // Not all proxies do this, but it's cheap and correct.
     headers.remove(HeaderName::from_static("keep-alive"));
 }
 
@@ -395,5 +410,27 @@ mod header_tests {
             headers.get(header::CONTENT_TYPE).unwrap(),
             "application/json"
         );
+    }
+
+    #[test]
+    fn strip_proxy_headers_honors_connection_listed_names() {
+        // RFC 7230 §6.1: headers named in the Connection field are hop-by-hop
+        // for that specific message and must be removed before forwarding.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONNECTION,
+            HeaderValue::from_static("keep-alive, X-Custom-Hop"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-custom-hop"),
+            HeaderValue::from_static("session=abc"),
+        );
+        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer x"));
+
+        strip_proxy_headers(&mut headers);
+
+        assert!(!headers.contains_key(HeaderName::from_static("x-custom-hop")));
+        assert!(!headers.contains_key(header::CONNECTION));
+        assert_eq!(headers.get(header::AUTHORIZATION).unwrap(), "Bearer x");
     }
 }
