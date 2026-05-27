@@ -819,14 +819,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Router,
     };
 
-    // OpenTDF compatibility router
-    let opentdf_router = Router::new()
-        .route("/kas/v2/rewrap", post(http_rewrap::rewrap_handler))
-        .route(
-            "/kas/v2/kas_public_key",
-            get(http_rewrap::kas_public_key_handler),
-        )
-        .with_state(rewrap_state);
+    // OpenTDF compatibility router — either local handlers or forwarded
+    // to upstream platform, depending on KAS_PROXY_MODE.
+    let opentdf_router = if proxy_mode.forwards_rest() {
+        // SAFETY: presence of upstream URL is enforced by the env-var check above.
+        let state = platform_proxy_state
+            .clone()
+            .expect("platform_proxy_state must exist when forwards_rest()");
+        Router::new()
+            .route("/kas/v2/rewrap", post(platform_proxy::proxy))
+            .route("/kas/v2/kas_public_key", get(platform_proxy::proxy))
+            .with_state(state)
+    } else {
+        Router::new()
+            .route("/kas/v2/rewrap", post(http_rewrap::rewrap_handler))
+            .route(
+                "/kas/v2/kas_public_key",
+                get(http_rewrap::kas_public_key_handler),
+            )
+            .with_state(rewrap_state)
+    };
+
+    // ConnectRPC routes — only mounted when proxying is enabled.
+    let connect_router = if proxy_mode.forwards_connect() {
+        let state = platform_proxy_state
+            .clone()
+            .expect("platform_proxy_state must exist when forwards_connect()");
+        Router::new()
+            .route("/kas.AccessService/Rewrap", post(platform_proxy::proxy))
+            .route("/kas.AccessService/PublicKey", post(platform_proxy::proxy))
+            .route("/kas.AccessService/PublicKey", get(platform_proxy::proxy))
+            .route(
+                "/kas.AccessService/LegacyPublicKey",
+                get(platform_proxy::proxy),
+            )
+            .with_state(state)
+    } else {
+        Router::new()
+    };
 
     // Media DRM router
     let media_router = Router::new()
@@ -872,6 +902,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_state(ws_state)
         .merge(opentdf_router)
+        .merge(connect_router)
         .merge(media_router)
         .merge(c2pa_router)
         .layer(
