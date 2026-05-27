@@ -10,7 +10,7 @@ mod modules;
 
 #[cfg(feature = "c2pa_signing")]
 use modules::c2pa_signing;
-use modules::{cbor_protocol, http_rewrap, media_api, ntdf_token};
+use modules::{cbor_protocol, http_rewrap, media_api, ntdf_token, platform_proxy};
 use opentdf_kas::{
     compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek, NanoTdfVersion,
 };
@@ -698,6 +698,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         oauth_public_key_pem,
         chain_validator: chain_validator.clone(),
     });
+
+    // Build optional reverse-proxy to upstream opentdf-platform.
+    let proxy_mode: platform_proxy::ProxyMode = env::var("KAS_PROXY_MODE")
+        .ok()
+        .as_deref()
+        .unwrap_or("off")
+        .parse()
+        .map_err(|e: String| -> Box<dyn std::error::Error> { e.into() })?;
+
+    let platform_proxy_state = match (env::var("OPENTDF_PLATFORM_URL").ok(), proxy_mode) {
+        (Some(url), mode) if mode != platform_proxy::ProxyMode::Off => {
+            let state = platform_proxy::PlatformProxyState::new(&url)
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            info!(
+                "Platform proxy enabled: mode={:?}, upstream={}",
+                mode, state.upstream_base
+            );
+            Some(state)
+        }
+        (None, mode) if mode != platform_proxy::ProxyMode::Off => {
+            return Err(format!(
+                "KAS_PROXY_MODE={:?} requires OPENTDF_PLATFORM_URL to be set",
+                mode
+            )
+            .into());
+        }
+        _ => {
+            info!("Platform proxy disabled (KAS_PROXY_MODE=off or unset)");
+            None
+        }
+    };
 
     // Initialize media DRM components
     let max_concurrent_streams = env::var("MAX_CONCURRENT_STREAMS")
