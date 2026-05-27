@@ -10,7 +10,7 @@ mod modules;
 
 #[cfg(feature = "c2pa_signing")]
 use modules::c2pa_signing;
-use modules::{cbor_protocol, http_rewrap, media_api, ntdf_token};
+use modules::{cbor_protocol, http_rewrap, media_api, ntdf_token, platform_proxy};
 use opentdf_kas::{
     compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek, NanoTdfVersion,
 };
@@ -619,8 +619,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kas_private_key =
         SecretKey::from_bytes(&kas_private_key_array.into()).expect("Invalid KAS private key");
     let kas_public_key = kas_private_key.public_key();
-    let kas_public_key_pem =
-        modules::crypto::public_key_to_pem(&kas_public_key).expect("Failed to encode KAS public key");
+    let kas_public_key_pem = modules::crypto::public_key_to_pem(&kas_public_key)
+        .expect("Failed to encode KAS public key");
 
     // Set up TLS if not disabled
     let tls_acceptor = if settings.tls_enabled {
@@ -696,6 +696,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         oauth_public_key_pem,
         chain_validator: chain_validator.clone(),
     });
+
+    // Build optional reverse-proxy to upstream opentdf-platform.
+    let proxy_mode: platform_proxy::ProxyMode = env::var("KAS_PROXY_MODE")
+        .ok()
+        .as_deref()
+        .unwrap_or("off")
+        .parse()
+        .map_err(|e: String| -> Box<dyn std::error::Error> { e.into() })?;
+
+    let platform_proxy_state = match (env::var("OPENTDF_PLATFORM_URL").ok(), proxy_mode) {
+        (Some(url), mode) if mode != platform_proxy::ProxyMode::Off => {
+            let state = platform_proxy::PlatformProxyState::new(&url)
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            info!(
+                "Platform proxy enabled: mode={:?}, upstream={}",
+                mode, state.upstream_base
+            );
+            Some(state)
+        }
+        (None, mode) if mode != platform_proxy::ProxyMode::Off => {
+            return Err(format!(
+                "KAS_PROXY_MODE={:?} requires OPENTDF_PLATFORM_URL to be set",
+                mode
+            )
+            .into());
+        }
+        _ => {
+            info!("Platform proxy disabled (KAS_PROXY_MODE=off or unset)");
+            None
+        }
+    };
 
     // Initialize media DRM components
     let max_concurrent_streams = env::var("MAX_CONCURRENT_STREAMS")
@@ -780,7 +811,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if let Some(ref path) = fairplay_certificate_path {
-        info!("FairPlay certificate available at /media/v1/certificate ({:?})", path);
+        info!(
+            "FairPlay certificate available at /media/v1/certificate ({:?})",
+            path
+        );
     }
 
     let media_api_state = Arc::new(media_api::MediaApiState {
@@ -816,14 +850,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Router,
     };
 
-    // OpenTDF compatibility router
-    let opentdf_router = Router::new()
-        .route("/kas/v2/rewrap", post(http_rewrap::rewrap_handler))
-        .route(
-            "/kas/v2/kas_public_key",
-            get(http_rewrap::kas_public_key_handler),
-        )
-        .with_state(rewrap_state);
+    // OpenTDF compatibility router — either local handlers or forwarded
+    // to upstream platform, depending on KAS_PROXY_MODE.
+    let opentdf_router = if proxy_mode.forwards_rest() {
+        // SAFETY: presence of upstream URL is enforced by the env-var check above.
+        let state = platform_proxy_state
+            .clone()
+            .expect("platform_proxy_state must exist when forwards_rest()");
+        Router::new()
+            .route("/kas/v2/rewrap", post(platform_proxy::proxy))
+            .route("/kas/v2/kas_public_key", get(platform_proxy::proxy))
+            .with_state(state)
+    } else {
+        Router::new()
+            .route("/kas/v2/rewrap", post(http_rewrap::rewrap_handler))
+            .route(
+                "/kas/v2/kas_public_key",
+                get(http_rewrap::kas_public_key_handler),
+            )
+            .with_state(rewrap_state)
+    };
+
+    // ConnectRPC routes — only mounted when proxying is enabled.
+    let connect_router = if proxy_mode.forwards_connect() {
+        let state = platform_proxy_state
+            .clone()
+            .expect("platform_proxy_state must exist when forwards_connect()");
+        Router::new()
+            .route("/kas.AccessService/Rewrap", post(platform_proxy::proxy))
+            .route("/kas.AccessService/PublicKey", post(platform_proxy::proxy))
+            .route("/kas.AccessService/PublicKey", get(platform_proxy::proxy))
+            .route(
+                "/kas.AccessService/LegacyPublicKey",
+                get(platform_proxy::proxy),
+            )
+            .with_state(state)
+    } else {
+        Router::new()
+    };
 
     // Media DRM router
     let media_router = Router::new()
@@ -873,6 +937,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_state(ws_state)
         .merge(opentdf_router)
+        .merge(connect_router)
         .merge(media_router)
         .merge(c2pa_router)
         .layer(
@@ -1055,22 +1120,17 @@ fn verify_token(
     token: &str,
     settings: &ServerSettings,
 ) -> Result<Claims, jsonwebtoken::errors::Error> {
-    let mut validation = Validation::default();
-
     if settings.jwt_validation_disabled {
         // Development mode - disable signature validation
         log::warn!(
             "⚠️  JWT signature validation is DISABLED - for development only! \
              Set JWT_VALIDATION_DISABLED=false for production."
         );
-        validation.insecure_disable_signature_validation();
-        validation.validate_exp = false;
-        validation.validate_aud = false;
-        let secret = b"any_secret_key"; // The actual value doesn't matter when validation is disabled
-        let token_data = decode::<Claims>(token, &DecodingKey::from_secret(secret), &validation)?;
+        let token_data = jsonwebtoken::dangerous::insecure_decode::<Claims>(token)?;
         Ok(token_data.claims)
     } else {
         // Production mode - proper JWT validation
+        let mut validation = Validation::default();
         validation.validate_exp = true;
         validation.validate_aud = false; // Can be enabled if audience is specified
 

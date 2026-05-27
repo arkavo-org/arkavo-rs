@@ -45,7 +45,7 @@ rustls-pemfile = "2.0"
 env_logger = "0.11.5"
 log = "0.4.22"
 ink = "5.0.0"
-jsonwebtoken = "9.3.0"
+jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 async-nats = "0.38.0"
 redis = { version = "0.27.2", features = ["tokio-comp"] }
 flatbuffers = "24.12.23"
@@ -94,6 +94,8 @@ serde_bytes = "0.11"
 rml_rtmp = { git = "https://github.com/arkavo-org/rust-media-libs.git", tag = "v0.9.0" }
 rml_amf0 = { git = "https://github.com/arkavo-org/rust-media-libs.git", tag = "v0.9.0" }
 bytes = "1.0"
+reqwest = { version = "0.12", features = ["json"] }
+url = "2"
 
 [features]
 default = []
@@ -103,7 +105,7 @@ c2pa_signing = ["c2pa", "mp4parse"]
 [dev-dependencies]
 criterion = "0.5.1"
 serial_test = "3.2.0"
-reqwest = { version = "0.12", features = ["json"] }
+wiremock = "0.6"
 
 [[bench]]
 name = "benchmarks"

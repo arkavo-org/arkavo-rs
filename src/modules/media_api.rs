@@ -1000,7 +1000,10 @@ pub async fn fairplay_certificate(
     })?;
 
     let cert_data = tokio::fs::read(cert_path).await.map_err(|e| {
-        error!("Failed to read FairPlay certificate from {:?}: {}", cert_path, e);
+        error!(
+            "Failed to read FairPlay certificate from {:?}: {}",
+            cert_path, e
+        );
         ErrorResponse {
             error: "internal_error".to_string(),
             message: "Failed to read FairPlay certificate".to_string(),
