@@ -6,6 +6,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::http::{header, HeaderMap, HeaderName};
 use reqwest::Client;
 use url::Url;
 
@@ -71,6 +72,29 @@ impl PlatformProxyState {
             upstream_base,
         }))
     }
+}
+
+/// Headers we must not forward, per RFC 7230 §6.1, plus `Host`
+/// (reqwest sets `Host` from the upstream URL).
+const HOP_BY_HOP: &[HeaderName] = &[
+    header::CONNECTION,
+    header::PROXY_AUTHENTICATE,
+    header::PROXY_AUTHORIZATION,
+    header::TE,
+    header::TRAILER,
+    header::TRANSFER_ENCODING,
+    header::UPGRADE,
+    header::HOST,
+];
+
+/// Strip RFC 7230 hop-by-hop headers (including `Host`) and `keep-alive` from `headers` in place.
+pub(crate) fn strip_proxy_headers(headers: &mut HeaderMap) {
+    for h in HOP_BY_HOP {
+        headers.remove(h);
+    }
+    // Also strip any header named in a Connection: header list (RFC 7230 §6.1).
+    // Not all proxies do this, but it's cheap and correct.
+    headers.remove(HeaderName::from_static("keep-alive"));
 }
 
 #[cfg(test)]
@@ -143,5 +167,40 @@ mod mode_tests {
 
         assert!(ProxyMode::Both.forwards_connect());
         assert!(ProxyMode::Both.forwards_rest());
+    }
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+    use axum::http::{header, HeaderMap, HeaderName, HeaderValue};
+
+    #[test]
+    fn strip_hop_by_hop_removes_rfc7230_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::CONNECTION, HeaderValue::from_static("close"));
+        headers.insert(header::TE, HeaderValue::from_static("trailers"));
+        headers.insert(header::HOST, HeaderValue::from_static("kas.local"));
+        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer x"));
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            HeaderName::from_static("keep-alive"),
+            HeaderValue::from_static("timeout=5"),
+        );
+
+        strip_proxy_headers(&mut headers);
+
+        assert!(!headers.contains_key(header::CONNECTION));
+        assert!(!headers.contains_key(header::TE));
+        assert!(!headers.contains_key(header::HOST));
+        assert!(!headers.contains_key(HeaderName::from_static("keep-alive")));
+        assert_eq!(headers.get(header::AUTHORIZATION).unwrap(), "Bearer x");
+        assert_eq!(
+            headers.get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
     }
 }
