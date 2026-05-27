@@ -104,6 +104,7 @@ c2pa_signing = ["c2pa", "mp4parse"]
 criterion = "0.5.1"
 serial_test = "3.2.0"
 reqwest = { version = "0.12", features = ["json"] }
+wiremock = "0.6"
 
 [[bench]]
 name = "benchmarks"
