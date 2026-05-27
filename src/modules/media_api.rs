@@ -55,6 +55,8 @@ pub struct MediaApiState {
     pub fairplay_handler: Option<Arc<crate::modules::fairplay::FairPlayHandler>>,
     /// Chain validator for session validation (optional for backward compatibility)
     pub chain_validator: Option<Arc<dyn SessionValidator>>,
+    /// Path to the FairPlay certificate (.bin) for client certificate fetching
+    pub fairplay_certificate_path: Option<std::path::PathBuf>,
 }
 
 // ==================== Request/Response Types ====================
@@ -982,6 +984,40 @@ async fn handle_fairplay_key_request(
             "ckc_size": ckc_data.len(),
         })),
     }))
+}
+
+/// GET /media/v1/certificate
+/// Serve the FairPlay Streaming certificate for client SPC generation
+pub async fn fairplay_certificate(
+    State(state): State<Arc<MediaApiState>>,
+) -> Result<Response, ErrorResponse> {
+    let cert_path = state.fairplay_certificate_path.as_ref().ok_or_else(|| {
+        warn!("FairPlay certificate requested but no certificate path configured");
+        ErrorResponse {
+            error: "session_not_found".to_string(),
+            message: "FairPlay certificate not configured".to_string(),
+        }
+    })?;
+
+    let cert_data = tokio::fs::read(cert_path).await.map_err(|e| {
+        error!("Failed to read FairPlay certificate from {:?}: {}", cert_path, e);
+        ErrorResponse {
+            error: "internal_error".to_string(),
+            message: "Failed to read FairPlay certificate".to_string(),
+        }
+    })?;
+
+    info!("FairPlay certificate served ({} bytes)", cert_data.len());
+
+    Ok((
+        StatusCode::OK,
+        [
+            (axum::http::header::CONTENT_TYPE, "application/octet-stream"),
+            (axum::http::header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        cert_data,
+    )
+        .into_response())
 }
 
 /// POST /media/v1/session/start

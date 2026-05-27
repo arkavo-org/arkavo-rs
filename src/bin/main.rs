@@ -53,6 +53,7 @@ use tokio::fs;
 use tokio::sync::{mpsc, Mutex};
 use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::Message;
+use tower::ServiceExt;
 
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug)]
@@ -753,6 +754,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // Resolve FairPlay certificate path from credentials directory
+    let fairplay_certificate_path = {
+        let credentials_dir = std::env::var("FAIRPLAY_CREDENTIALS_PATH").ok();
+        if let Some(ref dir) = credentials_dir {
+            let certs_json_path = std::path::Path::new(dir).join("certificates.json");
+            if let Ok(contents) = std::fs::read_to_string(&certs_json_path) {
+                // Parse certificates.json to find the certificate filename
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&contents) {
+                    parsed["certificates"]
+                        .as_array()
+                        .and_then(|certs| certs.first())
+                        .and_then(|cert| cert["certificate"].as_str())
+                        .map(|filename| std::path::Path::new(dir).join(filename))
+                        .filter(|path| path.exists())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    if let Some(ref path) = fairplay_certificate_path {
+        info!("FairPlay certificate available at /media/v1/certificate ({:?})", path);
+    }
+
     let media_api_state = Arc::new(media_api::MediaApiState {
         rewrap_state: rewrap_state.clone(),
         session_manager: session_manager.clone(),
@@ -762,6 +792,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(not(feature = "fairplay"))]
         fairplay_handler: None,
         chain_validator: chain_validator.clone(),
+        fairplay_certificate_path,
     });
 
     // Initialize C2PA signing state (optional - only if configured)
@@ -797,6 +828,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Media DRM router
     let media_router = Router::new()
         .route("/media/v1/key-request", post(media_api::media_key_request))
+        .route(
+            "/media/v1/certificate",
+            get(media_api::fairplay_certificate),
+        )
         .route("/media/v1/session/start", post(media_api::session_start))
         .route(
             "/media/v1/session/:session_id/heartbeat",
@@ -881,20 +916,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting unified server (HTTP + WebSocket) on {}", addr);
 
     // Serve with or without TLS
-    if tls_acceptor.is_some() {
-        // TLS enabled - use axum-server with rustls
-        info!("TLS enabled - using rustls");
+    if let Some(tls_acceptor) = tls_acceptor {
+        // TLS enabled - manual accept loop with per-connection TLS handshake
+        // This avoids axum-server's synchronous TLS accept which can deadlock
+        // if any client stalls during handshake.
+        info!("TLS enabled - using rustls (async accept)");
 
-        // Load rustls config for axum-server
-        let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
-            &settings.tls_cert_path,
-            &settings.tls_key_path,
-        )
-        .await?;
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-        axum_server::bind_rustls(addr.parse()?, tls_config)
-            .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .await?;
+        loop {
+            let (tcp_stream, remote_addr) = listener.accept().await?;
+            let tls_acceptor = tls_acceptor.clone();
+            let app = app.clone();
+
+            tokio::spawn(async move {
+                // TLS handshake with 10-second timeout - never blocks the accept loop
+                let tls_stream = match tokio::time::timeout(
+                    Duration::from_secs(10),
+                    tls_acceptor.accept(tcp_stream),
+                )
+                .await
+                {
+                    Ok(Ok(stream)) => stream,
+                    Ok(Err(e)) => {
+                        error!("TLS handshake failed from {}: {}", remote_addr, e);
+                        return;
+                    }
+                    Err(_) => {
+                        warn!("TLS handshake timeout from {}", remote_addr);
+                        return;
+                    }
+                };
+
+                let io = hyper_util::rt::TokioIo::new(tls_stream);
+
+                let hyper_service = hyper::service::service_fn(
+                    move |mut request: hyper::Request<hyper::body::Incoming>| {
+                        // Inject ConnectInfo so handlers can extract the client address
+                        request
+                            .extensions_mut()
+                            .insert(axum::extract::ConnectInfo(remote_addr));
+                        let tower_service = app.clone();
+                        async move { tower_service.oneshot(request).await }
+                    },
+                );
+
+                if let Err(e) = hyper_util::server::conn::auto::Builder::new(
+                    hyper_util::rt::TokioExecutor::new(),
+                )
+                .serve_connection_with_upgrades(io, hyper_service)
+                .await
+                {
+                    let err_str = e.to_string();
+                    if !err_str.contains("reset")
+                        && !err_str.contains("closed")
+                        && !err_str.contains("shutting down")
+                    {
+                        error!("HTTP connection error from {}: {}", remote_addr, e);
+                    }
+                }
+            });
+        }
     } else {
         // TLS disabled - plain HTTP
         info!("TLS disabled - using plain HTTP");
