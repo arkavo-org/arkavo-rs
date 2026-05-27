@@ -320,6 +320,42 @@ mod integration_tests {
         assert!(req.headers.get("connection").is_none());
         assert!(req.headers.get("te").is_none());
     }
+
+    #[tokio::test]
+    async fn forwards_upstream_status_codes() {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/kas/v2/rewrap"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("forbidden"))
+            .mount(&upstream)
+            .await;
+
+        let proxy_base = spawn_proxy(&upstream.uri()).await;
+        let resp = Client::new()
+            .post(format!("{proxy_base}/kas/v2/rewrap"))
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 403);
+        assert_eq!(resp.text().await.unwrap(), "forbidden");
+    }
+
+    #[tokio::test]
+    async fn returns_502_when_upstream_unreachable() {
+        // Point at a port nobody is listening on.
+        let proxy_base = spawn_proxy("http://127.0.0.1:1").await;
+
+        let resp = Client::new()
+            .post(format!("{proxy_base}/kas/v2/rewrap"))
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 502);
+    }
 }
 
 #[cfg(test)]
