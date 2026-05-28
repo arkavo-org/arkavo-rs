@@ -785,37 +785,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Resolve FairPlay certificate path from credentials directory
-    let fairplay_certificate_path = {
+    // Resolve and pre-load FairPlay certificate from credentials directory.
+    // Loading once at startup avoids per-request disk I/O in the cert handler.
+    let fairplay_certificate_data = {
         let credentials_dir = std::env::var("FAIRPLAY_CREDENTIALS_PATH").ok();
-        if let Some(ref dir) = credentials_dir {
+        let cert_path = credentials_dir.as_ref().and_then(|dir| {
             let certs_json_path = std::path::Path::new(dir).join("certificates.json");
-            if let Ok(contents) = std::fs::read_to_string(&certs_json_path) {
-                // Parse certificates.json to find the certificate filename
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&contents) {
-                    parsed["certificates"]
-                        .as_array()
-                        .and_then(|certs| certs.first())
-                        .and_then(|cert| cert["certificate"].as_str())
-                        .map(|filename| std::path::Path::new(dir).join(filename))
-                        .filter(|path| path.exists())
-                } else {
-                    None
-                }
-            } else {
+            let contents = std::fs::read_to_string(&certs_json_path).ok()?;
+            let parsed: serde_json::Value = serde_json::from_str(&contents).ok()?;
+            parsed["certificates"]
+                .as_array()
+                .and_then(|certs| certs.first())
+                .and_then(|cert| cert["certificate"].as_str())
+                .map(|filename| std::path::Path::new(dir).join(filename))
+                .filter(|path| path.exists())
+        });
+
+        cert_path.and_then(|path| match std::fs::read(&path) {
+            Ok(bytes) => {
+                info!(
+                    "FairPlay certificate loaded ({} bytes) from {:?}",
+                    bytes.len(),
+                    path
+                );
+                Some(Arc::new(bytes))
+            }
+            Err(e) => {
+                warn!("Failed to read FairPlay certificate from {:?}: {}", path, e);
                 None
             }
-        } else {
-            None
-        }
+        })
     };
-
-    if let Some(ref path) = fairplay_certificate_path {
-        info!(
-            "FairPlay certificate available at /media/v1/certificate ({:?})",
-            path
-        );
-    }
 
     let media_api_state = Arc::new(media_api::MediaApiState {
         rewrap_state: rewrap_state.clone(),
@@ -826,7 +826,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(not(feature = "fairplay"))]
         fairplay_handler: None,
         chain_validator: chain_validator.clone(),
-        fairplay_certificate_path,
+        fairplay_certificate_data,
     });
 
     // Initialize C2PA signing state (optional - only if configured)
@@ -990,7 +990,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let listener = tokio::net::TcpListener::bind(&addr).await?;
 
         loop {
-            let (tcp_stream, remote_addr) = listener.accept().await?;
+            let (tcp_stream, remote_addr) = match listener.accept().await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    error!("TCP accept error: {}", e);
+                    continue;
+                }
+            };
             let tls_acceptor = tls_acceptor.clone();
             let app = app.clone();
 

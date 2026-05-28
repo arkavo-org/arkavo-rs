@@ -55,8 +55,9 @@ pub struct MediaApiState {
     pub fairplay_handler: Option<Arc<crate::modules::fairplay::FairPlayHandler>>,
     /// Chain validator for session validation (optional for backward compatibility)
     pub chain_validator: Option<Arc<dyn SessionValidator>>,
-    /// Path to the FairPlay certificate (.bin) for client certificate fetching
-    pub fairplay_certificate_path: Option<std::path::PathBuf>,
+    /// Pre-loaded FairPlay certificate (.bin) bytes for client certificate fetching.
+    /// Loaded once at startup; serving from memory avoids per-request disk I/O.
+    pub fairplay_certificate_data: Option<Arc<Vec<u8>>>,
 }
 
 // ==================== Request/Response Types ====================
@@ -991,22 +992,11 @@ async fn handle_fairplay_key_request(
 pub async fn fairplay_certificate(
     State(state): State<Arc<MediaApiState>>,
 ) -> Result<Response, ErrorResponse> {
-    let cert_path = state.fairplay_certificate_path.as_ref().ok_or_else(|| {
-        warn!("FairPlay certificate requested but no certificate path configured");
+    let cert_data = state.fairplay_certificate_data.as_ref().ok_or_else(|| {
+        warn!("FairPlay certificate requested but not configured");
         ErrorResponse {
-            error: "session_not_found".to_string(),
+            error: "not_configured".to_string(),
             message: "FairPlay certificate not configured".to_string(),
-        }
-    })?;
-
-    let cert_data = tokio::fs::read(cert_path).await.map_err(|e| {
-        error!(
-            "Failed to read FairPlay certificate from {:?}: {}",
-            cert_path, e
-        );
-        ErrorResponse {
-            error: "internal_error".to_string(),
-            message: "Failed to read FairPlay certificate".to_string(),
         }
     })?;
 
@@ -1018,7 +1008,7 @@ pub async fn fairplay_certificate(
             (axum::http::header::CONTENT_TYPE, "application/octet-stream"),
             (axum::http::header::CACHE_CONTROL, "public, max-age=86400"),
         ],
-        cert_data,
+        cert_data.as_ref().clone(),
     )
         .into_response())
 }
