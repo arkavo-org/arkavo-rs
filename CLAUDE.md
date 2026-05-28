@@ -244,6 +244,10 @@ export FAIRPLAY_CREDENTIALS_PATH=/path/to/fps/credentials
 
 # Chain Validation Configuration (optional - blockchain-based session validation)
 export CHAIN_RPC_URL=ws://chain.arkavo.net          # Optional, disables chain validation if not set
+
+# OpenTDF Platform Reverse Proxy Configuration (optional)
+export OPENTDF_PLATFORM_URL=https://platform.svc:8443  # Upstream platform base URL
+export KAS_PROXY_MODE=connect                          # off | connect | rest | both
 ```
 
 **Note:** For RSA key support (Standard TDF / OpenTDFKit compatibility):
@@ -269,6 +273,13 @@ export CHAIN_RPC_URL=ws://chain.arkavo.net          # Optional, disables chain v
 - When enabled, rewrap requests require a `chain_session_id` in the JWT payload
 - The KAS queries the arkavo-node blockchain to validate session grants
 - Session data is cached with a 6-second TTL for performance
+
+**Note:** For OpenTDF Platform reverse-proxy:
+- Proxying is optional and disabled when `KAS_PROXY_MODE` is `off` or unset.
+- `connect` forwards `/kas.AccessService/*` ConnectRPC routes.
+- `rest` forwards `/kas/v2/rewrap` and `/kas/v2/kas_public_key`, replacing the local OpenTDF-compat shim.
+- `both` forwards all of the above.
+- `/ws` (NanoTDF) always stays local. See `docs/platform-proxy.md`.
 
 ## FlatBuffers Schema Compilation
 

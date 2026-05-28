@@ -10,7 +10,7 @@ mod modules;
 
 #[cfg(feature = "c2pa_signing")]
 use modules::c2pa_signing;
-use modules::{cbor_protocol, http_rewrap, media_api, ntdf_token};
+use modules::{cbor_protocol, http_rewrap, media_api, ntdf_token, platform_proxy};
 use opentdf_kas::{
     compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek, NanoTdfVersion,
 };
@@ -699,6 +699,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         chain_validator: chain_validator.clone(),
     });
 
+    // Build optional reverse-proxy to upstream opentdf-platform.
+    let proxy_mode: platform_proxy::ProxyMode = env::var("KAS_PROXY_MODE")
+        .ok()
+        .as_deref()
+        .unwrap_or("off")
+        .parse()
+        .map_err(|e: String| -> Box<dyn std::error::Error> { e.into() })?;
+
+    let platform_proxy_state = match (env::var("OPENTDF_PLATFORM_URL").ok(), proxy_mode) {
+        (Some(url), mode) if mode != platform_proxy::ProxyMode::Off => {
+            let state = platform_proxy::PlatformProxyState::new(&url)
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            info!(
+                "Platform proxy enabled: mode={:?}, upstream={}",
+                mode, state.upstream_base
+            );
+            Some(state)
+        }
+        (None, mode) if mode != platform_proxy::ProxyMode::Off => {
+            return Err(format!(
+                "KAS_PROXY_MODE={:?} requires OPENTDF_PLATFORM_URL to be set",
+                mode
+            )
+            .into());
+        }
+        _ => {
+            info!("Platform proxy disabled (KAS_PROXY_MODE=off or unset)");
+            None
+        }
+    };
+
     // Initialize media DRM components
     let max_concurrent_streams = env::var("MAX_CONCURRENT_STREAMS")
         .ok()
@@ -788,14 +819,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Router,
     };
 
-    // OpenTDF compatibility router
-    let opentdf_router = Router::new()
-        .route("/kas/v2/rewrap", post(http_rewrap::rewrap_handler))
-        .route(
-            "/kas/v2/kas_public_key",
-            get(http_rewrap::kas_public_key_handler),
-        )
-        .with_state(rewrap_state);
+    // OpenTDF compatibility router — either local handlers or forwarded
+    // to upstream platform, depending on KAS_PROXY_MODE.
+    let opentdf_router = if proxy_mode.forwards_rest() {
+        // SAFETY: presence of upstream URL is enforced by the env-var check above.
+        let state = platform_proxy_state
+            .clone()
+            .expect("platform_proxy_state must exist when forwards_rest()");
+        Router::new()
+            .route("/kas/v2/rewrap", post(platform_proxy::proxy))
+            .route("/kas/v2/kas_public_key", get(platform_proxy::proxy))
+            .with_state(state)
+    } else {
+        Router::new()
+            .route("/kas/v2/rewrap", post(http_rewrap::rewrap_handler))
+            .route(
+                "/kas/v2/kas_public_key",
+                get(http_rewrap::kas_public_key_handler),
+            )
+            .with_state(rewrap_state)
+    };
+
+    // ConnectRPC routes — only mounted when proxying is enabled.
+    let connect_router = if proxy_mode.forwards_connect() {
+        let state = platform_proxy_state
+            .clone()
+            .expect("platform_proxy_state must exist when forwards_connect()");
+        Router::new()
+            .route("/kas.AccessService/Rewrap", post(platform_proxy::proxy))
+            .route("/kas.AccessService/PublicKey", post(platform_proxy::proxy))
+            .route("/kas.AccessService/PublicKey", get(platform_proxy::proxy))
+            .route(
+                "/kas.AccessService/LegacyPublicKey",
+                get(platform_proxy::proxy),
+            )
+            .with_state(state)
+    } else {
+        Router::new()
+    };
 
     // Media DRM router
     let media_router = Router::new()
@@ -841,6 +902,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_state(ws_state)
         .merge(opentdf_router)
+        .merge(connect_router)
         .merge(media_router)
         .merge(c2pa_router)
         .layer(
