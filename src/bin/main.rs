@@ -2774,7 +2774,7 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
         s3_bucket: env::var("S3_BUCKET").unwrap_or_else(|_| "default-bucket".to_string()),
         chain_rpc_url: env::var("CHAIN_RPC_URL").ok(),
         ntdf_expected_audience: env::var("NTDF_EXPECTED_AUDIENCE")
-            .unwrap_or_else(|_| "https://100.arkavo.net".to_string()),
+            .unwrap_or_else(|_| "https://platform.arkavo.net".to_string()),
     })
 }
 

@@ -191,7 +191,7 @@ mod tests {
     fn test_stream_started_encode() {
         let event = StreamEvent::started(
             "live/test123",
-            "rtmp://100.arkavo.net/live/test123",
+            "rtmp://platform.arkavo.net/live/test123",
             Some("base64header==".to_string()),
             Some("My Stream".to_string()),
         );
@@ -211,7 +211,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(stream_key, "live/test123");
-                assert_eq!(rtmp_url, "rtmp://100.arkavo.net/live/test123");
+                assert_eq!(rtmp_url, "rtmp://platform.arkavo.net/live/test123");
                 assert_eq!(manifest_header, Some("base64header==".to_string()));
                 assert_eq!(title, Some("My Stream".to_string()));
             }
@@ -239,7 +239,7 @@ mod tests {
     fn test_stream_started_without_optional_fields() {
         let event = StreamEvent::started(
             "live/test123",
-            "rtmp://100.arkavo.net/live/test123",
+            "rtmp://platform.arkavo.net/live/test123",
             None,
             None,
         );
