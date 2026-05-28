@@ -871,6 +871,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_state(rewrap_state)
     };
 
+    // Platform discovery — `/.well-known/opentdf-configuration` is published by
+    // the upstream platform and lists its endpoints/keys. Forward whenever any
+    // proxying is on so clients see the authoritative document.
+    let wellknown_router = if proxy_mode.forwards_discovery() {
+        let state = platform_proxy_state
+            .clone()
+            .expect("platform_proxy_state must exist when forwards_discovery()");
+        Router::new()
+            .route(
+                "/.well-known/opentdf-configuration",
+                get(platform_proxy::proxy),
+            )
+            .with_state(state)
+    } else {
+        Router::new()
+    };
+
     // ConnectRPC routes — only mounted when proxying is enabled.
     let connect_router = if proxy_mode.forwards_connect() {
         let state = platform_proxy_state
@@ -937,6 +954,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_state(ws_state)
         .merge(opentdf_router)
+        .merge(wellknown_router)
         .merge(connect_router)
         .merge(media_router)
         .merge(c2pa_router)
