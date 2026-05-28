@@ -53,6 +53,7 @@ use tokio::fs;
 use tokio::sync::{mpsc, Mutex};
 use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::Message;
+use tower::ServiceExt;
 
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug)]
@@ -618,11 +619,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kas_private_key =
         SecretKey::from_bytes(&kas_private_key_array.into()).expect("Invalid KAS private key");
     let kas_public_key = kas_private_key.public_key();
-    let kas_public_key_pem = {
-        let encoded = kas_public_key.to_encoded_point(false);
-        let pem_data = pem::Pem::new("PUBLIC KEY", encoded.as_bytes().to_vec());
-        pem::encode(&pem_data)
-    };
+    let kas_public_key_pem = modules::crypto::public_key_to_pem(&kas_public_key)
+        .expect("Failed to encode KAS public key");
 
     // Set up TLS if not disabled
     let tls_acceptor = if settings.tls_enabled {
@@ -787,6 +785,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // Resolve and pre-load FairPlay certificate from credentials directory.
+    // Loading once at startup avoids per-request disk I/O in the cert handler.
+    let fairplay_certificate_data = {
+        let credentials_dir = std::env::var("FAIRPLAY_CREDENTIALS_PATH").ok();
+        let cert_path = credentials_dir.as_ref().and_then(|dir| {
+            let certs_json_path = std::path::Path::new(dir).join("certificates.json");
+            let contents = std::fs::read_to_string(&certs_json_path).ok()?;
+            let parsed: serde_json::Value = serde_json::from_str(&contents).ok()?;
+            parsed["certificates"]
+                .as_array()
+                .and_then(|certs| certs.first())
+                .and_then(|cert| cert["certificate"].as_str())
+                .map(|filename| std::path::Path::new(dir).join(filename))
+                .filter(|path| path.exists())
+        });
+
+        cert_path.and_then(|path| match std::fs::read(&path) {
+            Ok(bytes) => {
+                info!(
+                    "FairPlay certificate loaded ({} bytes) from {:?}",
+                    bytes.len(),
+                    path
+                );
+                Some(Arc::new(bytes))
+            }
+            Err(e) => {
+                warn!("Failed to read FairPlay certificate from {:?}: {}", path, e);
+                None
+            }
+        })
+    };
+
     let media_api_state = Arc::new(media_api::MediaApiState {
         rewrap_state: rewrap_state.clone(),
         session_manager: session_manager.clone(),
@@ -796,6 +826,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(not(feature = "fairplay"))]
         fairplay_handler: None,
         chain_validator: chain_validator.clone(),
+        fairplay_certificate_data,
     });
 
     // Initialize C2PA signing state (optional - only if configured)
@@ -861,6 +892,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Media DRM router
     let media_router = Router::new()
         .route("/media/v1/key-request", post(media_api::media_key_request))
+        .route(
+            "/media/v1/certificate",
+            get(media_api::fairplay_certificate),
+        )
         .route("/media/v1/session/start", post(media_api::session_start))
         .route(
             "/media/v1/session/:session_id/heartbeat",
@@ -946,20 +981,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting unified server (HTTP + WebSocket) on {}", addr);
 
     // Serve with or without TLS
-    if tls_acceptor.is_some() {
-        // TLS enabled - use axum-server with rustls
-        info!("TLS enabled - using rustls");
+    if let Some(tls_acceptor) = tls_acceptor {
+        // TLS enabled - manual accept loop with per-connection TLS handshake
+        // This avoids axum-server's synchronous TLS accept which can deadlock
+        // if any client stalls during handshake.
+        info!("TLS enabled - using rustls (async accept)");
 
-        // Load rustls config for axum-server
-        let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
-            &settings.tls_cert_path,
-            &settings.tls_key_path,
-        )
-        .await?;
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-        axum_server::bind_rustls(addr.parse()?, tls_config)
-            .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .await?;
+        loop {
+            let (tcp_stream, remote_addr) = match listener.accept().await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    error!("TCP accept error: {}", e);
+                    continue;
+                }
+            };
+            let tls_acceptor = tls_acceptor.clone();
+            let app = app.clone();
+
+            tokio::spawn(async move {
+                // TLS handshake with 10-second timeout - never blocks the accept loop
+                let tls_stream = match tokio::time::timeout(
+                    Duration::from_secs(10),
+                    tls_acceptor.accept(tcp_stream),
+                )
+                .await
+                {
+                    Ok(Ok(stream)) => stream,
+                    Ok(Err(e)) => {
+                        error!("TLS handshake failed from {}: {}", remote_addr, e);
+                        return;
+                    }
+                    Err(_) => {
+                        warn!("TLS handshake timeout from {}", remote_addr);
+                        return;
+                    }
+                };
+
+                let io = hyper_util::rt::TokioIo::new(tls_stream);
+
+                let hyper_service = hyper::service::service_fn(
+                    move |mut request: hyper::Request<hyper::body::Incoming>| {
+                        // Inject ConnectInfo so handlers can extract the client address
+                        request
+                            .extensions_mut()
+                            .insert(axum::extract::ConnectInfo(remote_addr));
+                        let tower_service = app.clone();
+                        async move { tower_service.oneshot(request).await }
+                    },
+                );
+
+                if let Err(e) = hyper_util::server::conn::auto::Builder::new(
+                    hyper_util::rt::TokioExecutor::new(),
+                )
+                .serve_connection_with_upgrades(io, hyper_service)
+                .await
+                {
+                    let err_str = e.to_string();
+                    if !err_str.contains("reset")
+                        && !err_str.contains("closed")
+                        && !err_str.contains("shutting down")
+                    {
+                        error!("HTTP connection error from {}: {}", remote_addr, e);
+                    }
+                }
+            });
+        }
     } else {
         // TLS disabled - plain HTTP
         info!("TLS disabled - using plain HTTP");
@@ -1648,12 +1736,14 @@ async fn handle_rewrap(
     log_timing(settings, "Time for ECDH operation", ecdh_time);
 
     // Determine HKDF salt based on NanoTDF version
-    let nanotdf_salt = if let Some(version) = detect_nanotdf_version(payload) {
+    let dek_salt = if let Some(version) = detect_nanotdf_version(payload) {
         compute_nanotdf_salt(version)
     } else {
         // Fallback to v12 for backward compatibility
         compute_nanotdf_salt(NanoTdfVersion::V12)
     };
+    // Session salt is always v1.2 (matches Go reference KAS and all SDK clients)
+    let session_salt = compute_nanotdf_salt(NanoTdfVersion::V12);
 
     // Use NanoTDF-compatible HKDF: empty info parameter per spec section 4
     let info = b"";
@@ -1662,7 +1752,8 @@ async fn handle_rewrap(
     let (nonce_vec, wrapped_dek) = match rewrap_dek(
         &dek_shared_secret_bytes,
         &session_shared_secret,
-        &nanotdf_salt,
+        &dek_salt,
+        &session_salt,
         info,
     ) {
         Ok(result) => result,
@@ -1979,16 +2070,19 @@ async fn handle_chain_rewrap(
     };
 
     // Determine HKDF salt based on NanoTDF version
-    let nanotdf_salt = if let Some(version) = detect_nanotdf_version(header) {
+    let dek_salt = if let Some(version) = detect_nanotdf_version(header) {
         compute_nanotdf_salt(version)
     } else {
         compute_nanotdf_salt(NanoTdfVersion::V12)
     };
+    // Session salt is always v1.2 (matches Go reference KAS and all SDK clients)
+    let session_salt = compute_nanotdf_salt(NanoTdfVersion::V12);
 
     let (nonce_vec, wrapped_dek) = match rewrap_dek(
         &dek_shared_secret_bytes,
         &session_shared_secret,
-        &nanotdf_salt,
+        &dek_salt,
+        &session_salt,
         b"", // Empty info per NanoTDF spec
     ) {
         Ok(result) => result,
@@ -2686,7 +2780,7 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
         s3_bucket: env::var("S3_BUCKET").unwrap_or_else(|_| "default-bucket".to_string()),
         chain_rpc_url: env::var("CHAIN_RPC_URL").ok(),
         ntdf_expected_audience: env::var("NTDF_EXPECTED_AUDIENCE")
-            .unwrap_or_else(|_| "https://100.arkavo.net".to_string()),
+            .unwrap_or_else(|_| "https://platform.arkavo.net".to_string()),
     })
 }
 

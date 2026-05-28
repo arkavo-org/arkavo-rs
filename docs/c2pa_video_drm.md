@@ -459,11 +459,11 @@ For MP4/MOV containers, C2PA uses box-based exclusion ranges to avoid circular d
 
 ### Quick Start
 
-**Base URL:** `https://100.arkavo.net` (production) or `http://localhost:8443` (local)
+**Base URL:** `https://platform.arkavo.net` (production) or `http://localhost:8443` (local)
 
 **1. Sign a manifest:**
 ```bash
-curl -s -X POST https://100.arkavo.net/c2pa/v1/sign \
+curl -s -X POST https://platform.arkavo.net/c2pa/v1/sign \
   -H "Content-Type: application/json" \
   -d '{
     "content_hash": "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678",
@@ -490,7 +490,7 @@ Response:
 **2. Validate a manifest (sign-then-validate round-trip):**
 ```bash
 # Sign and capture manifest
-MANIFEST=$(curl -s -X POST https://100.arkavo.net/c2pa/v1/sign \
+MANIFEST=$(curl -s -X POST https://platform.arkavo.net/c2pa/v1/sign \
   -H "Content-Type: application/json" \
   -d '{
     "content_hash": "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678",
@@ -504,7 +504,7 @@ MANIFEST=$(curl -s -X POST https://100.arkavo.net/c2pa/v1/sign \
   }' | python3 -c "import sys,json; print(json.load(sys.stdin)['manifest'])")
 
 # Validate
-curl -s -X POST https://100.arkavo.net/c2pa/v1/validate \
+curl -s -X POST https://platform.arkavo.net/c2pa/v1/validate \
   -H "Content-Type: application/json" \
   -d "{
     \"manifest\": \"$MANIFEST\",
@@ -549,7 +549,7 @@ The `/c2pa/v1/validate` endpoint uses c2pa-rs `Reader` for cryptographic verific
 
 - **Unit tests:** `cargo test --features c2pa_signing` — 8 tests covering sign/validate round-trip, hash mismatch, JUMBF format, AI flag, invalid input, c2patool interop
 - **Smoke tests:** `tests/c2pa_video_tests.rs` — 24 tests for JSON structure, policy logic, analytics events
-- **Live integration:** `curl` against `https://100.arkavo.net/c2pa/v1/sign` and `/validate`
+- **Live integration:** `curl` against `https://platform.arkavo.net/c2pa/v1/sign` and `/validate`
 
 ## Manifest Format
 

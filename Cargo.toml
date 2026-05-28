@@ -53,9 +53,9 @@ scale = { package = "parity-scale-codec", version = "3.6.12", default-features =
 scale-info = { version = "2.11.3", default-features = false, features = ["derive"], optional = true }
 bs58 = "0.5.1"
 axum = { version = "0.7", features = ["ws"] }
-axum-server = { version = "0.7", features = ["tls-rustls"] }
-tower = "0.4"
-hyper = "1.0"
+tower = { version = "0.4", features = ["util"] }
+hyper = { version = "1.0", features = ["server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1", "http2"] }
 http-body-util = "0.1"
 base64 = "0.22"
 chrono = "0.4"
@@ -70,7 +70,7 @@ mp4parse = { version = "0.17", optional = true }
 opentdf = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.0" }
 opentdf-crypto = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.0", features = ["kem-ec"] }
 opentdf-protocol = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.0" }
-opentdf-kas = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.0" }
+opentdf-kas = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.2" }
 rsa = { version = "0.9", features = ["sha2"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
 sha1 = "0.10"

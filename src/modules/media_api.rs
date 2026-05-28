@@ -55,6 +55,9 @@ pub struct MediaApiState {
     pub fairplay_handler: Option<Arc<crate::modules::fairplay::FairPlayHandler>>,
     /// Chain validator for session validation (optional for backward compatibility)
     pub chain_validator: Option<Arc<dyn SessionValidator>>,
+    /// Pre-loaded FairPlay certificate (.bin) bytes for client certificate fetching.
+    /// Loaded once at startup; serving from memory avoids per-request disk I/O.
+    pub fairplay_certificate_data: Option<Arc<Vec<u8>>>,
 }
 
 // ==================== Request/Response Types ====================
@@ -984,6 +987,32 @@ async fn handle_fairplay_key_request(
     }))
 }
 
+/// GET /media/v1/certificate
+/// Serve the FairPlay Streaming certificate for client SPC generation
+pub async fn fairplay_certificate(
+    State(state): State<Arc<MediaApiState>>,
+) -> Result<Response, ErrorResponse> {
+    let cert_data = state.fairplay_certificate_data.as_ref().ok_or_else(|| {
+        warn!("FairPlay certificate requested but not configured");
+        ErrorResponse {
+            error: "not_configured".to_string(),
+            message: "FairPlay certificate not configured".to_string(),
+        }
+    })?;
+
+    info!("FairPlay certificate served ({} bytes)", cert_data.len());
+
+    Ok((
+        StatusCode::OK,
+        [
+            (axum::http::header::CONTENT_TYPE, "application/octet-stream"),
+            (axum::http::header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        cert_data.as_ref().clone(),
+    )
+        .into_response())
+}
+
 /// POST /media/v1/session/start
 /// Initialize a new playback session
 pub async fn session_start(
@@ -1175,17 +1204,20 @@ fn process_nanotdf_header(
     let dek_shared_secret = custom_ecdh(kas_private_key, &tdf_ephemeral_public_key)?;
 
     // Detect NanoTDF version and compute salt
-    let nanotdf_salt = if let Some(version) = detect_nanotdf_version(&header_bytes) {
+    let dek_salt = if let Some(version) = detect_nanotdf_version(&header_bytes) {
         compute_nanotdf_salt(version)
     } else {
         compute_nanotdf_salt(NanoTdfVersion::V12)
     };
+    // Session salt is always v1.2 (matches Go reference KAS and all SDK clients)
+    let session_salt = compute_nanotdf_salt(NanoTdfVersion::V12);
 
     // Rewrap DEK
     let (nonce, wrapped_dek) = rewrap_dek(
         &dek_shared_secret,
         session_shared_secret,
-        &nanotdf_salt,
+        &dek_salt,
+        &session_salt,
         b"", // Empty info per NanoTDF spec
     )?;
 
