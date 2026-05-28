@@ -48,6 +48,12 @@ impl ProxyMode {
     pub fn forwards_rest(self) -> bool {
         matches!(self, ProxyMode::Rest | ProxyMode::Both)
     }
+
+    /// `/.well-known/opentdf-configuration` is platform-authoritative discovery.
+    /// Whenever any proxying is on, defer to the upstream document.
+    pub fn forwards_discovery(self) -> bool {
+        !matches!(self, ProxyMode::Off)
+    }
 }
 
 /// Shared state for the reverse-proxy handler.
@@ -231,15 +237,19 @@ mod mode_tests {
     fn forwarding_predicates() {
         assert!(!ProxyMode::Off.forwards_connect());
         assert!(!ProxyMode::Off.forwards_rest());
+        assert!(!ProxyMode::Off.forwards_discovery());
 
         assert!(ProxyMode::Connect.forwards_connect());
         assert!(!ProxyMode::Connect.forwards_rest());
+        assert!(ProxyMode::Connect.forwards_discovery());
 
         assert!(!ProxyMode::Rest.forwards_connect());
         assert!(ProxyMode::Rest.forwards_rest());
+        assert!(ProxyMode::Rest.forwards_discovery());
 
         assert!(ProxyMode::Both.forwards_connect());
         assert!(ProxyMode::Both.forwards_rest());
+        assert!(ProxyMode::Both.forwards_discovery());
     }
 }
 

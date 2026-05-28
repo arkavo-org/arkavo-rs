@@ -18,6 +18,8 @@ modern ZTDF rewrap (handled by platform).
 - **`rest`** — `/kas/v2/rewrap` and `/kas/v2/kas_public_key` forward to platform (replaces the local `http_rewrap` shim).
 - **`both`** — `connect` + `rest`.
 
+Whenever the mode is anything other than `off`, `/.well-known/opentdf-configuration` is also forwarded to the upstream platform so clients see the authoritative discovery document.
+
 `/ws` (custom NanoTDF binary protocol) always stays local; `/media/v1/*` and `/c2pa/v1/*` are always local.
 
 ## KAS URL identity caveat
@@ -40,7 +42,7 @@ them through, you must either:
 - WebSocket `/ws` (NanoTDF rewrap, contracts, NATS push) — arks-only.
 - `/media/v1/*` (TDF3 media DRM, session manager).
 - `/c2pa/v1/*` (C2PA signing).
-- `/.well-known/apple-app-site-association`.
+- `/.well-known/apple-app-site-association` (always local; `/.well-known/opentdf-configuration` is forwarded when the proxy is on).
 
 ## What's not done
 
