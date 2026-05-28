@@ -89,6 +89,7 @@ thiserror = "1.0"
 async-trait = "0.1"
 ciborium = "0.2"
 serde_bytes = "0.11"
+coset = "0.4"
 
 # RTMP protocol support (using local fork with custom_fields support)
 rml_rtmp = { git = "https://github.com/arkavo-org/rust-media-libs.git", tag = "v0.9.0" }

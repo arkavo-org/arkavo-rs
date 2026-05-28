@@ -108,7 +108,6 @@ pub mod crypto;
 pub mod fairplay;
 pub mod http_rewrap;
 pub mod media_api;
-pub mod ntdf_token;
 pub mod platform_proxy;
 pub mod rtmp;
 pub mod secure_keys;
@@ -684,13 +683,13 @@ git commit -m "test(proxy): cover upstream error code passthrough and dead-upstr
 Find line 13 in `src/bin/main.rs`:
 
 ```rust
-use modules::{cbor_protocol, http_rewrap, media_api, ntdf_token};
+use modules::{cbor_protocol, http_rewrap, media_api};
 ```
 
 Replace with:
 
 ```rust
-use modules::{cbor_protocol, http_rewrap, media_api, ntdf_token, platform_proxy};
+use modules::{cbor_protocol, http_rewrap, media_api, platform_proxy};
 ```
 
 - [ ] **Step 2: Build proxy state after `rewrap_state` (around main.rs:700)**

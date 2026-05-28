@@ -225,6 +225,9 @@ export NATS_SUBJECT=nanotdf.messages
 export REDIS_URL=redis://localhost:6379
 export ENABLE_TIMING_LOGS=true                     # Performance logging
 export RUST_LOG=info                               # Logging level
+export CWT_KEYS_URL=https://identity.arkavo.net/.well-known/cose-keys  # WebSocket CWT keys
+export CWT_EXPECTED_ISSUER=https://identity.arkavo.net                 # WebSocket CWT issuer
+export CWT_EXPECTED_AUDIENCE=https://100.arkavo.net                    # WebSocket CWT audience
 
 # Media DRM Configuration
 export MAX_CONCURRENT_STREAMS=5                    # Max simultaneous streams per user
