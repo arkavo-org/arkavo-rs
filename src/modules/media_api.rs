@@ -858,7 +858,7 @@ async fn handle_fairplay_key_request(
                 payload.asset_id
             );
             log_key_request_error(
-                state,
+                &state,
                 &payload,
                 KeyRequestResult::InvalidRequest,
                 timer.elapsed_ms(),
