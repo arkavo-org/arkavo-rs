@@ -567,6 +567,8 @@ mod pop_header_tests {
             .and(path(REWRAP))
             .and(header("authorization", AGENT_AUTHORIZATION))
             .and(header("dpop", DPOP_PROOF))
+            .and(header("content-type", "application/json"))
+            .and(header("connect-protocol-version", "1"))
             .and(body_string(BODY))
             .respond_with(
                 ResponseTemplate::new(200).set_body_raw(r#"{"responses":[]}"#, "application/json"),
@@ -599,10 +601,11 @@ mod pop_header_tests {
         assert_eq!(dpop[0], DPOP_PROOF);
     }
 
-    /// Today the proxy relays a client's `X-Actor-Token` untouched. arkavo-rs
-    /// #70 changes this on purpose: it strips the client value and injects
-    /// arks's own service CWT. When #70 lands it must replace this test with
-    /// its overwrite assertion, not delete it.
+    /// Today the proxy relays a client's `X-Actor-Token` untouched. When #70
+    /// lands, replace this test with a Connect Rewrap test whose state is
+    /// built with `with_actor_token(..)`, asserting exactly one
+    /// `x-actor-token` equal to arks's service CWT while `Authorization` and
+    /// `DPoP` arrive unchanged.
     #[tokio::test]
     async fn connect_rewrap_forwards_client_actor_token_unchanged() {
         let upstream = MockServer::start().await;
@@ -627,6 +630,7 @@ mod pop_header_tests {
         assert_eq!(resp.status(), 200);
 
         let received = upstream.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1);
         let actor: Vec<_> = received[0]
             .headers
             .get_all("x-actor-token")
