@@ -541,12 +541,14 @@ mod pop_header_tests {
     };
 
     const REWRAP: &str = "/kas.AccessService/Rewrap";
-    // Opaque stand-ins shaped like the real values; the proxy never parses them.
-    const AGENT_AUTHORIZATION: &str = "DPoP 0oRDoQEmoQRYIGFnZW50LWtpZA-opaque-agent-cwt";
-    const DPOP_PROOF: &str =
-        "eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVkRFNBIn0.eyJodHUiOiIva2FzLkFjY2Vzc1NlcnZpY2UvUmV3cmFwIn0.c2lnbmF0dXJl";
-    const ACTOR_TOKEN: &str = "0oRDoQEmoQRYIGFya3Mta2lk-opaque-service-cwt";
-    const BODY: &str = r#"{"signedRequestToken":"eyJhbGciOiJFZERTQSJ9.e30.c2lnbmF0dXJl"}"#;
+    // Opaque placeholders: the proxy never parses them, so they only need to be
+    // distinct and mixed-case (to catch case rewrites). They deliberately don't
+    // look like real tokens, which secret scanners would flag.
+    const AGENT_AUTHORIZATION: &str = "DPoP Test-Agent-CWT";
+    const DPOP_PROOF: &str = "Test-DPoP-Header.Test-DPoP-Payload.Test-DPoP-Signature";
+    const ACTOR_TOKEN: &str = "Test-Service-CWT";
+    const BODY: &str =
+        r#"{"signedRequestToken":"Test-SRT-Header.Test-SRT-Payload.Test-SRT-Signature"}"#;
 
     /// Mounts the proxy exactly as `main.rs` does for `KAS_PROXY_MODE=connect`.
     async fn spawn_connect_proxy(upstream: &str) -> String {
