@@ -523,3 +523,116 @@ mod header_tests {
         assert_eq!(headers.get(header::AUTHORIZATION).unwrap(), "Bearer x");
     }
 }
+
+/// Proof-of-possession headers on the Connect rewrap. An agent sends its CWT
+/// with a DPoP proof (RFC 9449) signed by the CWT's `cnf` key. The platform
+/// checks the proof's `htu` against the procedure path, which is identical on
+/// both sides of this proxy, and its `ath` against the bearer, so both headers
+/// must reach the platform byte-for-byte.
+#[cfg(test)]
+mod pop_header_tests {
+    use super::*;
+    use axum::{routing::post, Router};
+    use reqwest::Client;
+    use tokio::net::TcpListener;
+    use wiremock::{
+        matchers::{body_string, header, method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    const REWRAP: &str = "/kas.AccessService/Rewrap";
+    // Opaque stand-ins shaped like the real values; the proxy never parses them.
+    const AGENT_AUTHORIZATION: &str = "DPoP 0oRDoQEmoQRYIGFnZW50LWtpZA-opaque-agent-cwt";
+    const DPOP_PROOF: &str =
+        "eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVkRFNBIn0.eyJodHUiOiIva2FzLkFjY2Vzc1NlcnZpY2UvUmV3cmFwIn0.c2lnbmF0dXJl";
+    const ACTOR_TOKEN: &str = "0oRDoQEmoQRYIGFya3Mta2lk-opaque-service-cwt";
+    const BODY: &str = r#"{"signedRequestToken":"eyJhbGciOiJFZERTQSJ9.e30.c2lnbmF0dXJl"}"#;
+
+    /// Mounts the proxy exactly as `main.rs` does for `KAS_PROXY_MODE=connect`.
+    async fn spawn_connect_proxy(upstream: &str) -> String {
+        let state = PlatformProxyState::new(upstream).expect("valid upstream URL");
+        let app = Router::new().route(REWRAP, post(proxy)).with_state(state);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn connect_rewrap_forwards_dpop_and_authorization_unchanged() {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(REWRAP))
+            .and(header("authorization", AGENT_AUTHORIZATION))
+            .and(header("dpop", DPOP_PROOF))
+            .and(body_string(BODY))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(r#"{"responses":[]}"#, "application/json"),
+            )
+            .expect(1)
+            .mount(&upstream)
+            .await;
+
+        let base = spawn_connect_proxy(&upstream.uri()).await;
+        let resp = Client::new()
+            .post(format!("{base}{REWRAP}"))
+            .header("authorization", AGENT_AUTHORIZATION)
+            .header("DPoP", DPOP_PROOF)
+            .header("content-type", "application/json")
+            .header("connect-protocol-version", "1")
+            .body(BODY)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let received = upstream.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1);
+        let dpop: Vec<_> = received[0].headers.get_all("dpop").iter().collect();
+        assert_eq!(
+            dpop.len(),
+            1,
+            "exactly one DPoP header must reach the platform"
+        );
+        assert_eq!(dpop[0], DPOP_PROOF);
+    }
+
+    /// Today the proxy relays a client's `X-Actor-Token` untouched. arkavo-rs
+    /// #70 changes this on purpose: it strips the client value and injects
+    /// arks's own service CWT. When #70 lands it must replace this test with
+    /// its overwrite assertion, not delete it.
+    #[tokio::test]
+    async fn connect_rewrap_forwards_client_actor_token_unchanged() {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(REWRAP))
+            .and(header("authorization", AGENT_AUTHORIZATION))
+            .and(header("x-actor-token", ACTOR_TOKEN))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&upstream)
+            .await;
+
+        let base = spawn_connect_proxy(&upstream.uri()).await;
+        let resp = Client::new()
+            .post(format!("{base}{REWRAP}"))
+            .header("authorization", AGENT_AUTHORIZATION)
+            .header("X-Actor-Token", ACTOR_TOKEN)
+            .body(BODY)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let received = upstream.received_requests().await.unwrap();
+        let actor: Vec<_> = received[0]
+            .headers
+            .get_all("x-actor-token")
+            .iter()
+            .collect();
+        assert_eq!(actor.len(), 1);
+        assert_eq!(actor[0], ACTOR_TOKEN);
+    }
+}
