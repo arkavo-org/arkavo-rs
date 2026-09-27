@@ -30,6 +30,29 @@ Whenever the mode is anything other than `off`, `/.well-known/opentdf-configurat
 
 `/ws` (custom NanoTDF binary protocol) always stays local; `/media/v1/*` and `/c2pa/v1/*` are always local.
 
+## Proof of possession and actor headers (agent tokens)
+
+Agent tokens are authnz-rs agent CWTs (`arkavo_npe.type = agent`, contract `docs/agent-credentials-contract.md` v1 in authnz-rs). Each carries a `cnf` key. Two platform-side checks bear on these tokens but are **not deployed yet** — they land with opentdf-platform's own agent-credentials PR:
+
+- **P1 (DPoP, RFC 9449):** the platform will refuse an agent token's rewrap unless it comes with a DPoP proof signed by the token's `cnf` key.
+- **P2 (workload status; the KAS rule the authnz-rs contract marks informative):** the platform will call the workload status endpoint (`GET /agents/workloads/{id}/status`, configured by `server.auth.agent_status`) and deny the rewrap when that call fails or is non-200, on quarantine, a stale `generation`, a mismatched `current_did`/`workload`/`swarm`/`owner`, or a token that lacks `arkavo_swarm` (agents onboarded by trust QR before specialization).
+
+P1 and P2 are not enforced yet; this section documents what arks must preserve so agent rewraps work once they are. arks is already in that path on `/kas.AccessService/Rewrap`, forwarding whatever the client sends:
+
+| Header | What arks does | Why it matters |
+|--------|----------------|-----------------|
+| `Authorization` | forwarded byte-for-byte | carries the agent CWT; once P1 is enforced, the proof's `ath` is a hash of the token in it, so any rewrite breaks verification |
+| `DPoP` | forwarded byte-for-byte (it is not hop-by-hop) | carries the proof; any rewrite breaks its signature |
+| `X-Actor-Token` | forwarded as sent (see #70 below) | names the forwarder for the platform's `act` rule, once that rule is enforced |
+
+`src/modules/platform_proxy.rs` `pop_header_tests` pins the first two — they must reach the platform unchanged today, independent of whether P1 is enforced yet — and pins today's relay of the third.
+
+**Agents will use the Connect rewrap.** `htu` for agents is the bare Connect procedure `/kas.AccessService/Rewrap` (agents use Connect only), which is identical on both sides of this proxy, so once P1 is enforced a Connect DPoP proof will keep validating through arks. For REST `/kas/v2/rewrap`, the platform will build the expected `htu` from `Origin`, or else from `Host` plus whether its own connection is TLS. Behind arks that is `http://127.0.0.1:8181/kas/v2/rewrap`, never `https://platform.arkavo.net/kas/v2/rewrap`, so once P1 ships, a correct agent proof would fail there. REST DPoP through the proxy needs the platform to honour `X-Forwarded-Proto`/`X-Forwarded-Host` from a trusted proxy, which is tracked as a follow-up. Production runs `KAS_PROXY_MODE=connect`: REST rewrap is served by arks locally (see `docs/hostname-policy.md`), so this gap does not block production agent traffic.
+
+**Before arkavo-rs #70 deploys, set `AGENT_AUTHORIZED_ACTORS`.** #70 would make arks strip any client `X-Actor-Token` and send its own service CWT instead (`ARKS_SERVICE_CWT_PATH`). Once the platform enforces an actor-token rule for agent bearers, it will require the actor token's `sub` to appear in the bearer's `act[].sub`; for agent tokens `act` comes from authnz-rs `AGENT_AUTHORIZED_ACTORS`, so that list must contain arks's service id **exactly as the platform sees it**: the `sub` of arks's service CWT, which is `client:<client_id>` for a `client_credentials` token (authnz-rs `handle_client_credentials_grant`), never a URL. Add it on identity before deploying #70, or every agent rewrap through arks fails with 401 once that rule is live. Agent tokens minted before the change don't carry the new `act` entry, so they keep failing until they are refreshed (≤ 5 min for `short_lived` delegations, ≤ 15 min otherwise).
+
+That said, only agent tokens carry an `act` claim at all — a human app's bearer or a service-to-service catalog call has no `act` to satisfy an actor check. #70 as drafted overwrites `X-Actor-Token` on every proxied rewrap, agent or not, so it would make non-agent relayed tokens fail an actor-token rule they were never shaped to pass. #70 needs a narrower rule before it deploys.
+
 ## KAS URL identity caveat
 
 The platform validates that the `kas_url` claim in a rewrap request matches its
@@ -120,3 +143,4 @@ attribute values regardless.
 - No request-body rewriting (e.g. `kas_url` rewrite).
 - No request streaming — bodies are buffered up to 16 MiB before forwarding.
 - AuthZEN Resource Search (`GetEntitlements`) — phase 6.
+- No trusted-proxy forwarding headers to the platform — REST `/kas/v2/rewrap` cannot carry an agent DPoP proof through arks (see [Proof of possession and actor headers](#proof-of-possession-and-actor-headers-agent-tokens)).
