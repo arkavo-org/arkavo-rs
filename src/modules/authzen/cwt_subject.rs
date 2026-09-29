@@ -39,6 +39,9 @@ pub struct DecodedClaims {
     pub arkavo_entitlements: Option<Vec<String>>,
     pub client_id: Option<String>,
     pub arkavo_patreon: Option<Value>,
+    /// Any agent marker (arkavo_npe, arkavo_swarm, arkavo_state_version, or
+    /// the `agent` role). Presence alone counts, whatever the value.
+    pub agent_marker: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,6 +335,7 @@ mod tests {
             arkavo_entitlements: None,
             client_id: None,
             arkavo_patreon: None,
+            agent_marker: false,
         }
     }
 

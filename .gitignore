@@ -42,3 +42,8 @@ vendor/FairPlay*/
 # Exclude FairPlay SDK prebuilt binaries (must be installed separately)
 vendor/fpssdk/prebuilt/
 .DS_Store
+
+# Generated at test time by src/modules/license/fixtures/gen_fixtures.sh
+src/modules/license/fixtures/*.pem
+src/modules/license/fixtures/manifest_allowed.json
+src/modules/license/fixtures/binding_*.txt

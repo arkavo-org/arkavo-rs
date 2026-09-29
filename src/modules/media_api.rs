@@ -1,44 +1,28 @@
-/// Media-specific API endpoints for TDF3-based and FairPlay DRM
+/// Media-specific API endpoints for FairPlay DRM
 ///
-/// Provides dedicated endpoints optimized for streaming media key delivery,
+/// Provides dedicated endpoints for streaming media key delivery,
 /// session management, and rental window tracking.
-use crate::modules::crypto;
 use crate::modules::fairplay::MediaProtocol;
 use crate::modules::http_rewrap::RewrapState;
+use crate::modules::license::issuer::{IssueError, IssuedLicense};
+use crate::modules::license::person_token::Person;
+use crate::modules::license::LicenseError;
 use axum::{
     extract::{ConnectInfo, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
-#[cfg(feature = "fairplay")]
 use base64::Engine;
 use chrono::Utc;
 use log::{error, info, warn};
-use nanotdf::chain::{ChainValidationRequest, SessionValidator, ValidationError};
-use nanotdf::BinaryParser;
-use opentdf_kas::{
-    compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek, NanoTdfVersion,
-};
-use p256::{ecdh::EphemeralSecret, PublicKey as P256PublicKey, SecretKey};
-use rand_core::OsRng;
-#[cfg(feature = "fairplay")]
-use rsa::{Oaep, RsaPrivateKey};
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "fairplay")]
-use sha1::Sha1;
-#[cfg(feature = "fairplay")]
-use std::future::Future;
 use std::net::SocketAddr;
-#[cfg(feature = "fairplay")]
-use std::pin::Pin;
 use std::sync::Arc;
 use uuid::Uuid;
 
 // Constants for input validation
-#[cfg(feature = "fairplay")]
 const MAX_SPC_DATA_SIZE: usize = 64 * 1024; // 64KB max for SPC data
-const MAX_NANOTDF_HEADER_SIZE: usize = 16 * 1024; // 16KB max for NanoTDF header
 
 // Re-import session manager types
 use crate::media_metrics::{
@@ -51,40 +35,34 @@ pub struct MediaApiState {
     pub rewrap_state: Arc<RewrapState>,
     pub session_manager: Arc<SessionManager>,
     pub media_metrics: Arc<MediaMetrics>,
-    #[allow(dead_code)]
-    pub fairplay_handler: Option<Arc<crate::modules::fairplay::FairPlayHandler>>,
-    /// Chain validator for session validation (optional for backward compatibility)
-    pub chain_validator: Option<Arc<dyn SessionValidator>>,
     /// Pre-loaded FairPlay certificate (.bin) bytes for client certificate fetching.
     /// Loaded once at startup; serving from memory avoids per-request disk I/O.
     pub fairplay_certificate_data: Option<Arc<Vec<u8>>>,
+    /// Verifies the viewer's passkey CWT on every /media/v1 call except /certificate.
+    pub person_tokens: Arc<crate::modules::license::person_token::PersonTokenVerifier>,
+    /// None → FairPlay key requests fail closed with 503.
+    pub license: Option<Arc<crate::modules::license::config::LicenseAuthz>>,
+    /// None when the fairplay feature is off.
+    pub issuer: Option<Arc<dyn crate::modules::license::issuer::LicenseIssuer>>,
 }
 
 // ==================== Request/Response Types ====================
 
+/// Unknown JSON fields (the old `userId`, `tdfWrappedKey` and `chain*`
+/// fields) are ignored, so old clients still parse.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaKeyRequest {
     pub session_id: String,
-    pub user_id: String,
     pub asset_id: String,
     pub segment_index: Option<u32>,
-    // TDF3 fields
+    // TDF3 fields (detected only to refuse them)
     pub client_public_key: Option<String>, // PEM format (for TDF3)
     pub nanotdf_header: Option<String>,    // Base64-encoded (for TDF3)
     // FairPlay fields
     pub spc_data: Option<String>, // Base64-encoded (for FairPlay)
-    // Standard TDF fields (for FairPlay with OpenTDF key wrapping)
-    #[allow(dead_code)] // Only used with fairplay feature
-    pub tdf_manifest: Option<String>, // Base64-encoded manifest.json from Standard TDF
-    #[allow(dead_code)] // Only used with fairplay feature
-    pub tdf_wrapped_key: Option<String>, // Base64-encoded RSA-wrapped DEK (shortcut, bypasses manifest)
-    // Chain validation fields (optional for backward compatibility)
-    pub chain_session_id: Option<String>, // Chain session ID (hex-encoded)
-    pub chain_header_hash: Option<String>, // SHA256 of header bytes (hex-encoded, DPoP binding)
-    pub chain_signature: Option<String>,  // ECDSA signature (base64)
-    pub chain_nonce: Option<u64>,         // Replay prevention nonce
-    pub chain_algorithm: Option<String>,  // "ES256", "ES384", defaults to "ES256"
+    /// Base64-encoded manifest.json from Standard TDF (required for FairPlay)
+    pub tdf_manifest: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,7 +77,10 @@ pub struct MediaKeyResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionStartRequest {
-    pub user_id: String,
+    /// Ignored: the session is keyed by the verified token `sub`. Still
+    /// accepted so old clients parse.
+    #[serde(rename = "userId", default)]
+    pub _user_id: String,
     pub asset_id: String,
     pub protocol: Option<MediaProtocol>, // Auto-detected if not specified
     pub geo_region: Option<String>,
@@ -141,16 +122,26 @@ impl IntoResponse for ErrorResponse {
             "session_not_found" => StatusCode::NOT_FOUND,
             "concurrency_limit" => StatusCode::TOO_MANY_REQUESTS,
             "invalid_request" => StatusCode::BAD_REQUEST,
+            "forbidden" => StatusCode::FORBIDDEN,
+            "service_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (status, Json(self)).into_response()
     }
 }
 
+impl From<LicenseError> for ErrorResponse {
+    fn from(e: LicenseError) -> Self {
+        ErrorResponse {
+            error: e.error_code().to_string(),
+            message: e.reason().to_string(),
+        }
+    }
+}
+
 // ==================== Helper Functions ====================
 
 /// Detect protocol from request payload
-#[allow(dead_code)]
 fn detect_protocol(payload: &MediaKeyRequest) -> Option<MediaProtocol> {
     if payload.spc_data.is_some() {
         Some(MediaProtocol::FairPlay)
@@ -161,828 +152,181 @@ fn detect_protocol(payload: &MediaKeyRequest) -> Option<MediaProtocol> {
     }
 }
 
-/// Extract DEK from Standard TDF manifest.json for FairPlay integration
-///
-/// Parses the OpenTDF manifest.json format and extracts the RSA-wrapped DEK
-/// from the keyAccess[0].wrappedKey field, then decrypts it using RSA-OAEP.
-///
-/// # Arguments
-/// * `manifest_b64` - Base64-encoded manifest.json content
-/// * `rsa_private_key` - KAS RSA private key for unwrapping
-///
-/// # Returns
-/// Raw DEK bytes (typically 16 bytes for AES-128 or 32 bytes for AES-256)
-#[cfg(feature = "fairplay")]
-fn extract_dek_from_tdf_manifest(
-    manifest_b64: &str,
-    rsa_private_key: &RsaPrivateKey,
-) -> Result<Vec<u8>, String> {
-    use base64::engine::general_purpose::STANDARD;
-
-    // 1. Decode base64 manifest
-    let manifest_bytes = STANDARD
-        .decode(manifest_b64)
-        .map_err(|e| format!("Failed to decode manifest base64: {}", e))?;
-
-    // 2. Parse JSON
-    let manifest_str = std::str::from_utf8(&manifest_bytes)
-        .map_err(|e| format!("Invalid UTF-8 in manifest: {}", e))?;
-
-    let manifest: serde_json::Value = serde_json::from_str(manifest_str)
-        .map_err(|e| format!("Invalid JSON in manifest: {}", e))?;
-
-    // 3. Extract wrappedKey from encryptionInformation.keyAccess[0].wrappedKey
-    let wrapped_key_b64 = manifest
-        .get("encryptionInformation")
-        .and_then(|ei| ei.get("keyAccess"))
-        .and_then(|ka| ka.get(0))
-        .and_then(|kao| kao.get("wrappedKey"))
-        .and_then(|wk| wk.as_str())
-        .ok_or("Missing encryptionInformation.keyAccess[0].wrappedKey in manifest")?;
-
-    // 4. Unwrap using RSA-OAEP
-    extract_dek_from_wrapped_key(wrapped_key_b64, rsa_private_key)
-}
-
-/// Extract DEK directly from RSA-wrapped key (base64)
-///
-/// Decrypts an RSA-OAEP wrapped DEK using the KAS RSA private key.
-/// This is the direct path when the client provides just the wrapped key
-/// instead of the full TDF manifest.
-///
-/// # Arguments
-/// * `wrapped_key_b64` - Base64-encoded RSA-OAEP encrypted DEK
-/// * `rsa_private_key` - KAS RSA private key for unwrapping
-///
-/// # Returns
-/// Raw DEK bytes (typically 16 bytes for AES-128)
-#[cfg(feature = "fairplay")]
-fn extract_dek_from_wrapped_key(
-    wrapped_key_b64: &str,
-    rsa_private_key: &RsaPrivateKey,
-) -> Result<Vec<u8>, String> {
-    use base64::engine::general_purpose::STANDARD;
-
-    // 1. Decode base64
-    let wrapped_key_bytes = STANDARD
-        .decode(wrapped_key_b64)
-        .map_err(|e| format!("Failed to decode wrapped key base64: {}", e))?;
-
-    // 2. Validate size (RSA-2048 produces 256-byte ciphertext)
-    if wrapped_key_bytes.len() != 256 {
-        return Err(format!(
-            "Invalid RSA-wrapped key size: {} bytes (expected 256 for RSA-2048)",
-            wrapped_key_bytes.len()
-        ));
-    }
-
-    // 3. Decrypt using RSA-OAEP with SHA-1 (OpenTDF spec)
-    let padding = Oaep::new::<Sha1>();
-    let dek = rsa_private_key
-        .decrypt(padding, &wrapped_key_bytes)
-        .map_err(|e| format!("RSA-OAEP decryption failed: {}", e))?;
-
-    // 4. Validate DEK size (should be 16 bytes for AES-128 or 32 for AES-256)
-    if dek.len() != 16 && dek.len() != 32 {
-        return Err(format!(
-            "Unexpected DEK size: {} bytes (expected 16 or 32)",
-            dek.len()
-        ));
-    }
-
-    Ok(dek)
-}
-
-/// Validate session exists and user_id matches
-async fn validate_session(
+/// Authorize and issue a FairPlay license: TDF manifest check, platform
+/// decision for the person, then a leased CKC for the policy's key.
+pub async fn authorize_license(
     state: &MediaApiState,
+    person: &Person,
     payload: &MediaKeyRequest,
-    timer: &RequestTimer,
-) -> Result<PlaybackSession, ErrorResponse> {
-    // Verify session exists and update heartbeat
-    let session = match state
-        .session_manager
-        .heartbeat(&payload.session_id, None, payload.segment_index)
-        .await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            error!("Session not found: {}", e);
-            log_key_request_error(
-                state,
-                payload,
-                KeyRequestResult::InvalidRequest,
-                timer.elapsed_ms(),
-            )
-            .await;
-
-            return Err(ErrorResponse {
-                error: "session_not_found".to_string(),
-                message: format!("Session {} not found or expired", payload.session_id),
-            });
-        }
-    };
-
-    // Validate user_id matches session
-    if session.user_id != payload.user_id {
-        error!("User ID mismatch for session {}", payload.session_id);
-        log_key_request_error(
-            state,
-            payload,
-            KeyRequestResult::AuthenticationFailed,
-            timer.elapsed_ms(),
-        )
-        .await;
-
-        return Err(ErrorResponse {
-            error: "authentication_failed".to_string(),
-            message: "User ID does not match session".to_string(),
-        });
-    }
-
-    Ok(session)
-}
-
-/// Log key request error event
-async fn log_key_request_error(
-    state: &MediaApiState,
-    payload: &MediaKeyRequest,
-    result: KeyRequestResult,
-    latency_ms: u64,
-) {
-    let event = MediaEvent::KeyRequest {
-        session_id: payload.session_id.clone(),
-        user_id: payload.user_id.clone(),
-        asset_id: payload.asset_id.clone(),
-        segment_index: payload.segment_index,
-        result,
-        latency_ms,
-        timestamp: Utc::now().timestamp(),
-    };
-    state.media_metrics.publish_event(event.clone()).await;
-    state.media_metrics.log_event(&event);
-}
-
-/// Validate session on chain (if chain validation is configured)
-async fn validate_chain_session(
-    state: &MediaApiState,
-    payload: &MediaKeyRequest,
-) -> Result<(), ErrorResponse> {
-    let validator = match state.chain_validator.as_ref() {
-        Some(v) => v,
-        None => return Ok(()), // Chain validation not configured
-    };
-
-    // Chain validation is required when validator is configured
-    let session_id = payload.chain_session_id.as_ref().ok_or_else(|| {
-        warn!("Chain validation enabled but no chain_session_id provided");
-        ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: "chain_session_id is required".to_string(),
-        }
-    })?;
-
-    let signature = payload.chain_signature.as_ref().ok_or_else(|| {
-        warn!("Chain validation enabled but no chain_signature provided");
-        ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: "chain_signature is required".to_string(),
-        }
-    })?;
-
-    let nonce = payload.chain_nonce.ok_or_else(|| {
-        warn!("Chain validation enabled but no chain_nonce provided");
-        ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: "chain_nonce is required".to_string(),
-        }
-    })?;
-
-    // DPoP Header Binding: require header_hash
-    let client_header_hash_hex = payload.chain_header_hash.as_ref().ok_or_else(|| {
-        warn!("Chain validation enabled but no chain_header_hash provided");
-        ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: "chain_header_hash is required for DPoP binding".to_string(),
-        }
-    })?;
-
-    // Decode client-provided header_hash
-    let client_header_hash_bytes =
-        hex::decode(client_header_hash_hex).map_err(|e| ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: format!("Invalid chain_header_hash hex encoding: {}", e),
-        })?;
-
-    if client_header_hash_bytes.len() != 32 {
-        return Err(ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: format!(
-                "chain_header_hash must be 32 bytes, got {}",
-                client_header_hash_bytes.len()
-            ),
-        });
-    }
-
-    // Get the actual header bytes from the nanotdf_header field
-    let header_bytes = payload
-        .nanotdf_header
+    rid: &str,
+) -> Result<IssuedLicense, LicenseError> {
+    let license = state
+        .license
         .as_ref()
-        .ok_or_else(|| ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: "nanotdf_header is required for chain validation".to_string(),
+        .ok_or(LicenseError::Unavailable("licensing not configured"))?;
+    let issuer = state
+        .issuer
+        .as_ref()
+        .ok_or(LicenseError::Unavailable("FairPlay not available"))?;
+    let rsa = state
+        .rewrap_state
+        .kas_rsa_private_key
+        .as_ref()
+        .ok_or(LicenseError::Unavailable("KAS RSA key not configured"))?;
+    let manifest_b64 = payload
+        .tdf_manifest
+        .as_deref()
+        .ok_or(LicenseError::BadRequest("tdfManifest is required"))?;
+    let manifest = base64::engine::general_purpose::STANDARD
+        .decode(manifest_b64)
+        .map_err(|_| LicenseError::BadRequest("tdfManifest is not base64"))?;
+    let spc_b64 = payload
+        .spc_data
+        .as_deref()
+        .ok_or(LicenseError::BadRequest("spcData is required"))?;
+    if spc_b64.len() > MAX_SPC_DATA_SIZE * 4 / 3 {
+        return Err(LicenseError::BadRequest("spcData too large"));
+    }
+    let spc = base64::engine::general_purpose::STANDARD
+        .decode(spc_b64)
+        .map_err(|_| LicenseError::BadRequest("spcData is not base64"))?;
+
+    // Every manifest refusal reaches the client as one generic reason, so the
+    // endpoint is not an oracle for which check failed. The specific reason
+    // (a static string, never key material) is logged here.
+    let policy =
+        crate::modules::license::tdf_policy::check_manifest(&manifest, rsa, &license.kas_urls)
+            .map_err(|e| {
+                warn!("license {rid}: manifest refused: {}", e.reason());
+                match e {
+                    LicenseError::Forbidden(_) => LicenseError::Forbidden("manifest refused"),
+                    other => other,
+                }
+            })?;
+    // Same for the platform: an explicit deny and a bad-input refusal (e.g. an
+    // unknown attribute) look identical to the client; 503s pass through.
+    license
+        .pdp
+        .decide(&person.token, &policy.policy_uuid, &policy.fqns, rid)
+        .await
+        .map_err(|e| {
+            warn!("license {rid}: platform decision refused: {}", e.reason());
+            match e {
+                LicenseError::Forbidden(_) => LicenseError::Forbidden("platform refused"),
+                other => other,
+            }
         })?;
 
-    let header_bytes = crypto::base64_decode(header_bytes).map_err(|e| ErrorResponse {
-        error: "invalid_request".to_string(),
-        message: format!("Invalid nanotdf_header base64 encoding: {}", e),
-    })?;
-
-    // Compute server-side header hash
-    let server_header_hash: [u8; 32] = {
-        use sha2::{Digest, Sha256};
-        Sha256::digest(&header_bytes).into()
-    };
-
-    // DPoP binding check: verify client's header_hash matches
-    let client_header_hash: [u8; 32] = client_header_hash_bytes.try_into().unwrap();
-    if client_header_hash != server_header_hash {
-        warn!(
-            "Header hash mismatch: client={} server={}",
-            hex::encode(client_header_hash),
-            hex::encode(server_header_hash)
-        );
-        return Err(ErrorResponse {
-            error: "authentication_failed".to_string(),
-            message: "chain_header_hash does not match actual header content".to_string(),
-        });
+    let mut key = [0u8; 16];
+    key.copy_from_slice(&policy.dek[..16]);
+    let issued = issuer
+        .issue(spc, key, &policy.policy_uuid, license.lease_secs)
+        .await
+        .map_err(|e| match e {
+            IssueError::MalformedSpc(detail) => {
+                warn!("license {rid}: FairPlay SDK refused a malformed SPC: {detail}");
+                LicenseError::BadRequest("spcData is malformed")
+            }
+            IssueError::Sdk(detail) => {
+                error!("license {rid}: FairPlay SDK failed: {detail}");
+                LicenseError::Unavailable("FairPlay license service unavailable")
+            }
+        })?;
+    if issued.spc_asset_id.as_deref() != Some(policy.policy_uuid.as_str()) {
+        warn!("license {rid}: SPC asset id does not match the policy uuid");
     }
+    Ok(issued)
+}
 
-    // Decode signature from base64
-    let signature_bytes = crypto::base64_decode(signature).map_err(|e| ErrorResponse {
-        error: "invalid_request".to_string(),
-        message: format!("Invalid chain_signature encoding: {}", e),
-    })?;
-
-    // Build validation request with verified header_hash
-    let validation_request = ChainValidationRequest {
-        session_id: session_id.clone(),
-        header_hash: server_header_hash, // Use server-computed (verified) hash
-        resource_id: hex::encode(server_header_hash), // Keep for logging
-        signature: signature_bytes,
-        algorithm: payload
-            .chain_algorithm
-            .clone()
-            .unwrap_or_else(|| "ES256".to_string()),
-        nonce,
-    };
-
-    // Validate session on chain
-    match validator.validate(&validation_request).await {
-        Ok(validated) => {
-            info!(
-                "Chain validation passed for session {}, scope {}",
-                hex::encode(validated.grant.session_id),
-                hex::encode(validated.grant.scope_id)
-            );
-            Ok(())
-        }
-        Err(e) => {
-            warn!("Chain validation failed: {:?}", e);
-            Err(match e {
-                ValidationError::SessionNotFound { session_id } => ErrorResponse {
-                    error: "policy_denied".to_string(),
-                    message: format!("Session not found: {}", session_id),
-                },
-                ValidationError::SessionExpired {
-                    expired_at,
-                    current,
-                } => ErrorResponse {
-                    error: "policy_denied".to_string(),
-                    message: format!(
-                        "Session expired at block {} (current: {})",
-                        expired_at, current
-                    ),
-                },
-                ValidationError::SessionRevoked => ErrorResponse {
-                    error: "policy_denied".to_string(),
-                    message: "Session has been revoked".to_string(),
-                },
-                ValidationError::SignatureInvalid { reason } => ErrorResponse {
-                    error: "authentication_failed".to_string(),
-                    message: format!("Invalid proof-of-possession signature: {}", reason),
-                },
-                ValidationError::NonceReplay => ErrorResponse {
-                    error: "authentication_failed".to_string(),
-                    message: "Nonce already used (replay attack detected)".to_string(),
-                },
-                ValidationError::ScopeMismatch { resource_id } => ErrorResponse {
-                    error: "policy_denied".to_string(),
-                    message: format!("Resource {} not in session scope", resource_id),
-                },
-                ValidationError::HeaderHashMismatch { client, server } => ErrorResponse {
-                    error: "authentication_failed".to_string(),
-                    message: format!("Header hash mismatch: client={}, server={}", client, server),
-                },
-                ValidationError::Chain(chain_err) => ErrorResponse {
-                    error: "internal_error".to_string(),
-                    message: format!("Chain query failed: {}", chain_err),
-                },
-                ValidationError::Crypto(err) => ErrorResponse {
-                    error: "internal_error".to_string(),
-                    message: format!("Crypto error: {}", err),
-                },
-            })
-        }
+async fn require_owned_session(
+    state: &MediaApiState,
+    session_id: &str,
+    person: &Person,
+) -> Result<PlaybackSession, LicenseError> {
+    match state.session_manager.get_session(session_id).await {
+        Ok(Some(s)) if s.user_id == person.sub => Ok(s),
+        Ok(_) => Err(LicenseError::Forbidden(
+            "session not found for this subject",
+        )),
+        Err(_) => Err(LicenseError::Unavailable("session store unavailable")),
     }
 }
 
 // ==================== API Handlers ====================
 
 /// POST /media/v1/key-request
-/// Fast path for media segment key delivery (supports both TDF3 and FairPlay)
-#[cfg(feature = "fairplay")]
-pub fn media_key_request(
-    State(state): State<Arc<MediaApiState>>,
-    Json(payload): Json<MediaKeyRequest>,
-) -> Pin<Box<dyn Future<Output = Result<Json<MediaKeyResponse>, ErrorResponse>> + Send>> {
-    Box::pin(async move {
-        let timer = RequestTimer::start();
-
-        // Auto-detect protocol from request fields
-        let protocol = detect_protocol(&payload).ok_or_else(|| ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: "Could not detect protocol: provide either (nanotdf_header + client_public_key) for TDF3, or spc_data for FairPlay".to_string(),
-        })?;
-
-        info!(
-            "Media key request [{}]: session={} asset={} segment={:?}",
-            protocol, payload.session_id, payload.asset_id, payload.segment_index
-        );
-
-        // Route to protocol-specific handler
-        match protocol {
-            MediaProtocol::TDF3 => handle_tdf3_key_request(state, payload, timer).await,
-            MediaProtocol::FairPlay => {
-                handle_fairplay_key_request_router(state, payload, timer).await
-            }
-        }
-    })
-}
-
-/// POST /media/v1/key-request (without fairplay feature)
-/// Only supports TDF3 protocol
-#[cfg(not(feature = "fairplay"))]
+/// FairPlay license delivery: person token → owned session → TDF policy →
+/// platform decision → leased CKC. TDF3 media keys are refused.
 pub async fn media_key_request(
     State(state): State<Arc<MediaApiState>>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<MediaKeyRequest>,
 ) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
     let timer = RequestTimer::start();
-
-    // Only TDF3 supported
-    if payload.nanotdf_header.is_none() || payload.client_public_key.is_none() {
-        return Err(ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: "TDF3 requires nanotdf_header and client_public_key".to_string(),
-        });
-    }
-
-    if payload.spc_data.is_some() {
-        return Err(ErrorResponse {
-            error: "not_implemented".to_string(),
-            message: "FairPlay support not compiled in (use --features fairplay)".to_string(),
-        });
-    }
-
-    info!(
-        "Media key request [tdf3]: session={} asset={} segment={:?}",
-        payload.session_id, payload.asset_id, payload.segment_index
-    );
-
-    handle_tdf3_key_request(state, payload, timer).await
-}
-
-/// Router for FairPlay requests (handles feature flag)
-#[cfg(feature = "fairplay")]
-#[allow(dead_code)]
-async fn handle_fairplay_key_request_router(
-    state: Arc<MediaApiState>,
-    payload: MediaKeyRequest,
-    timer: RequestTimer,
-) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
-    handle_fairplay_key_request(state, payload, timer).await
-}
-
-#[cfg(not(feature = "fairplay"))]
-#[allow(dead_code)]
-async fn handle_fairplay_key_request_router(
-    _state: Arc<MediaApiState>,
-    _payload: MediaKeyRequest,
-    _timer: RequestTimer,
-) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
-    Err(ErrorResponse {
-        error: "not_implemented".to_string(),
-        message: "FairPlay support not compiled in (use --features fairplay)".to_string(),
-    })
-}
-
-/// Handle TDF3 key request
-async fn handle_tdf3_key_request(
-    state: Arc<MediaApiState>,
-    payload: MediaKeyRequest,
-    timer: RequestTimer,
-) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
-    // 1. Validate session and user
-    let _session = validate_session(&state, &payload, &timer).await?;
-
-    // 2. Chain-driven session validation (if configured)
-    validate_chain_session(&state, &payload).await?;
-
-    // 3. Validate NanoTDF header size
-    let nanotdf_header = payload
-        .nanotdf_header
-        .as_ref()
-        .ok_or_else(|| ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: "Missing nanotdf_header for TDF3".to_string(),
-        })?;
-
-    // Check header size before base64 decoding to prevent DoS
-    if nanotdf_header.len() > MAX_NANOTDF_HEADER_SIZE * 4 / 3 {
-        // Base64 encoding is ~4/3 the size of raw data
-        return Err(ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: format!(
-                "NanoTDF header too large: {} bytes (max {} bytes encoded)",
-                nanotdf_header.len(),
-                MAX_NANOTDF_HEADER_SIZE * 4 / 3
-            ),
-        });
-    }
-
-    // 4. Parse client public key (unwrap safe: detect_protocol verified it exists)
-    let client_public_key_pem =
-        payload
-            .client_public_key
-            .as_ref()
-            .ok_or_else(|| ErrorResponse {
-                error: "invalid_request".to_string(),
-                message: "Missing client_public_key for TDF3".to_string(),
-            })?;
-    let client_public_key =
-        parse_pem_public_key(client_public_key_pem).map_err(|e| ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: format!("Invalid client public key: {}", e),
-        })?;
-
-    // 4. Generate ephemeral session key pair
-    let session_private_key = EphemeralSecret::random(&mut OsRng);
-    let session_public_key = P256PublicKey::from(&session_private_key);
-    let session_public_key_pem =
-        public_key_to_pem(&session_public_key).map_err(|e| ErrorResponse {
-            error: "internal_error".to_string(),
-            message: format!("Failed to generate session key: {}", e),
-        })?;
-
-    // 5. Perform ECDH with client
-    let session_shared_secret = session_private_key.diffie_hellman(&client_public_key);
-    let session_shared_secret_bytes = session_shared_secret.raw_secret_bytes();
-
-    // 6. Process NanoTDF header to rewrap DEK
-    let wrapped_key = process_nanotdf_header(
-        nanotdf_header,
-        &state.rewrap_state.kas_ec_private_key,
-        session_shared_secret_bytes.as_ref(),
-    )
-    .map_err(|e| {
-        error!("Failed to process NanoTDF header: {}", e);
-        ErrorResponse {
-            error: "internal_error".to_string(),
-            message: format!("Key processing failed: {}", e),
+    let rid = Uuid::new_v4().to_string();
+    let person = state
+        .person_tokens
+        .verify(&headers, Utc::now().timestamp())
+        .await?;
+    match detect_protocol(&payload) {
+        Some(MediaProtocol::FairPlay) => {}
+        Some(MediaProtocol::TDF3) => {
+            return Err(LicenseError::Forbidden(
+                "TDF3 media keys are disabled pending policy enforcement",
+            )
+            .into())
         }
-    })?;
-
-    let latency = timer.elapsed_ms();
-
-    // 7. Record metrics
-    state
-        .media_metrics
-        .record_key_request_latency(latency)
-        .await;
-    let event = MediaEvent::KeyRequest {
-        session_id: payload.session_id.clone(),
-        user_id: payload.user_id.clone(),
-        asset_id: payload.asset_id.clone(),
-        segment_index: payload.segment_index,
-        result: KeyRequestResult::Success,
-        latency_ms: latency,
-        timestamp: Utc::now().timestamp(),
-    };
-    state.media_metrics.publish_event(event.clone()).await;
-    state.media_metrics.log_event(&event);
-
-    Ok(Json(MediaKeyResponse {
-        session_public_key: session_public_key_pem,
-        wrapped_key,
-        status: "success".to_string(),
-        metadata: Some(serde_json::json!({
-            "latency_ms": latency,
-            "segment_index": payload.segment_index,
-        })),
-    }))
-}
-
-/// Handle FairPlay key request
-#[cfg(feature = "fairplay")]
-async fn handle_fairplay_key_request(
-    state: Arc<MediaApiState>,
-    payload: MediaKeyRequest,
-    timer: RequestTimer,
-) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
-    // 1. Validate session and user
-    let session = validate_session(&state, &payload, &timer).await?;
-
-    // 2. Chain-driven session validation (if configured)
-    validate_chain_session(&state, &payload).await?;
-
-    // 3. Validate protocol matches session
+        None => return Err(LicenseError::BadRequest("spcData is required").into()),
+    }
+    let session = require_owned_session(&state, &payload.session_id, &person).await?;
     if session.protocol != MediaProtocol::FairPlay {
-        error!(
-            "Protocol mismatch for session {}: expected FairPlay, got {:?}",
-            payload.session_id, session.protocol
-        );
-        return Err(ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: "Session was created with different protocol".to_string(),
-        });
+        return Err(LicenseError::BadRequest("session protocol is not fairplay").into());
     }
-
-    // 4. Extract and validate SPC data
-    let spc_data_base64 = payload.spc_data.as_ref().ok_or_else(|| ErrorResponse {
-        error: "invalid_request".to_string(),
-        message: "Missing spc_data for FairPlay".to_string(),
-    })?;
-
-    // Check SPC size before base64 decoding to prevent DoS
-    if spc_data_base64.len() > MAX_SPC_DATA_SIZE * 4 / 3 {
-        // Base64 encoding is ~4/3 the size of raw data
-        return Err(ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: format!(
-                "SPC data too large: {} bytes (max {} bytes encoded)",
-                spc_data_base64.len(),
-                MAX_SPC_DATA_SIZE * 4 / 3
-            ),
-        });
-    }
-
-    let spc_data = base64::engine::general_purpose::STANDARD
-        .decode(spc_data_base64)
-        .map_err(|e| {
-            error!("Failed to decode SPC data: {}", e);
-            ErrorResponse {
-                error: "invalid_request".to_string(),
-                message: format!("Invalid base64 SPC data: {}", e),
-            }
-        })?;
-
-    // Additional validation: Check decoded size
-    if spc_data.len() > MAX_SPC_DATA_SIZE {
-        return Err(ErrorResponse {
-            error: "invalid_request".to_string(),
-            message: format!(
-                "Decoded SPC data too large: {} bytes (max {} bytes)",
-                spc_data.len(),
-                MAX_SPC_DATA_SIZE
-            ),
-        });
-    }
-
-    info!(
-        "Processing FairPlay SPC for session {} (SPC size: {} bytes)",
-        payload.session_id,
-        spc_data.len()
-    );
-
-    // 5. Extract content key (DEK) from Standard TDF manifest or wrapped key
-    //
-    // OpenTDF Standard TDF Integration:
-    // - Client provides either tdf_manifest (full manifest.json) or tdf_wrapped_key (just the RSA-wrapped DEK)
-    // - Server extracts and decrypts DEK using KAS RSA private key
-    // - DEK is then used with FairPlay SDK to generate CKC
-    //
-    // See: docs/standard_tdf_fairplay_integration.md for full architecture
-    let content_key: Vec<u8> = if let Some(ref tdf_manifest) = payload.tdf_manifest {
-        // Standard TDF manifest path - extract DEK from manifest.json
-        let rsa_key = state
-            .rewrap_state
-            .kas_rsa_private_key
-            .as_ref()
-            .ok_or_else(|| ErrorResponse {
-                error: "configuration_error".to_string(),
-                message: "RSA key not configured. Set KAS_RSA_KEY_PATH for Standard TDF support."
-                    .to_string(),
-            })?;
-
-        match extract_dek_from_tdf_manifest(tdf_manifest, rsa_key) {
-            Ok(dek) => {
-                info!(
-                    "Extracted DEK from TDF manifest for FairPlay session {} asset {} (DEK size: {} bytes)",
-                    payload.session_id, payload.asset_id, dek.len()
-                );
-                dek
-            }
-            Err(e) => {
-                error!(
-                    "Failed to extract DEK from TDF manifest for asset {}: {}",
-                    payload.asset_id, e
-                );
-                log_key_request_error(
-                    &state,
-                    &payload,
-                    KeyRequestResult::PolicyDenied,
-                    timer.elapsed_ms(),
-                )
-                .await;
-                return Err(ErrorResponse {
-                    error: "invalid_request".to_string(),
-                    message: format!("Failed to extract content key from TDF manifest: {}", e),
-                });
-            }
-        }
-    } else if let Some(ref tdf_wrapped_key) = payload.tdf_wrapped_key {
-        // Direct wrapped key path - RSA-decrypt the provided key
-        let rsa_key = state
-            .rewrap_state
-            .kas_rsa_private_key
-            .as_ref()
-            .ok_or_else(|| ErrorResponse {
-                error: "configuration_error".to_string(),
-                message: "RSA key not configured. Set KAS_RSA_KEY_PATH for Standard TDF support."
-                    .to_string(),
-            })?;
-
-        match extract_dek_from_wrapped_key(tdf_wrapped_key, rsa_key) {
-            Ok(dek) => {
-                info!(
-                    "Extracted DEK from wrapped key for FairPlay session {} asset {} (DEK size: {} bytes)",
-                    payload.session_id, payload.asset_id, dek.len()
-                );
-                dek
-            }
-            Err(e) => {
-                error!(
-                    "Failed to extract DEK from wrapped key for asset {}: {}",
-                    payload.asset_id, e
-                );
-                log_key_request_error(
-                    &state,
-                    &payload,
-                    KeyRequestResult::PolicyDenied,
-                    timer.elapsed_ms(),
-                )
-                .await;
-                return Err(ErrorResponse {
-                    error: "invalid_request".to_string(),
-                    message: format!("Failed to decrypt wrapped content key: {}", e),
-                });
-            }
-        }
-    } else {
-        // No TDF manifest or wrapped key provided
-        #[cfg(not(debug_assertions))]
-        {
-            error!(
-                "FairPlay request missing tdf_manifest or tdf_wrapped_key for asset {}. \
-                 Production requires Standard TDF key wrapping.",
-                payload.asset_id
-            );
-            log_key_request_error(
-                &state,
-                &payload,
-                KeyRequestResult::InvalidRequest,
-                timer.elapsed_ms(),
-            )
-            .await;
-            return Err(ErrorResponse {
-                error: "invalid_request".to_string(),
-                message: "FairPlay requests require tdf_manifest or tdf_wrapped_key containing \
-                          RSA-wrapped content key. See docs/standard_tdf_fairplay_integration.md"
-                    .to_string(),
-            });
-        }
-
-        #[cfg(debug_assertions)]
-        {
-            log::warn!(
-                "⚠️  No TDF manifest/wrapped key for asset {} - using INSECURE fallback (dev only)!",
-                payload.asset_id
-            );
-            vec![0x00u8; 16]
-        }
-    };
-
-    // Validate content key size (FairPlay requires 16 bytes for AES-128)
-    if content_key.len() != 16 {
-        // If we got a 32-byte key (AES-256), truncate to 16 bytes for FairPlay
-        // This is safe because FairPlay only uses AES-128-CBC
-        if content_key.len() == 32 {
-            info!(
-                "Truncating 32-byte DEK to 16 bytes for FairPlay AES-128 (asset {})",
-                payload.asset_id
-            );
-        } else {
-            error!(
-                "Invalid DEK size for FairPlay: {} bytes (expected 16 or 32) for asset {}",
-                content_key.len(),
-                payload.asset_id
-            );
-            return Err(ErrorResponse {
-                error: "internal_error".to_string(),
-                message: format!(
-                    "Invalid content key size: {} bytes (expected 16)",
-                    content_key.len()
-                ),
-            });
-        }
-    }
-
-    // Use first 16 bytes for FairPlay (AES-128)
-    let content_key_16: Vec<u8> = content_key.into_iter().take(16).collect();
-
-    // 6. Process SPC using FairPlay SDK
-    let fairplay_handler = state
-        .fairplay_handler
-        .as_ref()
-        .ok_or_else(|| ErrorResponse {
-            error: "internal_error".to_string(),
-            message: "FairPlay handler not initialized".to_string(),
-        })?;
-
-    // Convert error to String immediately to avoid !Send issues with Box<dyn Error>
-    let ckc_data_result: Result<Vec<u8>, String> = match fairplay_handler
-        .process_key_request(
-            payload.asset_id.clone(),
-            payload.asset_id.clone(), // content_id = asset_id for simplicity
-            spc_data,
-            content_key_16,
-        )
+    // A key request (including AVFoundation lease renewal) keeps the session
+    // alive, as the old validate_session did; phase 2 adds explicit heartbeats.
+    state
+        .session_manager
+        .heartbeat(&payload.session_id, None, payload.segment_index)
         .await
-    {
-        Ok(data) => Ok(data),
-        Err(e) => Err(e.to_string()),
+        .map_err(|e| match e {
+            crate::session_manager::SessionManagerError::SessionNotFound => {
+                LicenseError::Forbidden("session not found for this subject")
+            }
+            _ => LicenseError::Unavailable("session store unavailable"),
+        })?;
+    let result = authorize_license(&state, &person, &payload, &rid).await;
+    let outcome = match &result {
+        Ok(_) => KeyRequestResult::Success,
+        Err(LicenseError::Forbidden(_)) => KeyRequestResult::PolicyDenied,
+        Err(LicenseError::Unauthenticated(_)) => KeyRequestResult::AuthenticationFailed,
+        Err(_) => KeyRequestResult::InvalidRequest,
     };
-
-    let ckc_data = match ckc_data_result {
-        Ok(data) => data,
-        Err(error_message) => {
-            error!("FairPlay SDK error: {}", error_message);
-            log_key_request_error(
-                &state,
-                &payload,
-                KeyRequestResult::PolicyDenied,
-                timer.elapsed_ms(),
-            )
-            .await;
-
-            return Err(ErrorResponse {
-                error: "internal_error".to_string(),
-                message: format!("FairPlay key processing failed: {}", error_message),
-            });
-        }
-    };
-
-    let latency = timer.elapsed_ms();
-    info!(
-        "FairPlay CKC generated for session {} (CKC size: {} bytes, latency: {}ms)",
-        payload.session_id,
-        ckc_data.len(),
-        latency
-    );
-
-    // 7. Log successful key request
+    if let Err(e) = &result {
+        info!(
+            "license {rid}: refused {} ({})",
+            e.status().as_u16(),
+            e.reason()
+        );
+    }
     let event = MediaEvent::KeyRequest {
         session_id: payload.session_id.clone(),
-        user_id: payload.user_id.clone(),
+        user_id: person.sub.clone(),
         asset_id: payload.asset_id.clone(),
         segment_index: payload.segment_index,
-        result: KeyRequestResult::Success,
-        latency_ms: latency,
+        result: outcome,
+        latency_ms: timer.elapsed_ms(),
         timestamp: Utc::now().timestamp(),
     };
     state.media_metrics.publish_event(event.clone()).await;
     state.media_metrics.log_event(&event);
-
-    // 8. Return CKC to client
+    let issued = result?;
     Ok(Json(MediaKeyResponse {
-        session_public_key: String::new(), // Not used in FairPlay
-        wrapped_key: base64::engine::general_purpose::STANDARD.encode(&ckc_data),
+        session_public_key: String::new(),
+        wrapped_key: base64::engine::general_purpose::STANDARD.encode(&issued.ckc),
         status: "success".to_string(),
         metadata: Some(serde_json::json!({
-            "latency_ms": latency,
-            "segment_index": payload.segment_index,
             "protocol": "fairplay",
-            "ckc_size": ckc_data.len(),
+            "lease_seconds": state.license.as_ref().map(|l| l.lease_secs),
         })),
     }))
 }
@@ -1018,24 +362,24 @@ pub async fn fairplay_certificate(
 pub async fn session_start(
     State(state): State<Arc<MediaApiState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<SessionStartRequest>,
 ) -> Result<Json<SessionStartResponse>, ErrorResponse> {
+    let person = state
+        .person_tokens
+        .verify(&headers, Utc::now().timestamp())
+        .await?;
     // Extract real client IP from connection (not from untrusted payload)
     let client_ip = addr.ip().to_string();
     // Generate cryptographically secure session ID with UUID v4
-    let session_id = format!(
-        "{}:{}:{}",
-        payload.user_id,
-        payload.asset_id,
-        Uuid::new_v4()
-    );
+    let session_id = format!("{}:{}:{}", person.sub, payload.asset_id, Uuid::new_v4());
 
     // Default to TDF3 for backwards compatibility if protocol not specified
     let protocol = payload.protocol.unwrap_or(MediaProtocol::TDF3);
 
     let session = PlaybackSession {
         session_id: session_id.clone(),
-        user_id: payload.user_id.clone(),
+        user_id: person.sub.clone(),
         asset_id: payload.asset_id.clone(),
         protocol,
         segment_index: None,
@@ -1054,7 +398,7 @@ pub async fn session_start(
             // Publish session start event
             let event = MediaEvent::SessionStart {
                 session_id: session_id.clone(),
-                user_id: payload.user_id.clone(),
+                user_id: person.sub.clone(),
                 asset_id: payload.asset_id.clone(),
                 client_ip: client_ip.clone(),
                 geo_region: payload.geo_region.clone(),
@@ -1079,7 +423,7 @@ pub async fn session_start(
             } = e
             {
                 let event = MediaEvent::ConcurrencyLimit {
-                    user_id: payload.user_id.clone(),
+                    user_id: person.sub.clone(),
                     current_streams: current,
                     max_streams: max,
                     timestamp: Utc::now().timestamp(),
@@ -1096,10 +440,7 @@ pub async fn session_start(
                 });
             }
 
-            Err(ErrorResponse {
-                error: "internal_error".to_string(),
-                message: format!("Failed to create session: {}", e),
-            })
+            Err(LicenseError::Unavailable("session store unavailable").into())
         }
     }
 }
@@ -1109,8 +450,14 @@ pub async fn session_start(
 pub async fn session_heartbeat(
     State(state): State<Arc<MediaApiState>>,
     Path(session_id): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<SessionHeartbeatRequest>,
 ) -> Result<Json<SessionHeartbeatResponse>, ErrorResponse> {
+    let person = state
+        .person_tokens
+        .verify(&headers, Utc::now().timestamp())
+        .await?;
+    require_owned_session(&state, &session_id, &person).await?;
     // Parse state string
     let session_state = payload.state.as_ref().and_then(|s| match s.as_str() {
         "playing" => Some(SessionState::Playing),
@@ -1128,12 +475,14 @@ pub async fn session_heartbeat(
             status: "ok".to_string(),
             last_heartbeat: session.last_heartbeat_timestamp,
         })),
+        // The session was owned a moment ago; it can still expire in between.
+        Err(crate::session_manager::SessionManagerError::SessionNotFound) => Err(ErrorResponse {
+            error: "session_not_found".to_string(),
+            message: "session not found".to_string(),
+        }),
         Err(e) => {
             error!("Heartbeat failed for session {}: {}", session_id, e);
-            Err(ErrorResponse {
-                error: "session_not_found".to_string(),
-                message: format!("Session not found: {}", e),
-            })
+            Err(LicenseError::Unavailable("session store unavailable").into())
         }
     }
 }
@@ -1143,7 +492,13 @@ pub async fn session_heartbeat(
 pub async fn session_terminate(
     State(state): State<Arc<MediaApiState>>,
     Path(session_id): Path<String>,
+    headers: axum::http::HeaderMap,
 ) -> Result<StatusCode, ErrorResponse> {
+    let person = state
+        .person_tokens
+        .verify(&headers, Utc::now().timestamp())
+        .await?;
+    require_owned_session(&state, &session_id, &person).await?;
     // Get session info before terminating
     if let Ok(Some(session)) = state.session_manager.get_session(&session_id).await {
         let duration = Utc::now().timestamp() - session.start_timestamp;
@@ -1165,86 +520,9 @@ pub async fn session_terminate(
         Ok(_) => Ok(StatusCode::NO_CONTENT),
         Err(e) => {
             error!("Failed to terminate session {}: {}", session_id, e);
-            Err(ErrorResponse {
-                error: "internal_error".to_string(),
-                message: format!("Failed to terminate session: {}", e),
-            })
+            Err(LicenseError::Unavailable("session store unavailable").into())
         }
     }
-}
-
-// ==================== Helper Functions ====================
-
-/// Process NanoTDF header and rewrap DEK
-fn process_nanotdf_header(
-    header_base64: &str,
-    kas_private_key: &SecretKey,
-    session_shared_secret: &[u8],
-) -> Result<String, Box<dyn std::error::Error>> {
-    // Decode base64 header
-    let header_bytes = base64_decode(header_base64)?;
-
-    // Parse NanoTDF header
-    let mut parser = BinaryParser::new(&header_bytes);
-    let header = parser.parse_header()?;
-
-    // Extract ephemeral key
-    let tdf_ephemeral_key_bytes = header.get_ephemeral_key();
-    if tdf_ephemeral_key_bytes.len() != 33 {
-        return Err(format!(
-            "Invalid ephemeral key size: {} (expected 33)",
-            tdf_ephemeral_key_bytes.len()
-        )
-        .into());
-    }
-
-    let tdf_ephemeral_public_key = P256PublicKey::from_sec1_bytes(tdf_ephemeral_key_bytes)?;
-
-    // Perform ECDH between KAS private key and TDF ephemeral public key
-    let dek_shared_secret = custom_ecdh(kas_private_key, &tdf_ephemeral_public_key)?;
-
-    // Detect NanoTDF version and compute salt
-    let dek_salt = if let Some(version) = detect_nanotdf_version(&header_bytes) {
-        compute_nanotdf_salt(version)
-    } else {
-        compute_nanotdf_salt(NanoTdfVersion::V12)
-    };
-    // Session salt is always v1.2 (matches Go reference KAS and all SDK clients)
-    let session_salt = compute_nanotdf_salt(NanoTdfVersion::V12);
-
-    // Rewrap DEK
-    let (nonce, wrapped_dek) = rewrap_dek(
-        &dek_shared_secret,
-        session_shared_secret,
-        &dek_salt,
-        &session_salt,
-        b"", // Empty info per NanoTDF spec
-    )?;
-
-    // Combine nonce + wrapped_dek
-    let mut combined = Vec::new();
-    combined.extend_from_slice(&nonce);
-    combined.extend_from_slice(&wrapped_dek);
-
-    Ok(base64_encode(&combined))
-}
-
-// Helper wrappers for crypto utilities with error conversion
-fn parse_pem_public_key(pem: &str) -> Result<P256PublicKey, String> {
-    crypto::parse_pem_public_key(pem).map_err(|e| format!("Failed to parse PEM public key: {}", e))
-}
-
-fn public_key_to_pem(public_key: &P256PublicKey) -> Result<String, String> {
-    crypto::public_key_to_pem(public_key)
-        .map_err(|e| format!("Failed to convert public key to PEM: {}", e))
-}
-
-fn base64_encode(data: &[u8]) -> String {
-    crypto::base64_encode(data)
-}
-
-fn base64_decode(data: &str) -> Result<Vec<u8>, base64::DecodeError> {
-    crypto::base64_decode(data)
 }
 
 #[cfg(test)]
@@ -1255,7 +533,6 @@ mod tests {
     fn test_detect_protocol_tdf3() {
         let request = MediaKeyRequest {
             session_id: "test-session".to_string(),
-            user_id: "test-user".to_string(),
             asset_id: "test-asset".to_string(),
             segment_index: Some(0),
             client_public_key: Some(
@@ -1264,12 +541,6 @@ mod tests {
             nanotdf_header: Some("base64header".to_string()),
             spc_data: None,
             tdf_manifest: None,
-            tdf_wrapped_key: None,
-            chain_session_id: None,
-            chain_header_hash: None,
-            chain_signature: None,
-            chain_nonce: None,
-            chain_algorithm: None,
         };
 
         assert_eq!(detect_protocol(&request), Some(MediaProtocol::TDF3));
@@ -1279,19 +550,12 @@ mod tests {
     fn test_detect_protocol_fairplay() {
         let request = MediaKeyRequest {
             session_id: "test-session".to_string(),
-            user_id: "test-user".to_string(),
             asset_id: "test-asset".to_string(),
             segment_index: Some(0),
             client_public_key: None,
             nanotdf_header: None,
             spc_data: Some("base64spc".to_string()),
             tdf_manifest: None,
-            tdf_wrapped_key: None,
-            chain_session_id: None,
-            chain_header_hash: None,
-            chain_signature: None,
-            chain_nonce: None,
-            chain_algorithm: None,
         };
 
         assert_eq!(detect_protocol(&request), Some(MediaProtocol::FairPlay));
@@ -1302,19 +566,12 @@ mod tests {
         // FairPlay with Standard TDF manifest should still detect as FairPlay
         let request = MediaKeyRequest {
             session_id: "test-session".to_string(),
-            user_id: "test-user".to_string(),
             asset_id: "test-asset".to_string(),
             segment_index: Some(0),
             client_public_key: None,
             nanotdf_header: None,
             spc_data: Some("base64spc".to_string()),
             tdf_manifest: Some("base64manifest".to_string()),
-            tdf_wrapped_key: None,
-            chain_session_id: None,
-            chain_header_hash: None,
-            chain_signature: None,
-            chain_nonce: None,
-            chain_algorithm: None,
         };
 
         assert_eq!(detect_protocol(&request), Some(MediaProtocol::FairPlay));
@@ -1324,19 +581,12 @@ mod tests {
     fn test_detect_protocol_invalid_missing_all_fields() {
         let request = MediaKeyRequest {
             session_id: "test-session".to_string(),
-            user_id: "test-user".to_string(),
             asset_id: "test-asset".to_string(),
             segment_index: Some(0),
             client_public_key: None,
             nanotdf_header: None,
             spc_data: None,
             tdf_manifest: None,
-            tdf_wrapped_key: None,
-            chain_session_id: None,
-            chain_header_hash: None,
-            chain_signature: None,
-            chain_nonce: None,
-            chain_algorithm: None,
         };
 
         assert_eq!(detect_protocol(&request), None);
@@ -1347,19 +597,12 @@ mod tests {
         // Missing nanotdf_header
         let request = MediaKeyRequest {
             session_id: "test-session".to_string(),
-            user_id: "test-user".to_string(),
             asset_id: "test-asset".to_string(),
             segment_index: Some(0),
             client_public_key: Some("pubkey".to_string()),
             nanotdf_header: None,
             spc_data: None,
             tdf_manifest: None,
-            tdf_wrapped_key: None,
-            chain_session_id: None,
-            chain_header_hash: None,
-            chain_signature: None,
-            chain_nonce: None,
-            chain_algorithm: None,
         };
 
         assert_eq!(detect_protocol(&request), None);
@@ -1402,6 +645,24 @@ mod tests {
         let response = bad_request_error.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
+        let forbidden_error = ErrorResponse {
+            error: "forbidden".to_string(),
+            message: "Forbidden".to_string(),
+        };
+        assert_eq!(
+            forbidden_error.into_response().status(),
+            StatusCode::FORBIDDEN
+        );
+
+        let unavailable_error = ErrorResponse {
+            error: "service_unavailable".to_string(),
+            message: "Unavailable".to_string(),
+        };
+        assert_eq!(
+            unavailable_error.into_response().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
         let unknown_error = ErrorResponse {
             error: "unknown".to_string(),
             message: "Unknown".to_string(),
@@ -1409,170 +670,528 @@ mod tests {
         let response = unknown_error.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
+}
 
-    // Tests for Standard TDF manifest extraction (requires fairplay feature)
-    #[cfg(feature = "fairplay")]
-    mod tdf_manifest_tests {
-        use super::*;
-        use base64::engine::general_purpose::STANDARD;
-        use base64::Engine;
-        use rsa::pkcs8::DecodePrivateKey;
+#[cfg(test)]
+mod license_pipeline_tests {
+    use super::*;
+    use crate::modules::authzen::cose_keys::CoseKeyCache;
+    use crate::modules::license::config::LicenseAuthz;
+    use crate::modules::license::issuer::test_support::FakeIssuer;
+    use crate::modules::license::pdp::PlatformPdp;
+    use crate::modules::license::person_token::{Person, PersonTokenVerifier};
+    use rsa::pkcs8::DecodePrivateKey;
+    use serde_json::json;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        // Test RSA key pair for unit tests (2048-bit)
-        // Generated with: openssl genrsa 2048 | openssl pkcs8 -topk8 -nocrypt
-        const TEST_RSA_PRIVATE_KEY_PEM: &str = r#"-----BEGIN PRIVATE KEY-----
-MIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQC7pQ3EQAYpRu4J
-K0U6VcU3B7VuJAEqc4pAJJPJfCK0FqxNQwqM1FqNLbJXxKe7EZGE5dCyGz0X0jCK
-vZJVcF7OKn0VK8MJ3xJHYZXxMt5E5X3E8xJ7YfzKPBM5cF8xXzB7AXPJ8XPJL5YX
-PJ8X5cGK8XvB7AXPJ8XPJL5YXPJ8X5cGK8XvB7AXPJ8XPJL5YXPJ8X5cGK8XvB7
-AXPJ8XPJL5YXPJ8X5cGK8XvB7AXPJ8XPJL5YXPJ8X5cGK8XvB7AXPJ8XPJL5YXP
-J8X5cGK8XvB7AXPJ8XPJL5YXPJ8X5cGK8XvB7AXPJ8XPJL5YXPJ8X5cGK8XvB7A
-XPJ8XPJL5YXPJ8X5cGK8XvB7AXPJ8XPJL5YXPJ8X5cGK8XvB7AgMBAAECggEAT5Y
-rEzXoNpN8AXPJcXvB7AXPJ8XPJL5YXPJ8X5cGK8XvB7AXPJ8XPJL5YXPJ8X5cGK8
-XvB7AXPJ8XPJL5YXPJ8X5cGK8XvB7AXPJ8XPJL5YXPJ8X5cGK8XvB7AXPJ8XPJL
-5YXPJ8X5cGK8XvB7AXPJ8XPJL5YXPJ8X5cGK8XvB7AXPJ8XPJL5YXPJ8X5cGK8X
-vB7AXPJ8XPJL5YXPJ8X5cGK8XvB7AXPJ8XPJL5YXPJ8X5cGK8XvB7AXPJ8XPJL5
-YXPJ8X5cGK8XvB7AXPJ8XPJL5YXPJ8X5cGK8XvB7AXPJ8XPJL5YXPJ8X5cGK8Xv
-B7AXPJ8XPJL5YXPJ8X5cGK8XvB7AQKBgQDpAXPJ8XPJL5YXPJ8X5cGK8XvB7AXPJ
------END PRIVATE KEY-----"#;
+    pub(super) fn manifest() -> &'static str {
+        &crate::modules::license::fixtures::fixtures().manifest_allowed
+    }
+    fn key_pem() -> &'static str {
+        &crate::modules::license::fixtures::fixtures().key_pem
+    }
 
-        #[test]
-        fn test_extract_dek_from_wrapped_key_invalid_base64() {
-            // Create a test RSA key - we'll test error handling so the key doesn't matter
-            let rsa_key = rsa::RsaPrivateKey::new(&mut rand_core::OsRng, 2048).unwrap();
+    /// A wiremock platform: service token plus a fixed GetDecision answer.
+    pub(super) async fn platform(decision: &str) -> MockServer {
+        let s = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"access_token":"svc","expires_in":3600})),
+            )
+            .mount(&s)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/authorization.v2.AuthorizationService/GetDecision"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"decision":{"decision":decision}})),
+            )
+            .mount(&s)
+            .await;
+        s
+    }
 
-            // Invalid base64
-            let result = extract_dek_from_wrapped_key("not-valid-base64!!!", &rsa_key);
-            assert!(result.is_err());
-            assert!(result.unwrap_err().contains("base64"));
+    /// Rewrap state holding the test KAS RSA key the fixture manifest is wrapped to.
+    pub(super) fn rewrap_state_with_rsa() -> Arc<RewrapState> {
+        let rsa = rsa::RsaPrivateKey::from_pkcs8_pem(key_pem()).unwrap();
+        Arc::new(RewrapState {
+            kas_ec_private_key: p256::SecretKey::random(&mut rand_core::OsRng),
+            kas_ec_public_key_pem: String::new(),
+            kas_rsa_private_key: Some(rsa),
+            kas_rsa_public_key_pem: None,
+            oauth_public_key_pem: None,
+            chain_validator: None,
+        })
+    }
+
+    /// Licensing against `server`, for the fixture manifest's KAS, 3600 s lease.
+    pub(super) fn license_authz(server: &MockServer) -> Arc<LicenseAuthz> {
+        Arc::new(LicenseAuthz {
+            pdp: PlatformPdp::new(
+                &server.uri(),
+                format!("{}/oauth/token", server.uri()),
+                "arks-media".into(),
+                "s".into(),
+            )
+            .unwrap(),
+            kas_urls: vec![crate::modules::license::tdf_policy::normalize_kas_url(
+                "https://platform.arkavo.net",
+            )
+            .unwrap()],
+            lease_secs: 3600,
+        })
+    }
+
+    fn state(server: &MockServer, issuer: Arc<FakeIssuer>) -> MediaApiState {
+        let redis = redis::Client::open(
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".into()),
+        )
+        .unwrap();
+        MediaApiState {
+            rewrap_state: rewrap_state_with_rsa(),
+            session_manager: Arc::new(SessionManager::new(Arc::new(redis), Some(100))),
+            media_metrics: Arc::new(MediaMetrics::new(None, "media.metrics".to_string(), false)),
+            fairplay_certificate_data: None,
+            person_tokens: Arc::new(PersonTokenVerifier::new(
+                CoseKeyCache::with_static_keys(vec![]),
+                "i".into(),
+                "a".into(),
+            )),
+            license: Some(license_authz(server)),
+            issuer: Some(issuer),
         }
+    }
 
-        #[test]
-        fn test_extract_dek_from_wrapped_key_wrong_size() {
-            // Create a test RSA key
-            let rsa_key = rsa::RsaPrivateKey::new(&mut rand_core::OsRng, 2048).unwrap();
+    fn payload(manifest: &str) -> MediaKeyRequest {
+        serde_json::from_value(json!({
+            "sessionId": "s", "userId": "ignored", "assetId": "a",
+            "spcData": base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3]),
+            "tdfManifest": base64::engine::general_purpose::STANDARD.encode(manifest),
+        }))
+        .unwrap()
+    }
 
-            // Valid base64 but wrong size (not 256 bytes)
-            let too_short = STANDARD.encode(&[0u8; 128]);
-            let result = extract_dek_from_wrapped_key(&too_short, &rsa_key);
-            assert!(result.is_err());
-            assert!(result.unwrap_err().contains("Invalid RSA-wrapped key size"));
+    fn person() -> Person {
+        Person {
+            sub: "550e8400-e29b-41d4-a716-446655440000".into(),
+            token: "user-cwt".into(),
         }
+    }
 
-        #[test]
-        fn test_extract_dek_from_tdf_manifest_invalid_json() {
-            let rsa_key = rsa::RsaPrivateKey::new(&mut rand_core::OsRng, 2048).unwrap();
+    #[tokio::test]
+    async fn permit_issues_with_truncated_key_and_lease() {
+        let server = platform("DECISION_PERMIT").await;
+        let fake = Arc::new(FakeIssuer::new(Some(
+            "3f1c9e2a-7b4d-4e8f-9a21-5c6d7e8f9a0b",
+        )));
+        let st = state(&server, fake.clone());
+        let out = authorize_license(&st, &person(), &payload(manifest()), "rid")
+            .await
+            .unwrap();
+        assert_eq!(out.ckc, b"fake-ckc");
+        // First 16 bytes of the fixture DEK, and only after the binding passed on all 32.
+        assert_eq!(
+            fake.seen_key.lock().unwrap().unwrap(),
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        );
+        assert_eq!(*fake.seen_lease.lock().unwrap(), Some(3600));
+    }
 
-            // Valid base64 but not JSON
-            let not_json = STANDARD.encode(b"this is not json");
-            let result = extract_dek_from_tdf_manifest(&not_json, &rsa_key);
-            assert!(result.is_err());
-            assert!(result.unwrap_err().contains("Invalid JSON"));
-        }
+    #[tokio::test]
+    async fn deny_never_reaches_issuer() {
+        let server = platform("DECISION_DENY").await;
+        let fake = Arc::new(FakeIssuer::new(None));
+        let st = state(&server, fake.clone());
+        let err = authorize_license(&st, &person(), &payload(manifest()), "rid")
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(err, LicenseError::Forbidden("platform refused"));
+        assert!(fake.seen_key.lock().unwrap().is_none());
+    }
 
-        #[test]
-        fn test_extract_dek_from_tdf_manifest_missing_wrapped_key() {
-            let rsa_key = rsa::RsaPrivateKey::new(&mut rand_core::OsRng, 2048).unwrap();
+    /// A platform bad-input refusal (e.g. unknown attribute FQN) and an
+    /// explicit deny must look identical to the client, so the endpoint is
+    /// not an oracle for which attributes exist.
+    #[tokio::test]
+    async fn platform_refusals_share_one_reason() {
+        let s = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"access_token":"svc","expires_in":3600})),
+            )
+            .mount(&s)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/authorization.v2.AuthorizationService/GetDecision"))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_json(json!({"code":"invalid_argument"})),
+            )
+            .mount(&s)
+            .await;
+        let fake = Arc::new(FakeIssuer::new(None));
+        let st = state(&s, fake.clone());
+        let err = authorize_license(&st, &person(), &payload(manifest()), "rid")
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(err, LicenseError::Forbidden("platform refused"));
+        assert!(fake.seen_key.lock().unwrap().is_none());
+    }
 
-            // Valid JSON but missing wrappedKey
-            let manifest = serde_json::json!({
-                "encryptionInformation": {
-                    "keyAccess": [{}]
-                }
-            });
-            let manifest_b64 = STANDARD.encode(manifest.to_string().as_bytes());
+    #[tokio::test]
+    async fn missing_manifest_is_400_and_wrapped_key_is_ignored() {
+        let server = platform("DECISION_PERMIT").await;
+        let st = state(&server, Arc::new(FakeIssuer::new(None)));
+        let p: MediaKeyRequest = serde_json::from_value(json!({
+            "sessionId":"s","userId":"u","assetId":"a","spcData":"AQID","tdfWrappedKey":"AAAA"}))
+        .unwrap();
+        assert!(matches!(
+            authorize_license(&st, &person(), &p, "rid").await,
+            Err(LicenseError::BadRequest(_))
+        ));
+    }
 
-            let result = extract_dek_from_tdf_manifest(&manifest_b64, &rsa_key);
-            assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .contains("Missing encryptionInformation.keyAccess[0].wrappedKey"));
-        }
+    #[tokio::test]
+    async fn unconfigured_licensing_is_503() {
+        let server = platform("DECISION_PERMIT").await;
+        let mut st = state(&server, Arc::new(FakeIssuer::new(None)));
+        st.license = None;
+        assert!(matches!(
+            authorize_license(&st, &person(), &payload(manifest()), "rid").await,
+            Err(LicenseError::Unavailable(_))
+        ));
+    }
 
-        #[test]
-        fn test_extract_dek_from_tdf_manifest_empty_key_access() {
-            let rsa_key = rsa::RsaPrivateKey::new(&mut rand_core::OsRng, 2048).unwrap();
-
-            // Valid JSON but empty keyAccess array
-            let manifest = serde_json::json!({
-                "encryptionInformation": {
-                    "keyAccess": []
-                }
-            });
-            let manifest_b64 = STANDARD.encode(manifest.to_string().as_bytes());
-
-            let result = extract_dek_from_tdf_manifest(&manifest_b64, &rsa_key);
-            assert!(result.is_err());
-        }
-
-        #[test]
-        fn test_extract_dek_end_to_end() {
-            use rsa::pkcs1v15::Pkcs1v15Encrypt;
-            use rsa::RsaPublicKey;
-
-            // Generate test key pair
-            let rsa_private_key = rsa::RsaPrivateKey::new(&mut rand_core::OsRng, 2048).unwrap();
-            let rsa_public_key = RsaPublicKey::from(&rsa_private_key);
-
-            // Create a test DEK (16 bytes for AES-128)
-            let test_dek = [0x42u8; 16];
-
-            // Wrap DEK with RSA-OAEP (SHA-1)
-            let padding = Oaep::new::<Sha1>();
-            let wrapped_dek = rsa_public_key
-                .encrypt(&mut rand_core::OsRng, padding, &test_dek)
+    /// An SDK or credential fault is the server's (503); a malformed SPC is
+    /// the client's (400). Neither is a policy refusal.
+    #[tokio::test]
+    async fn issuer_failures_map_to_503_and_400() {
+        use crate::modules::license::issuer::IssueError;
+        let server = platform("DECISION_PERMIT").await;
+        for (fail, want) in [
+            (
+                IssueError::Sdk("status -42605".into()),
+                LicenseError::Unavailable("FairPlay license service unavailable"),
+            ),
+            (
+                IssueError::MalformedSpc("status -42581".into()),
+                LicenseError::BadRequest("spcData is malformed"),
+            ),
+        ] {
+            let st = state(&server, Arc::new(FakeIssuer::failing(fail)));
+            let err = authorize_license(&st, &person(), &payload(manifest()), "rid")
+                .await
+                .err()
                 .unwrap();
-            let wrapped_dek_b64 = STANDARD.encode(&wrapped_dek);
-
-            // Extract DEK using our function
-            let extracted_dek = extract_dek_from_wrapped_key(&wrapped_dek_b64, &rsa_private_key);
-            assert!(extracted_dek.is_ok());
-            assert_eq!(extracted_dek.unwrap(), test_dek.to_vec());
+            assert_eq!(err, want);
         }
+    }
 
-        #[test]
-        fn test_extract_dek_from_manifest_end_to_end() {
-            use rsa::RsaPublicKey;
+    /// A tampered manifest must not tell the client which check failed.
+    #[tokio::test]
+    async fn tampered_manifest_gets_one_generic_refusal() {
+        let server = platform("DECISION_PERMIT").await;
+        let fake = Arc::new(FakeIssuer::new(None));
+        let st = state(&server, fake.clone());
+        let mut m: serde_json::Value = serde_json::from_str(manifest()).unwrap();
+        // Swap in a different policy: the binding no longer matches.
+        m["encryptionInformation"]["policy"] = json!(base64::engine::general_purpose::STANDARD
+            .encode(r#"{"uuid":"x","body":{"dataAttributes":[{"attribute":"https://e/attr/a/value/b"}]}}"#));
+        let tampered = m.to_string();
 
-            // Generate test key pair
-            let rsa_private_key = rsa::RsaPrivateKey::new(&mut rand_core::OsRng, 2048).unwrap();
-            let rsa_public_key = RsaPublicKey::from(&rsa_private_key);
+        // The native reason is specific...
+        let native = crate::modules::license::tdf_policy::check_manifest(
+            tampered.as_bytes(),
+            st.rewrap_state.kas_rsa_private_key.as_ref().unwrap(),
+            &st.license.as_ref().unwrap().kas_urls,
+        )
+        .err()
+        .unwrap();
+        assert_ne!(native, LicenseError::Forbidden("manifest refused"));
 
-            // Create a test DEK (16 bytes for AES-128)
-            let test_dek = [0xABu8; 16];
+        // ...but the client only ever sees the generic one.
+        let err = authorize_license(&st, &person(), &payload(&tampered), "rid")
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(err, LicenseError::Forbidden("manifest refused"));
+        assert!(fake.seen_key.lock().unwrap().is_none());
+    }
+}
 
-            // Wrap DEK with RSA-OAEP (SHA-1)
-            let padding = Oaep::new::<Sha1>();
-            let wrapped_dek = rsa_public_key
-                .encrypt(&mut rand_core::OsRng, padding, &test_dek)
-                .unwrap();
-            let wrapped_dek_b64 = STANDARD.encode(&wrapped_dek);
+#[cfg(test)]
+mod session_auth_tests {
+    use super::*;
+    use crate::modules::authzen::cose_keys::CoseKeyCache;
+    use crate::modules::authzen::cwt_verify::test_support::{keypair, mint_map};
+    use crate::modules::license::person_token::PersonTokenVerifier;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::routing::{delete, post};
+    use axum::Router;
+    use ciborium::value::Value;
+    use serde_json::json;
+    use tower::ServiceExt;
 
-            // Create manifest.json
-            let manifest = serde_json::json!({
-                "encryptionInformation": {
-                    "type": "split",
-                    "keyAccess": [{
-                        "type": "wrapped",
-                        "url": "https://kas.example.com/kas",
-                        "protocol": "kas",
-                        "wrappedKey": wrapped_dek_b64
-                    }],
-                    "method": {
-                        "algorithm": "AES-128-CBC"
-                    }
-                },
-                "payload": {
-                    "type": "reference",
-                    "url": "0.payload"
-                }
-            });
-            let manifest_b64 = STANDARD.encode(manifest.to_string().as_bytes());
+    const ISS: &str = "https://identity.test";
+    const PLATFORM: &str = "https://platform.arkavo.net";
+    const KID: &[u8] = b"kid-1";
 
-            // Extract DEK using our function
-            let extracted_dek =
-                extract_dek_from_tdf_manifest(&manifest_b64, &rsa_private_key).unwrap();
-            assert_eq!(extracted_dek, test_dek.to_vec());
+    fn token(sub: &str) -> String {
+        let (sk, _) = keypair();
+        let now = Utc::now().timestamp();
+        mint_map(
+            &sk,
+            KID,
+            vec![
+                (Value::Integer(1.into()), Value::Text(ISS.into())),
+                (Value::Integer(2.into()), Value::Text(sub.into())),
+                (
+                    Value::Integer(3.into()),
+                    Value::Array(vec![
+                        Value::Text("arkavo".into()),
+                        Value::Text(PLATFORM.into()),
+                    ]),
+                ),
+                (
+                    Value::Integer(4.into()),
+                    Value::Integer((now + 3600).into()),
+                ),
+                (Value::Integer(6.into()), Value::Integer(now.into())),
+                (
+                    Value::Integer(7.into()),
+                    Value::Bytes(Uuid::new_v4().as_bytes().to_vec()),
+                ),
+            ],
+        )
+    }
+
+    fn redis_url() -> String {
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".into())
+    }
+
+    fn app() -> Router {
+        router(state_with_redis(&redis_url()))
+    }
+
+    fn app_with_redis(redis_url: &str) -> Router {
+        router(state_with_redis(redis_url))
+    }
+
+    fn state_with_redis(redis_url: &str) -> MediaApiState {
+        let (_, vk) = keypair();
+        let redis = redis::Client::open(redis_url).unwrap();
+        MediaApiState {
+            rewrap_state: Arc::new(RewrapState {
+                kas_ec_private_key: p256::SecretKey::random(&mut rand_core::OsRng),
+                kas_ec_public_key_pem: String::new(),
+                kas_rsa_private_key: None,
+                kas_rsa_public_key_pem: None,
+                oauth_public_key_pem: None,
+                chain_validator: None,
+            }),
+            session_manager: Arc::new(SessionManager::new(Arc::new(redis), Some(100))),
+            media_metrics: Arc::new(MediaMetrics::new(None, "media.metrics".to_string(), false)),
+            fairplay_certificate_data: None,
+            person_tokens: Arc::new(PersonTokenVerifier::new(
+                CoseKeyCache::with_static_keys(vec![(KID.to_vec(), vk)]),
+                ISS.into(),
+                PLATFORM.into(),
+            )),
+            license: None,
+            issuer: None,
         }
+    }
+
+    fn router(st: MediaApiState) -> Router {
+        Router::new()
+            .route("/start", post(session_start))
+            .route("/key", post(media_key_request))
+            .route("/s/:session_id/heartbeat", post(session_heartbeat))
+            .route("/s/:session_id", delete(session_terminate))
+            .with_state(Arc::new(st))
+    }
+
+    async fn send(
+        app: &Router,
+        method: &str,
+        uri: &str,
+        tok: Option<&str>,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut b = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json");
+        if let Some(t) = tok {
+            b = b.header("authorization", format!("Bearer {t}"));
+        }
+        let mut req = b.body(Body::from(body.to_string())).unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 9))));
+        let res = app.clone().oneshot(req).await.unwrap();
+        let status = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    fn urlencoding_path(s: &str) -> String {
+        s.replace(':', "%3A")
+    }
+
+    async fn start_fairplay_session(app: &Router, sub: &str) -> String {
+        let body = json!({"userId": "ignored", "assetId": "a", "protocol": "fairplay"});
+        let (st, v) = send(app, "POST", "/start", Some(&token(sub)), body).await;
+        assert_eq!(st, StatusCode::OK);
+        v["sessionId"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn start_requires_token_and_binds_sub() {
+        let app = app();
+        let body = json!({"userId": "someone-else", "assetId": "a", "protocol": "fairplay"});
+        assert_eq!(
+            send(&app, "POST", "/start", None, body.clone()).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        let sub = Uuid::new_v4().to_string();
+        let (st, v) = send(&app, "POST", "/start", Some(&token(&sub)), body).await;
+        assert_eq!(st, StatusCode::OK);
+        let sid = v["sessionId"].as_str().unwrap().to_string();
+        assert!(
+            sid.starts_with(&sub),
+            "session is keyed by the verified sub"
+        );
+
+        // Owner may heartbeat; another person may not.
+        let hb = format!("/s/{}/heartbeat", urlencoding_path(&sid));
+        assert_eq!(
+            send(&app, "POST", &hb, Some(&token(&sub)), json!({}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            send(&app, "POST", &hb, None, json!({})).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        let other = Uuid::new_v4().to_string();
+        assert_eq!(
+            send(&app, "POST", &hb, Some(&token(&other)), json!({}))
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        let del = format!("/s/{}", urlencoding_path(&sid));
+        assert_eq!(
+            send(&app, "DELETE", &del, Some(&token(&other)), json!(null))
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            send(&app, "DELETE", &del, Some(&token(&sub)), json!(null))
+                .await
+                .0,
+            StatusCode::NO_CONTENT
+        );
+    }
+
+    #[tokio::test]
+    async fn key_request_requires_token() {
+        let app = app();
+        let body =
+            json!({"sessionId": "s", "assetId": "a", "spcData": "AQID", "tdfManifest": "e30="});
+        assert_eq!(
+            send(&app, "POST", "/key", None, body).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn key_request_refuses_tdf3_shape() {
+        let app = app();
+        let body = json!({
+            "sessionId": "s", "assetId": "a",
+            "nanotdfHeader": "AAAA", "clientPublicKey": "pem",
+        });
+        let tok = token(&Uuid::new_v4().to_string());
+        assert_eq!(
+            send(&app, "POST", "/key", Some(&tok), body).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn key_request_for_another_subjects_session_is_403() {
+        let app = app();
+        let owner = Uuid::new_v4().to_string();
+        let sid = start_fairplay_session(&app, &owner).await;
+        let body = json!({
+            "sessionId": sid, "assetId": "a", "spcData": "AQID", "tdfManifest": "e30=",
+        });
+        let other = token(&Uuid::new_v4().to_string());
+        assert_eq!(
+            send(&app, "POST", "/key", Some(&other), body).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    /// A store outage is a 503 with a static reason: no Redis error text.
+    #[tokio::test]
+    async fn session_store_outage_is_503_without_detail() {
+        let app = app_with_redis("redis://127.0.0.1:1");
+        let tok = token(&Uuid::new_v4().to_string());
+        let body = json!({"assetId": "a", "protocol": "fairplay"});
+        let (st, v) = send(&app, "POST", "/start", Some(&tok), body).await;
+        assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(v["message"], "session store unavailable");
+        for (m, uri) in [("POST", "/s/x/heartbeat"), ("DELETE", "/s/x")] {
+            let (st, v) = send(&app, m, uri, Some(&tok), json!({})).await;
+            assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "{m} {uri}");
+            assert_eq!(v["message"], "session store unavailable");
+        }
+    }
+
+    /// End to end through the router: a person starts a FairPlay session,
+    /// then gets a CKC for the fixture manifest on a platform permit.
+    #[tokio::test]
+    async fn owned_fairplay_session_gets_a_license() {
+        use super::license_pipeline_tests::{
+            license_authz, manifest, platform, rewrap_state_with_rsa,
+        };
+        use crate::modules::license::issuer::test_support::FakeIssuer;
+        let server = platform("DECISION_PERMIT").await;
+        let mut st = state_with_redis(&redis_url());
+        st.rewrap_state = rewrap_state_with_rsa();
+        st.license = Some(license_authz(&server));
+        st.issuer = Some(Arc::new(FakeIssuer::new(Some(
+            "3f1c9e2a-7b4d-4e8f-9a21-5c6d7e8f9a0b",
+        ))));
+        let app = router(st);
+
+        let sub = Uuid::new_v4().to_string();
+        let sid = start_fairplay_session(&app, &sub).await;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let body = json!({
+            "sessionId": sid, "assetId": "a",
+            "spcData": b64.encode([1u8, 2, 3]),
+            "tdfManifest": b64.encode(manifest()),
+        });
+        let (status, v) = send(&app, "POST", "/key", Some(&token(&sub)), body).await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        assert_eq!(v["wrappedKey"], b64.encode(b"fake-ckc"));
+        assert_eq!(v["metadata"]["protocol"], "fairplay");
+        assert_eq!(v["status"], "success");
     }
 }

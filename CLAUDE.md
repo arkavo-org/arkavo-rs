@@ -233,7 +233,15 @@ export RUST_LOG=info                               # Logging level
 export MAX_CONCURRENT_STREAMS=5                    # Max simultaneous streams per user
 export ENABLE_MEDIA_ANALYTICS=true                 # Publish metrics to NATS
 export MEDIA_METRICS_SUBJECT=media.metrics         # NATS subject for analytics events
-export OAUTH_PUBLIC_KEY_PATH=/path/to/oauth_public.pem  # Optional JWT validation
+export OAUTH_PUBLIC_KEY_PATH=/path/to/oauth_public.pem  # Optional; JWT signature validation for the local POST /kas/v2/rewrap only (unset -> that route skips validation). Not used by /ws or /media/v1
+export ARKS_MEDIA_CLIENT_ID=arks-media                 # authnz-rs service client used for GetDecision (default shown)
+export ARKS_MEDIA_CLIENT_SECRET=...                    # No default; start.sh env only. Unset -> FairPlay key requests 503
+export OIDC_ISSUER=https://identity.arkavo.net         # Token endpoint {OIDC_ISSUER}/oauth/token; COSE keys {OIDC_ISSUER}/.well-known/cose-keys
+export MEDIA_PLATFORM_AUDIENCE=https://platform.arkavo.net  # Viewer CWT must carry this AND "arkavo" in aud
+export MEDIA_KAS_URLS=https://platform.arkavo.net      # Accepted TDF key-access URLs (comma list, normalised)
+export MEDIA_FPS_LEASE_SECONDS=3600                    # CKC lease; must be > 0; streaming licences only
+# FairPlay licensing also requires OPENTDF_PLATFORM_URL (see above)
+# With KAS_RSA_KEY_PATH loaded, licensing also requires KAS_PROXY_MODE=rest|both (startup refuses otherwise)
 
 # C2PA Content Authenticity Configuration (optional)
 export C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem
@@ -360,6 +368,15 @@ The server implements a TDF3-based DRM system for HLS/DASH streaming media. Each
 - `POST /media/v1/key-request` - Request wrapped DEK for media segment (optimized fast path)
 - `POST /media/v1/session/:session_id/heartbeat` - Update session activity
 - `DELETE /media/v1/session/:session_id` - Terminate playback session
+- `GET /media/v1/certificate` - FairPlay certificate (the only unauthenticated `/media/v1` route)
+
+**`/media/v1` request contract:**
+- All `/media/v1/*` routes except `GET /media/v1/certificate` require `Authorization: Bearer <passkey CWT>`. The token `aud` must contain both `arkavo` and `MEDIA_PLATFORM_AUDIENCE`; `sub` must be person-shaped and the token must carry no agent markers.
+- Sessions are keyed by the token `sub`; the body `userId` is ignored. Heartbeat and delete require the same `sub`.
+- FairPlay key requests need `spcData` and the full base64 `tdfManifest` (exactly one wrapped key-access object for a KAS in `MEDIA_KAS_URLS`; policy with a uuid and at least one `dataAttributes` entry). `tdfWrappedKey` is gone. Clients MUST use `skd://<policy uuid>` as the asset id in the SPC. The server passes the bare policy uuid to the FairPlay SDK; a mismatch with the SPC's asset id is only logged as a warning. The binding is `base64(HMAC-SHA256(DEK, <base64 policy string>))` (hex form refused); the DEK is wrapped with RSA-OAEP SHA-1. The platform `GetDecision` must permit; the CKC carries a `MEDIA_FPS_LEASE_SECONDS` lease and is streaming-only.
+- Session start must send `protocol: "fairplay"`; it defaults to tdf3, and a key request on such a session returns 400.
+- TDF3 media key requests are disabled (403).
+- Errors: 401 missing, invalid or expired token, or no platform audience (sign in again); 400 `invalid_request` (missing `tdfManifest` or `spcData`, bad base64, oversized `spcData`, manifest not JSON, or session protocol not fairplay); 403 not a person, session not owned, a parseable manifest that fails the checks (generic "manifest refused"), or a platform deny or refusal (generic "platform refused"); 429 `concurrency_limit` on session start; 404 `session_not_found` on heartbeat for a session that no longer exists; 503 platform, identity or credential unavailable.
 
 ### Session Management
 
@@ -421,7 +438,9 @@ Published to NATS topics under `media.metrics.*`:
 - `concurrency_limit` - Concurrent stream limit hit
 - `rental_window` - Rental first-play or expiry events
 
-### TDF3 Media Workflow
+### TDF3 Media Workflow (key delivery disabled)
+
+**Note:** TDF3 media key requests currently return 403; only FairPlay key delivery is active. The workflow below is historical.
 
 **Content Preparation:**
 1. Encrypt each HLS/DASH segment with unique DEK
@@ -485,7 +504,9 @@ export MEDIA_METRICS_SUBJECT=media.metrics
 ## Security Notes
 
 - Private keys (KAS, TLS) must never be committed to version control
-- JWT signature validation is disabled for development - enable in production via `OAUTH_PUBLIC_KEY_PATH`
+- `OAUTH_PUBLIC_KEY_PATH` only controls signature validation on the local `POST /kas/v2/rewrap` (mounted when `KAS_PROXY_MODE` is off or connect); when unset, that route skips signature validation. Set it in production.
+- The legacy `/ws` JWT path is controlled by `JWT_VALIDATION_DISABLED` (default true, i.e. validation off) and `JWT_PUBLIC_KEY_PATH`; set `JWT_VALIDATION_DISABLED=false` and a key path in production.
+- `/media/v1` is always verified: passkey CWTs are checked against the COSE keys at `{OIDC_ISSUER}/.well-known/cose-keys`.
 - Self-signed certificates are for development only
 - Session IDs should be treated as secrets (contain user_id + asset_id)
 - Apple App Site Association file (`apple-app-site-association.json`) is served at `/.well-known/apple-app-site-association`
