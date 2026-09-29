@@ -868,10 +868,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let state = platform_proxy_state
             .clone()
             .expect("platform_proxy_state must exist when forwards_rest()");
+        // The public key stays local: the platform serves no REST routes
+        // (it answers 401 to every unauthenticated path), and arks holds the
+        // same KAS keys, so clients fetching it without a token keep working.
         Router::new()
             .route("/kas/v2/rewrap", post(platform_proxy::proxy))
-            .route("/kas/v2/kas_public_key", get(platform_proxy::proxy))
             .with_state(state)
+            .merge(
+                Router::new()
+                    .route(
+                        "/kas/v2/kas_public_key",
+                        get(http_rewrap::kas_public_key_handler),
+                    )
+                    .with_state(rewrap_state.clone()),
+            )
     } else {
         Router::new()
             .route("/kas/v2/rewrap", post(http_rewrap::rewrap_handler))

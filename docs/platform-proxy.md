@@ -23,7 +23,7 @@ modern ZTDF rewrap (handled by platform).
 
 - **`off`** — proxy disabled, all routes served locally.
 - **`connect`** — `/kas.AccessService/Rewrap`, `/kas.AccessService/PublicKey`, `/kas.AccessService/LegacyPublicKey` forward to platform.
-- **`rest`** — `/kas/v2/rewrap` and `/kas/v2/kas_public_key` forward to platform (replaces the local `http_rewrap` shim).
+- **`rest`** — `/kas/v2/rewrap` forwards to platform (replaces the local `http_rewrap` shim). `/kas/v2/kas_public_key` stays local in every mode: the platform serves no REST routes, and arks holds the same KAS keys.
 - **`both`** — `connect` + `rest`.
 
 Whenever the mode is anything other than `off`, `/.well-known/opentdf-configuration` is also forwarded to the upstream platform so clients see the authoritative discovery document, along with public attribute discovery (`GET /attributes`, `GET /attr/*`) served from the platform's policy snapshot — attribute FQNs dereference through this host when the namespace DNS (e.g. patreon.arkavo.com) points here.

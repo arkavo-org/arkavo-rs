@@ -287,7 +287,7 @@ export H3_BIND_HOST=0.0.0.0                            # QUIC bind address; pin 
 **Note:** For OpenTDF Platform reverse-proxy:
 - Proxying is optional and disabled when `KAS_PROXY_MODE` is `off` or unset.
 - `connect` forwards `/kas.AccessService/*` ConnectRPC routes.
-- `rest` forwards `/kas/v2/rewrap` and `/kas/v2/kas_public_key`, replacing the local OpenTDF-compat shim.
+- `rest` forwards `/kas/v2/rewrap`, replacing the local OpenTDF-compat shim. `/kas/v2/kas_public_key` is always served locally (same keys; the platform has no REST routes).
 - `both` forwards all of the above.
 - `/ws` (NanoTDF) always stays local. See `docs/platform-proxy.md`.
 
