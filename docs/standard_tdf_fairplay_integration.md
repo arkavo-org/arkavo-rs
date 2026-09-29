@@ -184,7 +184,7 @@ with open("manifest.json", "w") as f:
 > token's `aud` must contain both `arkavo` and the platform audience
 > (`MEDIA_PLATFORM_AUDIENCE`), `sub` must be person-shaped, and agent tokens are
 > refused. Sessions are keyed by the token `sub`; a body `userId` is ignored.
-> Errors: 401 missing, invalid or expired token, or no platform audience (sign in again); 400 `invalid_request` (missing `tdfManifest` or `spcData`, bad base64, oversized `spcData`, manifest not JSON, session protocol not fairplay, or an SPC the FairPlay SDK refuses as malformed); 403 not a person, a session that is missing or not owned by the caller (key request, heartbeat and terminate), a parseable manifest that fails the checks (generic "manifest refused"), or platform deny; 429 `concurrency_limit` on session start; 404 `session_not_found` on heartbeat only if the session expires between the ownership check and the update; 503 platform, identity or credential unavailable, a FairPlay SDK or credential fault, or the session store (Redis) unavailable on start, heartbeat, terminate or key request.
+> Errors: 401 missing, invalid or expired token, or no platform audience (sign in again); 400 `invalid_request` (missing `tdfManifest` or `spcData`, bad base64, oversized `spcData`, manifest not JSON, session protocol not fairplay, or an SPC the FairPlay SDK refuses as malformed); 403 not a person, a session that is missing or not owned by the caller (key request, heartbeat and terminate), a parseable manifest that fails the checks (generic "manifest refused"), or a platform deny or refusal (generic "platform refused"); 429 `concurrency_limit` on session start; 404 `session_not_found` on heartbeat only if the session expires between the ownership check and the update; 503 platform, identity or credential unavailable, a FairPlay SDK or credential fault, or the session store (Redis) unavailable on start, heartbeat, terminate or key request.
 
 ```bash
 curl -X POST https://platform.arkavo.net/media/v1/session/start \
@@ -347,7 +347,7 @@ The server enforces policies via `media_policy_contract.rs`:
 
 - RSA key must be configured (`KAS_RSA_KEY_PATH`)
 - A missing `tdfManifest` or `spcData`, bad base64, oversized `spcData`, a manifest that is not JSON, or a non-fairplay session returns 400 `invalid_request`
-- A parseable manifest that fails the checks returns 403 "manifest refused"
+- A parseable manifest that fails the checks returns 403 "manifest refused"; a platform deny or refusal returns 403 "platform refused"
 - An SPC the FairPlay SDK refuses as malformed returns 400 `invalid_request`; an SDK or credential fault returns 503
 - With licensing configured and `KAS_RSA_KEY_PATH` loaded, `KAS_PROXY_MODE` must be `rest` or `both`: arks refuses to start otherwise, because the local `/kas/v2/rewrap` shim would release the same RSA-wrapped keys without a policy decision
 - `ARKS_MEDIA_CLIENT_SECRET` and `OPENTDF_PLATFORM_URL` must be set for licensing; without the secret FairPlay key requests return 503

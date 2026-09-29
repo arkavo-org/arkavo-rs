@@ -203,10 +203,19 @@ pub async fn authorize_license(
                     other => other,
                 }
             })?;
+    // Same for the platform: an explicit deny and a bad-input refusal (e.g. an
+    // unknown attribute) look identical to the client; 503s pass through.
     license
         .pdp
         .decide(&person.token, &policy.policy_uuid, &policy.fqns, rid)
-        .await?;
+        .await
+        .map_err(|e| {
+            warn!("license {rid}: platform decision refused: {}", e.reason());
+            match e {
+                LicenseError::Forbidden(_) => LicenseError::Forbidden("platform refused"),
+                other => other,
+            }
+        })?;
 
     let mut key = [0u8; 16];
     key.copy_from_slice(&policy.dek[..16]);
@@ -799,7 +808,38 @@ mod license_pipeline_tests {
             .await
             .err()
             .unwrap();
-        assert!(matches!(err, LicenseError::Forbidden(_)));
+        assert_eq!(err, LicenseError::Forbidden("platform refused"));
+        assert!(fake.seen_key.lock().unwrap().is_none());
+    }
+
+    /// A platform bad-input refusal (e.g. unknown attribute FQN) and an
+    /// explicit deny must look identical to the client, so the endpoint is
+    /// not an oracle for which attributes exist.
+    #[tokio::test]
+    async fn platform_refusals_share_one_reason() {
+        let s = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"access_token":"svc","expires_in":3600})),
+            )
+            .mount(&s)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/authorization.v2.AuthorizationService/GetDecision"))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_json(json!({"code":"invalid_argument"})),
+            )
+            .mount(&s)
+            .await;
+        let fake = Arc::new(FakeIssuer::new(None));
+        let st = state(&s, fake.clone());
+        let err = authorize_license(&st, &person(), &payload(manifest()), "rid")
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(err, LicenseError::Forbidden("platform refused"));
         assert!(fake.seen_key.lock().unwrap().is_none());
     }
 
