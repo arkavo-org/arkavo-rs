@@ -576,7 +576,7 @@ fn process_rsa_unwrap(
     // Unwrap DEK using RSA-OAEP with SHA-1 padding (OpenTDF compatibility)
     let padding = Oaep::new::<Sha1>();
     let dek = rsa_private_key
-        .decrypt(padding, &wrapped_key_bytes)
+        .decrypt_blinded(&mut OsRng, padding, &wrapped_key_bytes)
         .map_err(|e| format!("RSA decryption failed: {}", e))?;
 
     // Re-wrap DEK with session shared secret using AES-256-GCM

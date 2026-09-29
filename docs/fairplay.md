@@ -163,22 +163,20 @@ pub struct PlaybackSession {
 
 ```http
 POST /media/v1/session/start
+Authorization: Bearer <passkey CWT>
 Content-Type: application/json
 
 {
-  "userId": "user_123",
   "assetId": "asset_456",
-  "clientIp": "192.168.1.100",
-  "protocol": "fairplay"  // or "tdf3"
+  "protocol": "fairplay"  // required for FairPlay; defaults to "tdf3", and key requests on a tdf3 session return 400
 }
 ```
 
 **Response:**
 ```json
 {
-  "sessionId": "user_123:asset_456:uuid",
-  "status": "active",
-  "expiresAt": 1234567890
+  "sessionId": "<sub>:asset_456:<uuid>",
+  "status": "started"
 }
 ```
 
@@ -188,14 +186,15 @@ Content-Type: application/json
 
 ```http
 POST /media/v1/key-request
+Authorization: Bearer <passkey CWT>
 Content-Type: application/json
 
 {
   "sessionId": "session_id",
-  "userId": "user_123",
   "assetId": "asset_456",
   "segmentIndex": 0,
-  "spcData": "base64_encoded_spc_from_client"
+  "spcData": "base64_encoded_spc_from_client",
+  "tdfManifest": "base64_encoded_full_tdf_manifest"
 }
 ```
 
@@ -207,21 +206,30 @@ Content-Type: application/json
   "status": "success",
   "metadata": {
     "protocol": "fairplay",
-    "latency_ms": 12,
-    "sdk_version": "26.0.0"
+    "lease_seconds": 3600
   }
 }
 ```
 
-#### TDF3 Request
+Clients MUST use `skd://<policy uuid>` as the asset id in the SPC. The server passes the bare policy uuid to the FairPlay SDK; a mismatch with the SPC's asset id is only logged as a warning. The manifest must have exactly one wrapped key-access object for an
+accepted KAS (`MEDIA_KAS_URLS`) and a policy with a uuid and at least one
+`dataAttributes` entry. The policy binding is
+`base64(HMAC-SHA256(DEK, <base64 policy string>))`; the hex form is refused.
+The platform `GetDecision` must permit. The CKC carries a lease of
+`MEDIA_FPS_LEASE_SECONDS` and is streaming-only. `tdfWrappedKey` is no longer
+accepted.
+
+#### TDF3 Request (disabled)
+
+TDF3 media key requests return 403. The shape below is historical.
 
 ```http
 POST /media/v1/key-request
+Authorization: Bearer <passkey CWT>
 Content-Type: application/json
 
 {
   "sessionId": "session_id",
-  "userId": "user_123",
   "assetId": "asset_456",
   "segmentIndex": 0,
   "nanotdfHeader": "base64_encoded_header",
@@ -233,6 +241,7 @@ Content-Type: application/json
 
 ```http
 POST /media/v1/session/:sessionId/heartbeat
+Authorization: Bearer <passkey CWT>
 Content-Type: application/json
 
 {
@@ -245,6 +254,7 @@ Content-Type: application/json
 
 ```http
 DELETE /media/v1/session/:sessionId
+Authorization: Bearer <passkey CWT>
 ```
 
 ## Client Workflow
@@ -343,7 +353,9 @@ Analytics events published to NATS (`media.metrics.*`):
 
 ### Network Security
 - Use TLS for all API endpoints
-- Validate JWT tokens for production (set `OAUTH_PUBLIC_KEY_PATH`)
+- All `/media/v1/*` routes except `GET /media/v1/certificate` require a passkey CWT (`aud` containing `arkavo` and `MEDIA_PLATFORM_AUDIENCE`, person-shaped `sub`, no agent markers). Sessions are keyed by `sub`; body `userId` is ignored.
+- Errors: 401 missing, invalid or expired token, or no platform audience (sign in again); 400 `invalid_request` (missing `tdfManifest` or `spcData`, bad base64, oversized `spcData`, manifest not JSON, session protocol not fairplay, or an SPC the FairPlay SDK refuses as malformed); 403 not a person, a session that is missing or not owned by the caller (key request, heartbeat and terminate), a parseable manifest that fails the checks (generic "manifest refused"), or platform deny; 429 `concurrency_limit` on session start; 404 `session_not_found` on heartbeat only if the session expires between the ownership check and the update; 503 platform, identity or credential unavailable, a FairPlay SDK or credential fault, or the session store (Redis) unavailable on start, heartbeat, terminate or key request. An unset `ARKS_MEDIA_CLIENT_SECRET` gives 503 on FairPlay key requests.
+- With licensing configured and `KAS_RSA_KEY_PATH` loaded, arks refuses to start unless `KAS_PROXY_MODE` is `rest` or `both`: the local `/kas/v2/rewrap` shim would release the same RSA-wrapped keys without a policy decision.
 - Implement rate limiting on key request endpoints
 - Monitor for anomalous request patterns
 

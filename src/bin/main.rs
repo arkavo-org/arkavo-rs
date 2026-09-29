@@ -844,16 +844,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
 
+    let license_authz = modules::license::config::license_authz_from_env(
+        env::var("OPENTDF_PLATFORM_URL").ok().as_deref(),
+    )
+    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    modules::license::config::check_rewrap_exposure(
+        license_authz.is_some(),
+        rewrap_state.kas_rsa_private_key.is_some(),
+        proxy_mode.forwards_rest(),
+    )
+    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    #[cfg(feature = "fairplay")]
+    let license_issuer: Option<Arc<dyn modules::license::issuer::LicenseIssuer>> =
+        Some(fairplay_handler.clone());
+    #[cfg(not(feature = "fairplay"))]
+    let license_issuer: Option<Arc<dyn modules::license::issuer::LicenseIssuer>> = None;
+
     let media_api_state = Arc::new(media_api::MediaApiState {
         rewrap_state: rewrap_state.clone(),
         session_manager: session_manager.clone(),
         media_metrics: media_metrics.clone(),
-        #[cfg(feature = "fairplay")]
-        fairplay_handler: Some(fairplay_handler),
-        #[cfg(not(feature = "fairplay"))]
-        fairplay_handler: None,
-        chain_validator: chain_validator.clone(),
         fairplay_certificate_data,
+        person_tokens: Arc::new(modules::license::config::person_verifier_from_env()),
+        license: license_authz.map(Arc::new),
+        issuer: license_issuer,
     });
 
     // Initialize C2PA signing state (optional - only if configured)
