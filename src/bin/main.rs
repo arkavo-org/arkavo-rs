@@ -10,7 +10,9 @@ mod modules;
 
 #[cfg(feature = "c2pa_signing")]
 use modules::c2pa_signing;
-use modules::{authzen, cbor_protocol, http_rewrap, media_api, ntdf_token, platform_proxy};
+use modules::{
+    authzen, cbor_protocol, http_rewrap, media_api, moderation, ntdf_token, platform_proxy,
+};
 use opentdf_kas::{
     compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek, NanoTdfVersion,
 };
@@ -89,6 +91,17 @@ impl NatsConnection {
     }
     async fn get_client(&self) -> Option<async_nats::Client> {
         self.client.lock().await.clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl moderation::api::Notifier for NatsConnection {
+    async fn publish(&self, subject: String, payload: Vec<u8>) -> Result<(), String> {
+        let client = self.get_client().await.ok_or("NATS not connected")?;
+        client
+            .publish(subject, payload.into())
+            .await
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -967,6 +980,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Router::new()
     };
 
+    // Moderation intake (arkavo-rs#77) — off unless MODERATION_INTAKE=on.
+    let moderation_router = match moderation::settings_from_env()
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
+    {
+        Some(s) => {
+            let aws = aws_config::load_from_env().await;
+            let store = moderation::store::DynamoReportStore::new(
+                aws_sdk_dynamodb::Client::new(&aws),
+                s.table.clone(),
+                s.status_index.clone(),
+            );
+            if s.moderators.is_empty() {
+                warn!(
+                    "MODERATION_MODERATORS is empty: reports are accepted but no one can read them"
+                );
+            }
+            info!(
+                "Moderation intake enabled, table={}, issuer={}",
+                s.table, s.issuer
+            );
+            moderation::api::router(Arc::new(moderation::api::ModerationState {
+                store: Arc::new(store),
+                verifier: moderation::auth::SessionVerifier {
+                    issuer: s.issuer,
+                    audience: s.audience,
+                    keys: authzen::cose_keys::CoseKeyCache::new(s.cose_keys_url),
+                },
+                limiter: Arc::new(moderation::api::RedisRateLimiter {
+                    client: server_state.redis_client.clone(),
+                }),
+                notifier: nats_connection.clone(),
+                moderators: s.moderators,
+                retention_secs: s.retention_days * 86_400,
+                hourly_limit: s.hourly_limit,
+                daily_limit: s.daily_limit,
+                subject_prefix: s.subject_prefix,
+            }))
+        }
+        None => Router::new(),
+    };
+
     // Media DRM router
     let media_router = Router::new()
         .route("/media/v1/key-request", post(media_api::media_key_request))
@@ -1019,6 +1073,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(connect_router)
         .merge(authz_router)
         .merge(authzen_router)
+        .merge(moderation_router)
         .merge(media_router)
         .merge(c2pa_router)
         .layer(

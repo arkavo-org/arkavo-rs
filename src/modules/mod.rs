@@ -8,6 +8,7 @@ pub mod fairplay;
 pub mod h3;
 pub mod http_rewrap;
 pub mod media_api;
+pub mod moderation;
 pub mod ntdf_token;
 pub mod platform_proxy;
 pub mod rtmp;
