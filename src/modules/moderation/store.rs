@@ -43,7 +43,8 @@ pub trait ReportStore: Send + Sync {
 }
 
 /// DynamoDB table: hash key `report_id`; GSI (`status`, `received_at`);
-/// TTL on `expires_at`. The record itself is the JSON in `record`.
+/// TTL on `expires_at`, set only on resolved reports. The record itself is
+/// the JSON in `record`.
 pub struct DynamoReportStore {
     client: aws_sdk_dynamodb::Client,
     table: String,
@@ -62,7 +63,7 @@ impl DynamoReportStore {
     fn item(record: &ReportRecord) -> Result<HashMap<String, AttributeValue>, StoreError> {
         let json = serde_json::to_string(record)
             .map_err(|e| StoreError::Unavailable(format!("encode: {e}")))?;
-        Ok(HashMap::from([
+        let mut item = HashMap::from([
             (
                 "report_id".to_string(),
                 AttributeValue::S(record.id.clone()),
@@ -75,12 +76,12 @@ impl DynamoReportStore {
                 "received_at".to_string(),
                 AttributeValue::N(record.received_at.to_string()),
             ),
-            (
-                "expires_at".to_string(),
-                AttributeValue::N(record.expires_at.to_string()),
-            ),
             ("record".to_string(), AttributeValue::S(json)),
-        ]))
+        ]);
+        if let Some(t) = record.expires_at {
+            item.insert("expires_at".to_string(), AttributeValue::N(t.to_string()));
+        }
+        Ok(item)
     }
 
     fn record(item: &HashMap<String, AttributeValue>) -> Result<ReportRecord, StoreError> {
@@ -293,5 +294,155 @@ pub mod memory {
             });
             Ok((page, next))
         }
+    }
+}
+
+/// Runs against DynamoDB Local when `DYNAMODB_ENDPOINT` is set:
+/// `docker run --rm -p 8000:8000 amazon/dynamodb-local -jar DynamoDBLocal.jar -inMemory`, then
+/// `DYNAMODB_ENDPOINT=http://localhost:8000 AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=x
+/// AWS_SECRET_ACCESS_KEY=x cargo test --bin arks dynamodb_local -- --ignored`.
+#[cfg(test)]
+mod dynamodb_local {
+    use super::*;
+    use crate::modules::moderation::report::{Reason, ValidReport};
+    use aws_sdk_dynamodb::types::{
+        AttributeDefinition, BillingMode, GlobalSecondaryIndex, KeySchemaElement, KeyType,
+        Projection, ProjectionType, ScalarAttributeType,
+    };
+
+    const INDEX: &str = "status-received_at-index";
+
+    fn attr(name: &str, t: ScalarAttributeType) -> AttributeDefinition {
+        AttributeDefinition::builder()
+            .attribute_name(name)
+            .attribute_type(t)
+            .build()
+            .unwrap()
+    }
+
+    fn key(name: &str, t: KeyType) -> KeySchemaElement {
+        KeySchemaElement::builder()
+            .attribute_name(name)
+            .key_type(t)
+            .build()
+            .unwrap()
+    }
+
+    fn report(received_at: i64) -> ReportRecord {
+        ReportRecord::new(
+            ValidReport {
+                id: uuid::Uuid::new_v4(),
+                reasons: vec![Reason::Spam],
+                blocked_on_device: false,
+                client_timestamp: chrono::Utc::now(),
+                content_id: Some("content-1".into()),
+                creator_subject: Some("creator-a".into()),
+                app_version: None,
+                note: Some("look".into()),
+            },
+            "reporter".into(),
+            received_at,
+        )
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn dynamodb_local_store_round_trip() {
+        let endpoint = std::env::var("DYNAMODB_ENDPOINT").expect("DYNAMODB_ENDPOINT");
+        let shared = aws_config::load_from_env().await;
+        let conf = aws_sdk_dynamodb::config::Builder::from(&shared)
+            .endpoint_url(endpoint)
+            .build();
+        let client = aws_sdk_dynamodb::Client::from_conf(conf);
+        let table = format!("test-moderation-{}", uuid::Uuid::new_v4());
+        client
+            .create_table()
+            .table_name(&table)
+            .attribute_definitions(attr("report_id", ScalarAttributeType::S))
+            .attribute_definitions(attr("status", ScalarAttributeType::S))
+            .attribute_definitions(attr("received_at", ScalarAttributeType::N))
+            .key_schema(key("report_id", KeyType::Hash))
+            .global_secondary_indexes(
+                GlobalSecondaryIndex::builder()
+                    .index_name(INDEX)
+                    .key_schema(key("status", KeyType::Hash))
+                    .key_schema(key("received_at", KeyType::Range))
+                    .projection(
+                        Projection::builder()
+                            .projection_type(ProjectionType::All)
+                            .build(),
+                    )
+                    .build()
+                    .unwrap(),
+            )
+            .billing_mode(BillingMode::PayPerRequest)
+            .send()
+            .await
+            .expect("create table");
+        let store = DynamoReportStore::new(client.clone(), table.clone(), INDEX.into());
+
+        // Insert once; a second insert with the same ID returns the original.
+        let first = report(100);
+        assert_eq!(store.insert(&first).await.unwrap(), Inserted::Created);
+        let mut clash = first.clone();
+        clash.note = Some("changed".into());
+        match store.insert(&clash).await.unwrap() {
+            Inserted::Existing(e) => assert_eq!(*e, first),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(store.get(&first.id).await.unwrap(), Some(first.clone()));
+        let raw = client
+            .get_item()
+            .table_name(&table)
+            .key("report_id", AttributeValue::S(first.id.clone()))
+            .send()
+            .await
+            .unwrap();
+        assert!(!raw.item().unwrap().contains_key("expires_at"));
+
+        // Page the received queue, oldest first, through a cursor.
+        let mut ids = vec![first.id.clone()];
+        for t in [200, 300] {
+            let r = report(t);
+            ids.push(r.id.clone());
+            store.insert(&r).await.unwrap();
+        }
+        let (page1, next) = store.list(Status::Received, 2, None).await.unwrap();
+        assert_eq!(
+            page1.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
+            ids[..2]
+        );
+        let (page2, _) = store.list(Status::Received, 2, next).await.unwrap();
+        assert_eq!(page2[0].id, ids[2]);
+
+        // Conditional update: only from the expected status. Resolution sets the TTL.
+        let mut resolved = first.clone();
+        resolved.status = Status::Dismissed;
+        resolved.expires_at = Some(1_000);
+        assert_eq!(
+            store.update(&resolved, Status::Reviewing).await,
+            Err(StoreError::StatusChanged)
+        );
+        store.update(&resolved, Status::Received).await.unwrap();
+        let raw = client
+            .get_item()
+            .table_name(&table)
+            .key("report_id", AttributeValue::S(first.id.clone()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            raw.item().unwrap()["expires_at"],
+            AttributeValue::N("1000".into())
+        );
+        let (dismissed, _) = store.list(Status::Dismissed, 10, None).await.unwrap();
+        assert_eq!(dismissed.len(), 1);
+
+        client
+            .delete_table()
+            .table_name(&table)
+            .send()
+            .await
+            .unwrap();
     }
 }

@@ -245,16 +245,13 @@ pub struct ReportRecord {
     pub moderator_subject: Option<String>,
     pub resolution_note: Option<String>,
     /// Unix seconds; the store deletes the record after this (retention).
-    pub expires_at: i64,
+    /// Unset until the report is resolved, so an open report never expires.
+    #[serde(default)]
+    pub expires_at: Option<i64>,
 }
 
 impl ReportRecord {
-    pub fn new(
-        report: ValidReport,
-        reporter_subject: String,
-        received_at: i64,
-        retention_secs: i64,
-    ) -> Self {
+    pub fn new(report: ValidReport, reporter_subject: String, received_at: i64) -> Self {
         Self {
             id: report.id.to_string(),
             status: Status::Received,
@@ -273,7 +270,7 @@ impl ReportRecord {
             actions: Vec::new(),
             moderator_subject: None,
             resolution_note: None,
-            expires_at: received_at.saturating_add(retention_secs),
+            expires_at: None,
         }
     }
 
@@ -488,19 +485,14 @@ mod tests {
     }
 
     fn record() -> ReportRecord {
-        ReportRecord::new(
-            submission(ios_payload()).unwrap(),
-            "u1".into(),
-            1_000,
-            86_400,
-        )
+        ReportRecord::new(submission(ios_payload()).unwrap(), "u1".into(), 1_000)
     }
 
     #[test]
-    fn new_record_is_received_with_retention() {
+    fn new_record_is_received_and_does_not_expire() {
         let r = record();
         assert_eq!(r.status, Status::Received);
-        assert_eq!(r.expires_at, 1_000 + 86_400);
+        assert_eq!(r.expires_at, None);
         assert_eq!(r.reporter_subject, "u1");
         assert!(r.same_submission(&r.clone()));
         let mut other = r.clone();
