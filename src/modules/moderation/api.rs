@@ -662,7 +662,25 @@ mod tests {
             ],
         );
         assert_eq!(
-            call(&h.app, "POST", uri, Some(&access), p).await.0,
+            call(&h.app, "POST", uri, Some(&access), p.clone()).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        // An agent's token, marked by `arkavo_npe` with no `agent` role.
+        let agent = mint_map(
+            &sk,
+            KID,
+            vec![
+                (Cbor::Integer(1.into()), Cbor::Text(ISS.into())),
+                (Cbor::Integer(2.into()), Cbor::Text(VIEWER.into())),
+                (Cbor::Integer(3.into()), Cbor::Text("arkavo".into())),
+                (Cbor::Integer(4.into()), Cbor::Integer((now + 60).into())),
+                (Cbor::Integer(6.into()), Cbor::Integer(now.into())),
+                (Cbor::Integer(7.into()), Cbor::Bytes(vec![8; 16])),
+                (Cbor::Text("arkavo_npe".into()), Cbor::Bool(true)),
+            ],
+        );
+        assert_eq!(
+            call(&h.app, "POST", uri, Some(&agent), p).await.0,
             StatusCode::UNAUTHORIZED
         );
         assert!(h.store.records.lock().unwrap().is_empty());
