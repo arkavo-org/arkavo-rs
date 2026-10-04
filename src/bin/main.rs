@@ -104,7 +104,9 @@ impl moderation::api::Notifier for NatsConnection {
         client
             .publish(subject, payload.into())
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        // Publish only buffers; flush so Ok means the server has the event.
+        client.flush().await.map_err(|e| e.to_string())
     }
 }
 

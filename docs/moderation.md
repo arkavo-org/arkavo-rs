@@ -19,11 +19,11 @@ below returns 404.
 | Signed-out reporters | Refused (401). The product owner decided on 2026-10-02 that reporting requires sign-in (ADR-0043). |
 | Credential | `Authorization: Bearer <session CWT>`, the `identity.arkavo.net` passkey auth token that the app already sends to the KAS. It must carry `aud` `arkavo`. Service-account, agent, `client:` and OIDC access tokens (those with `scope` or `auth_time`) are refused. |
 | Reporter identity | Taken only from the token's `sub` and stored with the report. The payload has no reporter field, and unknown keys are refused. |
-| One record per report | Keyed by the report ID with a conditional put. A second report about the same recording is a new record. A resubmission of the same ID by the same account with the same content returns 200 with the original receipt. Any other reuse of an ID returns 409. |
-| Abuse limits | 10 reports per account per hour and 50 per day, counted in Redis. Over a limit returns 429 with `Retry-After`. If Redis is unreachable, the report is accepted, because losing a report is worse than accepting one more. The body is capped at 16 KiB. |
-| Retention | 365 days from receipt (`MODERATION_RETENTION_DAYS`), enforced by DynamoDB TTL on `expires_at`. |
+| One record per report | Keyed by the report ID with a conditional put. A second report about the same recording is a new record. A resubmission of the same ID by the same account with the same content returns 200 with the original receipt, before any rate limit is applied. Any other reuse of an ID returns 409. |
+| Abuse limits | 10 reports per account per hour and 50 per day, counted in Redis. Over a limit returns 429 with `Retry-After`. Only new reports are counted: a retry of a stored report, or a request that fails because the store is down, uses no quota. If Redis is unreachable, the report is accepted, because losing a report is worse than accepting one more. The body is capped at 64 KiB, which holds any note the viewer accepts. |
+| Retention | 365 days after the report is resolved (`MODERATION_RETENTION_DAYS`), enforced by DynamoDB TTL on `expires_at`. An open report never expires. |
 | Notification | NATS `moderation.reports.received`. The alert names the report and its target and carries neither the note nor the reporter. |
-| Actions | Takedown and suspend are published to NATS as `moderation.actions.takedown` and `moderation.actions.suspend` for the enforcing services (tdf-iroh-s3#17, authnz-rs#91). |
+| Actions | Takedown and suspend are published to NATS as `moderation.actions.takedown` and `moderation.actions.suspend` for the enforcing services (tdf-iroh-s3#17, authnz-rs#91). They are sent before the report is stored as actioned; if they cannot be delivered, the PATCH returns 503 and the report is unchanged. |
 
 ## Report payload (frozen contract)
 
@@ -60,7 +60,7 @@ These are the keys of the viewer's `ModerationReport.jsonPayload()` plus
 | `400 {"error"}` | Invalid payload. |
 | `401` | No valid person's session. |
 | `409` | The report ID is already used by a different report. |
-| `413` | Body over 16 KiB. |
+| `413` | Body over 64 KiB. |
 | `429` + `Retry-After` | Over the account's limit. |
 | `503` | Store or key set unavailable. Not stored; the viewer shows Failed. |
 
@@ -88,6 +88,11 @@ from `received` straight to `actioned` or `dismissed`. `actioned` and
 - A final status records `resolvedAt`, `moderatorSubject` and the optional
   `resolutionNote`.
 - A concurrent change returns 409. Read the report again and retry.
+- `actioned` publishes its action events first and stores the status only if
+  every event reached NATS. Otherwise the PATCH returns 503 and the report is
+  unchanged, so the moderator can retry. A retry after a partial failure
+  sends an action again, so the enforcing services must treat actions as
+  idempotent (keyed by `reportId` and `action`).
 
 ```sh
 curl -s -H "Authorization: Bearer $CWT" \
@@ -105,26 +110,84 @@ curl -s -X PATCH -H "Authorization: Bearer $CWT" -H 'content-type: application/j
 | `moderation.actions.takedown` | A report is actioned with `takedown` | `type`, `action`, `reportId`, `creatorSubject`, `contentId`, `moderator`, `at` |
 | `moderation.actions.suspend` | A report is actioned with `suspend` | same |
 
-`MODERATION_NATS_PREFIX` changes the `moderation` prefix. Publishing is best
-effort with a 2-second bound. The report is stored first, so the queue
-(`GET … ?status=received`) is the backstop when NATS is down. The action
-subjects are the hand-off to the enforcing services. Until they subscribe, a
-moderator must also carry out the takedown or suspension by hand.
+`MODERATION_NATS_PREFIX` changes the `moderation` prefix. Each publish is
+flushed to the NATS server within 2 seconds.
+
+- `reports.received` is best effort. The report is stored first, so the queue
+  (`GET … ?status=received`) is the backstop when NATS is down.
+- The action subjects are the hand-off to the enforcing services. A successful
+  publish means the NATS server has the event, not that a subscriber took it:
+  core NATS keeps nothing for a subscriber that is down. Until the enforcing
+  services subscribe, a moderator must also carry out the takedown or
+  suspension by hand.
 
 ## Storage
 
-The table is DynamoDB `prod-moderation-reports`. It is defined in
-`arkavo-org/devsecops` `lambdas/template.yaml` (`ModerationReportsTable`).
+The table is DynamoDB `prod-moderation-reports` in `us-east-1`.
 
 | Attribute | Use |
 |---|---|
 | `report_id` (S, hash key) | Report ID |
 | `status` (S), `received_at` (N) | GSI `status-received_at-index` (projection ALL), the moderator queue |
-| `expires_at` (N) | TTL (retention) |
+| `expires_at` (N) | TTL (retention); written only when the report is resolved |
 | `record` (S) | The full record as JSON |
 
+### Create the table
+
+Production tables are created with the CLI, as in authnz-rs
+`docs/app-attest-gate-deployment.md`; nothing in `devsecops` provisions this
+one.
+
+```sh
+aws dynamodb create-table \
+    --region us-east-1 \
+    --table-name prod-moderation-reports \
+    --attribute-definitions \
+        AttributeName=report_id,AttributeType=S \
+        AttributeName=status,AttributeType=S \
+        AttributeName=received_at,AttributeType=N \
+    --key-schema AttributeName=report_id,KeyType=HASH \
+    --global-secondary-indexes \
+        'IndexName=status-received_at-index,KeySchema=[{AttributeName=status,KeyType=HASH},{AttributeName=received_at,KeyType=RANGE}],Projection={ProjectionType=ALL}' \
+    --billing-mode PAY_PER_REQUEST \
+    --sse-specification Enabled=true
+aws dynamodb wait table-exists --region us-east-1 --table-name prod-moderation-reports
+
+# Retention.
+aws dynamodb update-time-to-live --region us-east-1 \
+    --table-name prod-moderation-reports \
+    --time-to-live-specification Enabled=true,AttributeName=expires_at
+
+# Point-in-time recovery is off by default. These records are the evidence of
+# timely responses, so turn it on.
+aws dynamodb update-continuous-backups --region us-east-1 \
+    --table-name prod-moderation-reports \
+    --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true
+```
+
+### Credentials
+
 The arks host needs `dynamodb:PutItem`, `GetItem` and `Query` on the table and
-its index. It uses the default AWS credential chain, as the S3 client does.
+its index:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:Query"],
+    "Resource": [
+      "arn:aws:dynamodb:us-east-1:<account-id>:table/prod-moderation-reports",
+      "arn:aws:dynamodb:us-east-1:<account-id>:table/prod-moderation-reports/index/*"
+    ]
+  }]
+}
+```
+
+arks uses the default AWS credential chain, as the S3 client does. It runs
+under `sudo start.sh`, so check which credentials that chain finds there
+(`sudo sh -c 'echo $HOME'`), and prefer a dedicated IAM user's keys exported in
+`production/start.sh` over SSO credentials, which expire.
 
 ## Configuration
 
@@ -155,5 +218,6 @@ Each stored report holds:
 
 It holds no IP address, device identifier or token. Rate-limit counters hold
 the account ID in Redis for at most a day. Records are deleted 365 days after
-receipt. The App Privacy label (arkavo-ios ARK-388) and the privacy policy
+resolution, and an open report is kept until it is resolved. The App Privacy
+label (arkavo-ios ARK-388) and the privacy policy
 should describe this data.

@@ -24,8 +24,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// A report is a few hundred bytes; the note bound keeps it under 8 KiB.
-const MAX_BODY_BYTES: usize = 16 * 1024;
+/// The note is bounded in grapheme clusters, not bytes: 1,000 ZWJ family
+/// emoji are about 25 KB. This leaves room for any note the viewer accepts.
+const MAX_BODY_BYTES: usize = 64 * 1024;
 const DEFAULT_PAGE: usize = 50;
 const MAX_PAGE: usize = 100;
 const NOTIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
@@ -107,6 +108,7 @@ pub struct ModerationState {
     pub limiter: Arc<dyn RateLimiter>,
     pub notifier: Arc<dyn Notifier>,
     pub moderators: HashSet<String>,
+    /// Kept this long after a report is resolved.
     pub retention_secs: i64,
     /// Reports per account per hour; 0 disables.
     pub hourly_limit: u64,
@@ -190,16 +192,24 @@ impl ModerationState {
         Ok(())
     }
 
-    async fn publish(&self, suffix: &str, payload: Value) {
+    /// Publish within `NOTIFY_TIMEOUT`, so a stalled bus cannot hold the reply.
+    async fn try_publish(&self, suffix: &str, payload: Value) -> Result<(), String> {
         let subject = format!("{}.{}", self.subject_prefix, suffix);
         let publish = self
             .notifier
             .publish(subject.clone(), payload.to_string().into_bytes());
-        // The report is already stored; a stalled bus must not hold the reply.
         match tokio::time::timeout(NOTIFY_TIMEOUT, publish).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => error!("moderation notify to {subject} failed: {e}"),
-            Err(_) => error!("moderation notify to {subject} timed out"),
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(format!("notify to {subject} failed: {e}")),
+            Err(_) => Err(format!("notify to {subject} timed out")),
+        }
+    }
+
+    /// For alerts about a report that is already stored: a failure is logged,
+    /// and the report stays in the `received` queue.
+    async fn publish(&self, suffix: &str, payload: Value) {
+        if let Err(e) = self.try_publish(suffix, payload).await {
+            error!("moderation {e}");
         }
     }
 
@@ -222,9 +232,12 @@ impl ModerationState {
 
     /// One event per action, for the services that enforce it
     /// (tdf-iroh-s3#17 takedown and suspension, authnz-rs#91 entitlement).
-    async fn notify_actions(&self, r: &ReportRecord) {
+    /// Sent before the report is stored as actioned: if delivery fails the
+    /// report is unchanged and the moderator can retry. A retry after a
+    /// partial failure sends an action again, so enforcers must be idempotent.
+    async fn deliver_actions(&self, r: &ReportRecord) -> Result<(), String> {
         for action in &r.actions {
-            self.publish(
+            self.try_publish(
                 &format!("actions.{}", action.as_str()),
                 json!({
                     "type": "report.action",
@@ -236,8 +249,9 @@ impl ModerationState {
                     "at": r.resolved_at.map(rfc3339),
                 }),
             )
-            .await;
+            .await?;
         }
+        Ok(())
     }
 
     async fn moderator(&self, headers: &HeaderMap) -> Result<String, AuthError> {
@@ -268,13 +282,24 @@ pub async fn submit_report(
         Err(e) => return invalid(e),
     };
     let now = chrono::Utc::now().timestamp();
-    if let Err(retry_after) = state.within_limits(&reporter, now).await {
+    let record = ReportRecord::new(report, reporter, now);
+    // A retry of a stored report is answered before the rate limit, so it
+    // neither uses quota nor gets 429. A store outage fails here, before any
+    // quota is used.
+    match state.store.get(&record.id).await {
+        Ok(Some(existing)) if existing.same_submission(&record) => {
+            return (StatusCode::OK, Json(receipt(&existing))).into_response();
+        }
+        Ok(Some(_)) => return err_json(StatusCode::CONFLICT, "report id already used"),
+        Ok(None) => {}
+        Err(e) => return store_fail(e),
+    }
+    if let Err(retry_after) = state.within_limits(&record.reporter_subject, now).await {
         let mut res = err_json(StatusCode::TOO_MANY_REQUESTS, "too many reports");
         res.headers_mut()
             .insert(header::RETRY_AFTER, HeaderValue::from(retry_after));
         return res;
     }
-    let record = ReportRecord::new(report, reporter, now, state.retention_secs);
     match state.store.insert(&record).await {
         Ok(Inserted::Created) => {
             info!("moderation report received: {}", record.id);
@@ -301,9 +326,14 @@ fn encode_cursor(c: &Cursor) -> String {
     URL_SAFE_NO_PAD.encode(serde_json::to_vec(c).unwrap_or_default())
 }
 
+/// A cursor is only ever one this server issued: a stored report ID (the
+/// canonical UUID) and a receive time. Anything else is the client's error,
+/// not the store's.
 fn decode_cursor(s: &str) -> Option<Cursor> {
     let bytes = URL_SAFE_NO_PAD.decode(s).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    let c: Cursor = serde_json::from_slice(&bytes).ok()?;
+    let canonical = report_key(&c.id)?;
+    (canonical == c.id && c.received_at >= 0).then_some(c)
 }
 
 pub async fn list_reports(
@@ -384,11 +414,22 @@ pub async fn update_report(
         Ok(None) => return err_json(StatusCode::NOT_FOUND, "no such report"),
         Err(e) => return store_fail(e),
     };
-    let next = match update.apply(&current, &moderator, chrono::Utc::now().timestamp()) {
+    let now = chrono::Utc::now().timestamp();
+    let mut next = match update.apply(&current, &moderator, now) {
         Ok(n) => n,
         Err(e) if current.status.is_terminal() => return err_json(StatusCode::CONFLICT, e.0),
         Err(e) => return invalid(e),
     };
+    if next.status.is_terminal() {
+        next.expires_at = Some(now.saturating_add(state.retention_secs));
+    }
+    if let Err(e) = state.deliver_actions(&next).await {
+        error!("moderation report {}: {e}; report left unchanged", next.id);
+        return err_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "action not delivered; the report is unchanged, try again",
+        );
+    }
     if let Err(e) = state.store.update(&next, current.status).await {
         return store_fail(e);
     }
@@ -398,7 +439,6 @@ pub async fn update_report(
         current.status.as_str(),
         next.status.as_str()
     );
-    state.notify_actions(&next).await;
     Json(next).into_response()
 }
 
@@ -421,12 +461,16 @@ mod tests {
     const MODERATOR: &str = "22222222-2222-2222-2222-222222222222";
     const REPORT_ID: &str = "6F9619FF-8B86-D011-B42D-00C04FC964FF";
 
+    /// Published events, and whether the bus is down.
     #[derive(Default)]
-    struct Recorder(Mutex<Vec<(String, Value)>>);
+    struct Recorder(Mutex<Vec<(String, Value)>>, Mutex<bool>);
 
     #[async_trait]
     impl Notifier for Recorder {
         async fn publish(&self, subject: String, payload: Vec<u8>) -> Result<(), String> {
+            if *self.1.lock().unwrap() {
+                return Err("bus down".into());
+            }
             let v = serde_json::from_slice(&payload).unwrap();
             self.0.lock().unwrap().push((subject, v));
             Ok(())
@@ -946,5 +990,129 @@ mod tests {
                 StatusCode::NOT_FOUND
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_retry_at_the_limit_still_gets_its_receipt() {
+        let h = harness(1);
+        assert_eq!(submit(&h, VIEWER, REPORT_ID).await.0, StatusCode::CREATED);
+        // The first reply was lost; the viewer, now at the limit, retries.
+        let (status, _, body) = submit(&h, VIEWER, REPORT_ID).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["id"], REPORT_ID.to_lowercase());
+        // Only the first submission was counted.
+        assert!(h.limiter.0.lock().unwrap().values().all(|&n| n == 1));
+    }
+
+    #[tokio::test]
+    async fn a_store_outage_uses_no_quota() {
+        let h = harness(1);
+        *h.store.fail.lock().unwrap() = true;
+        for _ in 0..3 {
+            assert_eq!(
+                submit(&h, VIEWER, REPORT_ID).await.0,
+                StatusCode::SERVICE_UNAVAILABLE
+            );
+        }
+        *h.store.fail.lock().unwrap() = false;
+        assert_eq!(submit(&h, VIEWER, REPORT_ID).await.0, StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn a_forged_cursor_is_a_bad_request() {
+        let h = harness(20);
+        let m = token(MODERATOR);
+        for c in [
+            json!({"id": "", "received_at": 1}),
+            json!({"id": "not-a-uuid", "received_at": 1}),
+            json!({"id": REPORT_ID, "received_at": 1}), // not the stored (lowercase) form
+            json!({"id": REPORT_ID.to_lowercase(), "received_at": -1}),
+        ] {
+            let cursor = URL_SAFE_NO_PAD.encode(c.to_string());
+            let (status, _, _) = call(
+                &h.app,
+                "GET",
+                &format!("/moderation/v1/reports?cursor={cursor}"),
+                Some(&m),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{c}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_note_of_1000_family_emoji_fits_the_body_limit() {
+        let h = harness(20);
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}";
+        let mut p = payload(REPORT_ID);
+        p["note"] = json!(family.repeat(1_000));
+        let (status, _, _) = call(
+            &h.app,
+            "POST",
+            "/moderation/v1/reports",
+            Some(&token(VIEWER)),
+            Some(p),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn an_undelivered_action_leaves_the_report_open_for_a_retry() {
+        let h = harness(20);
+        submit(&h, VIEWER, REPORT_ID).await;
+        let id = REPORT_ID.to_lowercase();
+        let uri = format!("/moderation/v1/reports/{id}");
+        let m = token(MODERATOR);
+        let action = json!({"status": "actioned", "actions": ["takedown"]});
+
+        *h.notes.1.lock().unwrap() = true;
+        let (status, _, _) = call(&h.app, "PATCH", &uri, Some(&m), Some(action.clone())).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let stored = h.store.records.lock().unwrap()[&id].clone();
+        assert_eq!(stored.status, Status::Received);
+
+        *h.notes.1.lock().unwrap() = false;
+        let (status, _, body) = call(&h.app, "PATCH", &uri, Some(&m), Some(action)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "actioned");
+        assert!(h
+            .notes
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|n| n.0 == "moderation.actions.takedown"));
+    }
+
+    #[tokio::test]
+    async fn retention_starts_when_a_report_is_resolved() {
+        let h = harness(20);
+        submit(&h, VIEWER, REPORT_ID).await;
+        let id = REPORT_ID.to_lowercase();
+        assert_eq!(h.store.records.lock().unwrap()[&id].expires_at, None);
+        let uri = format!("/moderation/v1/reports/{id}");
+        let m = token(MODERATOR);
+        call(
+            &h.app,
+            "PATCH",
+            &uri,
+            Some(&m),
+            Some(json!({"status": "reviewing"})),
+        )
+        .await;
+        assert_eq!(h.store.records.lock().unwrap()[&id].expires_at, None);
+        let (status, _, body) = call(
+            &h.app,
+            "PATCH",
+            &uri,
+            Some(&m),
+            Some(json!({"status": "dismissed"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let resolved = body["resolvedAt"].as_i64().unwrap();
+        assert_eq!(body["expiresAt"].as_i64(), Some(resolved + 365 * 86_400));
     }
 }
