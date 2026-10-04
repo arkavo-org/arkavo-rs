@@ -39,6 +39,10 @@ pub struct DecodedClaims {
     pub arkavo_entitlements: Option<Vec<String>>,
     pub client_id: Option<String>,
     pub arkavo_patreon: Option<Value>,
+    /// OIDC access tokens carry `scope`; a passkey auth CWT never does.
+    pub scope: Option<String>,
+    /// OIDC access tokens carry `auth_time`; a passkey auth CWT never does.
+    pub auth_time: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,6 +336,8 @@ mod tests {
             arkavo_entitlements: None,
             client_id: None,
             arkavo_patreon: None,
+            scope: None,
+            auth_time: None,
         }
     }
 

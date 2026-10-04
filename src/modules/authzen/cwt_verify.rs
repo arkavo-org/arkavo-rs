@@ -162,6 +162,8 @@ fn parse_claims(payload: &[u8]) -> Result<DecodedClaims, VerifyError> {
     let mut arkavo_entitlements = None;
     let mut client_id = None;
     let mut arkavo_patreon = None;
+    let mut scope = None;
+    let mut auth_time = None;
     for (k, v) in entries {
         let key_id = match &k {
             Value::Integer(i) => format!("i:{}", i128::from(*i)),
@@ -216,6 +218,16 @@ fn parse_claims(payload: &[u8]) -> Result<DecodedClaims, VerifyError> {
                 ("arkavo_patreon", m @ Value::Map(_)) => {
                     arkavo_patreon = Some(cbor_to_json(&m));
                 }
+                // Presence is what matters, so a non-text `scope` still counts.
+                ("scope", v) => {
+                    scope = Some(match v {
+                        Value::Text(s) => s,
+                        _ => String::new(),
+                    })
+                }
+                ("auth_time", ref v) => {
+                    auth_time = Some(numeric_date(v).ok_or(VerifyError::Malformed)?);
+                }
                 _ => {}
             },
             _ => {}
@@ -250,6 +262,8 @@ fn parse_claims(payload: &[u8]) -> Result<DecodedClaims, VerifyError> {
         arkavo_entitlements,
         client_id,
         arkavo_patreon,
+        scope,
+        auth_time,
     })
 }
 

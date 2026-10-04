@@ -258,6 +258,11 @@ export NTDF_EXPECTED_AUDIENCE=https://platform.arkavo.net  # Exact-match `aud` o
 
 # HTTP/3 (requires --features http3)
 export H3_BIND_HOST=0.0.0.0                            # QUIC bind address; pin to the public interface on a multi-homed host
+
+# Moderation intake (arkavo-rs#77) — see docs/moderation.md for the rest
+export MODERATION_INTAKE=on                            # off (default) | on
+export MODERATION_REPORTS_TABLE=prod-moderation-reports  # DynamoDB table, required when on
+export MODERATION_MODERATORS=<account-uuid>,...        # accounts that may read and respond to reports
 ```
 
 **Note:** For RSA key support (Standard TDF / OpenTDFKit compatibility):
@@ -332,6 +337,7 @@ Generated files are in `src/bin/schemas/`.
 - `src/modules/media_api.rs` - Media DRM-specific API endpoints
 - `src/modules/fairplay.rs` - FairPlay Streaming integration (optional feature)
 - `src/modules/crypto.rs` - Cryptographic primitives
+- `src/modules/moderation/` - Report intake, moderator queue and actions (DynamoDB + NATS); see `docs/moderation.md`
 - `vendor/fpssdk/` - Apple FairPlay SDK Rust module (optional)
 - `crates/fairplay-wrapper/` - Safe Rust wrapper for FairPlay SDK (optional)
 - `docs/c2pa_video_drm.md` - C2PA + TDF3 integration documentation
@@ -354,6 +360,10 @@ The server implements a TDF3-based DRM system for HLS/DASH streaming media. Each
 - `POST /c2pa/v1/sign` - Sign C2PA manifest with pre-computed hash
 - `POST /c2pa/v1/validate` - Validate C2PA manifest
 (See `docs/c2pa_video_drm.md` for detailed API documentation)
+
+**Moderation Endpoints** (`MODERATION_INTAKE=on`, see `docs/moderation.md`):
+- `POST /moderation/v1/reports` - Signed-in viewer files a report (session CWT bearer)
+- `GET /moderation/v1/reports` / `GET|PATCH /moderation/v1/reports/:id` - Moderator queue and response
 
 **Media DRM Endpoints:**
 - `POST /media/v1/session/start` - Initialize playback session
