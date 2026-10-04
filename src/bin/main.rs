@@ -1,3 +1,6 @@
+// clippy 1.99 flags `clone_on_copy` inside the `#[ink::contract]` expansion
+// (`AccountId` became `Copy`); the code is macro-generated, not ours.
+#[allow(clippy::clone_on_copy)]
 mod contracts;
 mod schemas;
 
