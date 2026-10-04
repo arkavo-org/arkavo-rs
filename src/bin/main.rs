@@ -1007,9 +1007,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     audience: s.audience,
                     keys: authzen::cose_keys::CoseKeyCache::new(s.cose_keys_url),
                 },
-                limiter: Arc::new(moderation::api::RedisRateLimiter {
-                    client: server_state.redis_client.clone(),
-                }),
+                limiter: Arc::new(moderation::api::RedisRateLimiter::new(
+                    server_state.redis_client.clone(),
+                )),
                 notifier: nats_connection.clone(),
                 moderators: s.moderators,
                 retention_secs: s.retention_days * 86_400,

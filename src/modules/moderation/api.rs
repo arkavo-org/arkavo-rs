@@ -29,6 +29,8 @@ const MAX_BODY_BYTES: usize = 16 * 1024;
 const DEFAULT_PAGE: usize = 50;
 const MAX_PAGE: usize = 100;
 const NOTIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+/// A limiter slower than this is treated as unavailable, so the report goes through.
+const LIMITER_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Where moderator notifications and action events go (NATS in production).
 #[async_trait]
@@ -43,19 +45,41 @@ pub trait RateLimiter: Send + Sync {
 }
 
 pub struct RedisRateLimiter {
-    pub client: redis::Client,
+    client: redis::Client,
+    /// One multiplexed connection shared by all reports; dropped on error so
+    /// the next report reconnects.
+    conn: tokio::sync::Mutex<Option<redis::aio::MultiplexedConnection>>,
+}
+
+impl RedisRateLimiter {
+    pub fn new(client: redis::Client) -> Self {
+        Self {
+            client,
+            conn: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    async fn connection(&self) -> Result<redis::aio::MultiplexedConnection, String> {
+        let mut cached = self.conn.lock().await;
+        if let Some(c) = cached.as_ref() {
+            return Ok(c.clone());
+        }
+        let c = self
+            .client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|e| e.to_string())?;
+        *cached = Some(c.clone());
+        Ok(c)
+    }
 }
 
 #[async_trait]
 impl RateLimiter for RedisRateLimiter {
     async fn hit(&self, key: &str, window_secs: u64) -> Result<u64, String> {
-        let mut conn = self
-            .client
-            .get_multiplexed_async_connection()
-            .await
-            .map_err(|e| e.to_string())?;
+        let mut conn = self.connection().await?;
         // SET NX EX then INCR, atomically: the key always carries an expiry.
-        let (count,): (u64,) = redis::pipe()
+        let result: redis::RedisResult<(u64,)> = redis::pipe()
             .atomic()
             .cmd("SET")
             .arg(key)
@@ -66,9 +90,14 @@ impl RateLimiter for RedisRateLimiter {
             .ignore()
             .incr(key, 1)
             .query_async(&mut conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(count)
+            .await;
+        match result {
+            Ok((count,)) => Ok(count),
+            Err(e) => {
+                *self.conn.lock().await = None;
+                Err(e.to_string())
+            }
+        }
     }
 }
 
@@ -151,10 +180,11 @@ impl ModerationState {
             }
             let bucket = now as u64 / window;
             let key = format!("moderation:rl:{window}:{reporter}:{bucket}");
-            match self.limiter.hit(&key, window).await {
-                Ok(n) if n > limit => return Err(window - (now as u64 % window)),
-                Ok(_) => {}
-                Err(e) => warn!("moderation rate limiter unavailable, allowing: {e}"),
+            match tokio::time::timeout(LIMITER_TIMEOUT, self.limiter.hit(&key, window)).await {
+                Ok(Ok(n)) if n > limit => return Err(window - (now as u64 % window)),
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => warn!("moderation rate limiter unavailable, allowing: {e}"),
+                Err(_) => warn!("moderation rate limiter timed out, allowing"),
             }
         }
         Ok(())
@@ -404,13 +434,16 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct Counter(Mutex<HashMap<String, u64>>, Mutex<bool>);
+    struct Counter(Mutex<HashMap<String, u64>>, Mutex<bool>, Mutex<bool>);
 
     #[async_trait]
     impl RateLimiter for Counter {
         async fn hit(&self, key: &str, _window: u64) -> Result<u64, String> {
             if *self.1.lock().unwrap() {
                 return Err("down".into());
+            }
+            if *self.2.lock().unwrap() {
+                std::future::pending::<()>().await;
             }
             let mut m = self.0.lock().unwrap();
             let n = m.entry(key.to_string()).or_default();
@@ -707,6 +740,16 @@ mod tests {
             let id = Uuid::new_v4().to_string();
             assert_eq!(submit(&h, VIEWER, &id).await.0, StatusCode::CREATED);
         }
+    }
+
+    #[tokio::test]
+    async fn a_hung_limiter_lets_reports_through_in_bounded_time() {
+        let h = harness(1);
+        *h.limiter.2.lock().unwrap() = true;
+        let started = std::time::Instant::now();
+        assert_eq!(submit(&h, VIEWER, REPORT_ID).await.0, StatusCode::CREATED);
+        // Two windows, each bounded by LIMITER_TIMEOUT.
+        assert!(started.elapsed() < LIMITER_TIMEOUT * 3);
     }
 
     #[tokio::test]
