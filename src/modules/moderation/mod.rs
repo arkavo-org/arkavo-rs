@@ -22,6 +22,10 @@ pub struct Settings {
     pub hourly_limit: u64,
     pub daily_limit: u64,
     pub subject_prefix: String,
+    /// DynamoDB endpoint override, e.g. a DynamoDB Local container. When
+    /// set, the moderation client uses it with static placeholder
+    /// credentials, leaving the process's AWS credentials (S3) untouched.
+    pub dynamodb_endpoint: Option<String>,
 }
 
 pub const DEFAULT_STATUS_INDEX: &str = "status-received_at-index";
@@ -68,6 +72,7 @@ pub fn settings_from(get: impl Fn(&str) -> Option<String>) -> Result<Option<Sett
         hourly_limit: number("MODERATION_RATE_LIMIT_HOURLY", 10)? as u64,
         daily_limit: number("MODERATION_RATE_LIMIT_DAILY", 50)? as u64,
         subject_prefix: get("MODERATION_NATS_PREFIX").unwrap_or_else(|| "moderation".into()),
+        dynamodb_endpoint: get("MODERATION_DYNAMODB_ENDPOINT"),
     }))
 }
 
@@ -117,6 +122,22 @@ mod tests {
         assert_eq!(s.retention_days, 365);
         assert_eq!((s.hourly_limit, s.daily_limit), (10, 50));
         assert_eq!(s.subject_prefix, "moderation");
+        assert_eq!(s.dynamodb_endpoint, None);
+    }
+
+    #[test]
+    fn a_local_dynamodb_endpoint_can_be_set() {
+        let s = settings(&[
+            ("MODERATION_INTAKE", "on"),
+            ("MODERATION_REPORTS_TABLE", "prod-moderation-reports"),
+            ("MODERATION_DYNAMODB_ENDPOINT", "http://127.0.0.1:8000"),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            s.dynamodb_endpoint.as_deref(),
+            Some("http://127.0.0.1:8000")
+        );
     }
 
     #[test]
