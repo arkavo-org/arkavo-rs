@@ -132,7 +132,41 @@ The table is DynamoDB `prod-moderation-reports` in `us-east-1`.
 | `expires_at` (N) | TTL (retention); written only when the report is resolved |
 | `record` (S) | The full record as JSON |
 
-### Create the table
+### On this server: DynamoDB Local
+
+Production on the Arkavo server runs the table in a DynamoDB Local container, not in AWS. arks then needs no AWS credentials for moderation. `MODERATION_DYNAMODB_ENDPOINT` points only the moderation client at the container, with fixed placeholder credentials, so the S3 client's AWS credentials are not affected.
+
+```sh
+docker volume create arks-dynamodb-data
+# DynamoDB Local runs as uid 1000; a fresh named volume is root-owned.
+docker run --rm -v arks-dynamodb-data:/d alpine chown 1000:1000 /d
+docker run -d --name arks-dynamodb --restart unless-stopped \
+    -p 127.0.0.1:8000:8000 -v arks-dynamodb-data:/home/dynamodblocal/data \
+    -w /home/dynamodblocal amazon/dynamodb-local \
+    -jar DynamoDBLocal.jar -sharedDb -dbPath ./data
+
+# The container listens on 127.0.0.1 only. Reach it from the CLI through its
+# network namespace.
+alias ddb='docker run --rm --network container:arks-dynamodb \
+    -e AWS_ACCESS_KEY_ID=local -e AWS_SECRET_ACCESS_KEY=local amazon/aws-cli \
+    --endpoint-url http://127.0.0.1:8000 --region us-east-1'
+ddb dynamodb create-table --table-name prod-moderation-reports \
+    --attribute-definitions AttributeName=report_id,AttributeType=S \
+        AttributeName=status,AttributeType=S AttributeName=received_at,AttributeType=N \
+    --key-schema AttributeName=report_id,KeyType=HASH \
+    --global-secondary-indexes 'IndexName=status-received_at-index,KeySchema=[{AttributeName=status,KeyType=HASH},{AttributeName=received_at,KeyType=RANGE}],Projection={ProjectionType=ALL}' \
+    --billing-mode PAY_PER_REQUEST
+ddb dynamodb update-time-to-live --table-name prod-moderation-reports \
+    --time-to-live-specification Enabled=true,AttributeName=expires_at
+```
+
+What DynamoDB Local does not give you:
+
+- **Backups.** There is no point-in-time recovery. The data is one SQLite file in the `arks-dynamodb-data` volume. Back it up, for example nightly with `docker run --rm -v arks-dynamodb-data:/d -v "$PWD":/b alpine tar czf /b/arks-dynamodb-$(date +%F).tgz -C /d .`. These records are the evidence of timely responses.
+- **Availability while Docker is down.** The container restarts with Docker, so Docker Desktop must start at login. While it is down, intake returns 503.
+- **A service AWS supports for production use.** AWS supports DynamoDB Local for development only. To move to AWS later, use the next section and unset `MODERATION_DYNAMODB_ENDPOINT`.
+
+### Create the table (AWS)
 
 Production tables are created with the CLI, as in authnz-rs
 `docs/app-attest-gate-deployment.md`; nothing in `devsecops` provisions this
@@ -204,6 +238,7 @@ MODERATION_RATE_LIMIT_HOURLY=10                   # 0 disables
 MODERATION_RATE_LIMIT_DAILY=50                    # 0 disables
 MODERATION_NATS_PREFIX=moderation
 AWS_REGION=us-east-1                              # for DynamoDB, if not already set
+MODERATION_DYNAMODB_ENDPOINT=http://127.0.0.1:8000 # optional: DynamoDB Local instead of AWS
 ```
 
 ## Privacy

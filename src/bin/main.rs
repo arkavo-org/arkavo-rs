@@ -990,9 +990,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
     {
         Some(s) => {
-            let aws = aws_config::load_from_env().await;
+            let dynamodb = match &s.dynamodb_endpoint {
+                // DynamoDB Local ignores credentials but the SDK signs
+                // every request, so give it fixed placeholders here rather
+                // than in the process environment, where S3 would pick
+                // them up.
+                Some(endpoint) => {
+                    info!("Moderation store: DynamoDB at {endpoint}");
+                    let conf = aws_sdk_dynamodb::config::Builder::new()
+                        .behavior_version(aws_sdk_dynamodb::config::BehaviorVersion::latest())
+                        .region(aws_sdk_dynamodb::config::Region::new("us-east-1"))
+                        .endpoint_url(endpoint)
+                        .credentials_provider(aws_sdk_dynamodb::config::Credentials::new(
+                            "local",
+                            "local",
+                            None,
+                            None,
+                            "moderation-local",
+                        ))
+                        .build();
+                    aws_sdk_dynamodb::Client::from_conf(conf)
+                }
+                None => aws_sdk_dynamodb::Client::new(&aws_config::load_from_env().await),
+            };
             let store = moderation::store::DynamoReportStore::new(
-                aws_sdk_dynamodb::Client::new(&aws),
+                dynamodb,
                 s.table.clone(),
                 s.status_index.clone(),
             );

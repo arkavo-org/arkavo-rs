@@ -263,6 +263,7 @@ export H3_BIND_HOST=0.0.0.0                            # QUIC bind address; pin 
 export MODERATION_INTAKE=on                            # off (default) | on
 export MODERATION_REPORTS_TABLE=prod-moderation-reports  # DynamoDB table, required when on
 export MODERATION_MODERATORS=<account-uuid>,...        # accounts that may read and respond to reports
+export MODERATION_DYNAMODB_ENDPOINT=http://127.0.0.1:8000  # optional: DynamoDB Local container (see docs/moderation.md)
 ```
 
 **Note:** For RSA key support (Standard TDF / OpenTDFKit compatibility):
