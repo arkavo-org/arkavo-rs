@@ -7,10 +7,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::{Body, Bytes};
-use axum::extract::{Request, State};
+use axum::extract::{Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderName, StatusCode};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 /// Which arks routes get forwarded to opentdf-platform.
@@ -21,6 +23,8 @@ pub enum ProxyMode {
     /// Forward only ConnectRPC routes (`/kas.AccessService/*`).
     Connect,
     /// Forward only legacy REST routes (`/kas/v2/rewrap`, `/kas/v2/kas_public_key`).
+    /// The platform has no REST public-key route, so `/kas/v2/kas_public_key`
+    /// is translated to ConnectRPC `PublicKey` (see [`kas_public_key`]).
     Rest,
     /// Forward both Connect and REST routes.
     Both,
@@ -174,6 +178,133 @@ pub(crate) fn strip_proxy_headers(headers: &mut HeaderMap) {
         headers.remove(h);
     }
     headers.remove(HeaderName::from_static("keep-alive"));
+}
+
+/// Query parameters of the OpenTDF REST `GET /kas/v2/kas_public_key`.
+#[derive(Debug, Default, Deserialize)]
+pub struct PublicKeyQuery {
+    pub algorithm: Option<String>,
+    pub fmt: Option<String>,
+    pub v: Option<String>,
+}
+
+/// Body of ConnectRPC `kas.AccessService/PublicKey`, in its JSON encoding.
+#[derive(Debug, Serialize)]
+struct ConnectPublicKeyRequest {
+    algorithm: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fmt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    v: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConnectPublicKeyResponse {
+    #[serde(rename = "publicKey")]
+    public_key: String,
+    #[serde(default)]
+    kid: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConnectError {
+    code: String,
+    #[serde(default)]
+    message: String,
+}
+
+/// REST response shape (same as the local `http_rewrap` handler).
+#[derive(Debug, Serialize)]
+struct PublicKeyResponse {
+    public_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kid: Option<String>,
+}
+
+/// Expand the short algorithm names the local handler accepts. No algorithm
+/// means EC, as it always has on this host; the platform's own default is RSA.
+fn platform_algorithm(algorithm: Option<&str>) -> String {
+    match algorithm {
+        None | Some("") | Some("ec") => "ec:secp256r1".to_string(),
+        Some("rsa") => "rsa:2048".to_string(),
+        Some(other) => other.to_string(),
+    }
+}
+
+fn error_response(status: StatusCode, error: &str, message: String) -> Response {
+    let body = serde_json::json!({ "error": error, "message": message });
+    (status, Json(body)).into_response()
+}
+
+/// Serve `GET /kas/v2/kas_public_key` from the platform's keyring.
+///
+/// The platform answers 401 to its REST paths without a token, but its
+/// ConnectRPC `PublicKey` is public, so the REST query is sent there and the
+/// answer is converted back to the REST shape. Key and `kid` both come from
+/// the platform.
+pub async fn kas_public_key(
+    State(state): State<Arc<PlatformProxyState>>,
+    Query(params): Query<PublicKeyQuery>,
+) -> Response {
+    let url = format!("{}/kas.AccessService/PublicKey", state.upstream_base);
+    let body = ConnectPublicKeyRequest {
+        algorithm: platform_algorithm(params.algorithm.as_deref()),
+        fmt: params.fmt,
+        v: params.v,
+    };
+
+    let upstream_resp = match state.client.post(&url).json(&body).send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            log::warn!("kas_public_key upstream error: {e}");
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "unavailable",
+                "KAS platform unreachable".to_string(),
+            );
+        }
+    };
+
+    let status = upstream_resp.status();
+    let bytes = match upstream_resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("kas_public_key upstream body read error: {e}");
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "unavailable",
+                "KAS platform response unreadable".to_string(),
+            );
+        }
+    };
+
+    if !status.is_success() {
+        let (error, message) = match serde_json::from_slice::<ConnectError>(&bytes) {
+            Ok(e) => (e.code, e.message),
+            Err(_) => (
+                "unknown".to_string(),
+                String::from_utf8_lossy(&bytes).into(),
+            ),
+        };
+        let status = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+        return error_response(status, &error, message);
+    }
+
+    match serde_json::from_slice::<ConnectPublicKeyResponse>(&bytes) {
+        Ok(r) => Json(PublicKeyResponse {
+            public_key: r.public_key,
+            kid: r.kid.filter(|k| !k.is_empty()),
+        })
+        .into_response(),
+        Err(e) => {
+            log::warn!("kas_public_key upstream response not understood: {e}");
+            error_response(
+                StatusCode::BAD_GATEWAY,
+                "unavailable",
+                "unexpected KAS platform response".to_string(),
+            )
+        }
+    }
 }
 
 #[cfg(test)]
@@ -464,6 +595,120 @@ mod integration_tests {
             .unwrap();
 
         assert_eq!(resp.status(), 502);
+    }
+
+    async fn spawn_public_key_proxy(upstream: &str) -> String {
+        let state = PlatformProxyState::new(upstream).expect("valid upstream URL");
+        let app = Router::new()
+            .route("/kas/v2/kas_public_key", axum::routing::get(kas_public_key))
+            .with_state(state);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    async fn get_json(url: String) -> (u16, serde_json::Value) {
+        let resp = Client::new().get(url).send().await.unwrap();
+        (resp.status().as_u16(), resp.json().await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn public_key_translates_to_connect_and_returns_platform_kid() {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/kas.AccessService/PublicKey"))
+            .and(wiremock::matchers::body_json(
+                serde_json::json!({"algorithm": "rsa:2048", "v": "2"}),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"publicKey": "rsa-pem", "kid": "r1"})),
+            )
+            .expect(1)
+            .mount(&upstream)
+            .await;
+
+        let base = spawn_public_key_proxy(&upstream.uri()).await;
+        let (status, body) = get_json(format!(
+            "{base}/kas/v2/kas_public_key?algorithm=rsa:2048&v=2"
+        ))
+        .await;
+
+        assert_eq!(status, 200);
+        assert_eq!(
+            body,
+            serde_json::json!({"public_key": "rsa-pem", "kid": "r1"})
+        );
+    }
+
+    #[tokio::test]
+    async fn public_key_defaults_to_ec_and_expands_short_names() {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/kas.AccessService/PublicKey"))
+            .and(wiremock::matchers::body_json(
+                serde_json::json!({"algorithm": "ec:secp256r1"}),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"publicKey": "ec-pem", "kid": "e1"})),
+            )
+            .expect(2)
+            .mount(&upstream)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/kas.AccessService/PublicKey"))
+            .and(wiremock::matchers::body_json(
+                serde_json::json!({"algorithm": "rsa:2048"}),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"publicKey": "rsa-pem"})),
+            )
+            .expect(1)
+            .mount(&upstream)
+            .await;
+
+        let base = spawn_public_key_proxy(&upstream.uri()).await;
+        let (_, body) = get_json(format!("{base}/kas/v2/kas_public_key")).await;
+        assert_eq!(body["kid"], "e1");
+        let (_, body) = get_json(format!("{base}/kas/v2/kas_public_key?algorithm=ec")).await;
+        assert_eq!(body["kid"], "e1");
+        // A platform response without a kid yields none.
+        let (_, body) = get_json(format!("{base}/kas/v2/kas_public_key?algorithm=rsa")).await;
+        assert_eq!(body, serde_json::json!({"public_key": "rsa-pem"}));
+    }
+
+    #[tokio::test]
+    async fn public_key_maps_connect_errors() {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/kas.AccessService/PublicKey"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(
+                serde_json::json!({"code": "not_found", "message": "no default key for algorithm"}),
+            ))
+            .mount(&upstream)
+            .await;
+
+        let base = spawn_public_key_proxy(&upstream.uri()).await;
+        let (status, body) =
+            get_json(format!("{base}/kas/v2/kas_public_key?algorithm=bogus")).await;
+
+        assert_eq!(status, 404);
+        assert_eq!(body["error"], "not_found");
+        assert_eq!(body["message"], "no default key for algorithm");
+    }
+
+    #[tokio::test]
+    async fn public_key_upstream_unreachable_is_502() {
+        let base = spawn_public_key_proxy("http://127.0.0.1:1").await;
+        let (status, body) = get_json(format!("{base}/kas/v2/kas_public_key")).await;
+
+        assert_eq!(status, 502);
+        assert_eq!(body["error"], "unavailable");
     }
 }
 
