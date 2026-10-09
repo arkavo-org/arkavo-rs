@@ -59,46 +59,33 @@ impl FairPlayHandler {
 
     /// Process FairPlay key request
     ///
-    /// Takes an SPC from the client and returns a CKC with encrypted content key.
-    ///
-    /// # Arguments
-    /// * `content_id` - Content identifier
-    /// * `asset_id` - Asset identifier for tracking/policy
-    /// * `spc_data` - Raw SPC bytes from client
-    /// * `content_key` - DEK to encrypt in CKC (typically 16 bytes)
-    ///
-    /// # Returns
-    /// CKC bytes to send to client
+    /// Takes an SPC from the client and returns a leased CKC with the encrypted
+    /// content key. `asset_id` is the TDF policy uuid, sent to the SDK as both
+    /// `content-id` and `asset-id`.
     #[cfg(feature = "fairplay")]
-    #[allow(dead_code)]
     pub async fn process_key_request(
         &self,
-        content_id: String,
-        asset_id: String,
         spc_data: Vec<u8>,
         content_key: Vec<u8>,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        asset_id: String,
+        lease_secs: u32,
+    ) -> Result<
+        crate::modules::license::issuer::IssuedLicense,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
         log::debug!(
-            "Processing FairPlay key request: content_id={} asset_id={} spc_len={} key_len={}",
-            content_id,
+            "Processing FairPlay key request: asset_id={} spc_len={} lease_secs={}",
             asset_id,
             spc_data.len(),
-            content_key.len()
+            lease_secs
         );
 
-        // Validate content key length (should be 16 bytes for AES-128)
-        if content_key.len() != 16 {
-            log::warn!(
-                "Content key length {} != 16, FairPlay expects AES-128",
-                content_key.len()
-            );
-        }
-
         let request = SpcRequest {
-            content_id,
+            content_id: asset_id.clone(),
             spc_data,
             asset_id,
             content_key,
+            lease_duration_secs: Some(lease_secs),
         };
 
         // Process SPC using SDK (blocking operation, run in blocking task)
@@ -108,20 +95,10 @@ impl FairPlayHandler {
 
         log::debug!("FairPlay CKC generated ({} bytes)", response.ckc_data.len());
 
-        Ok(response.ckc_data)
-    }
-
-    /// Process key request when feature not compiled
-    #[cfg(not(feature = "fairplay"))]
-    #[allow(dead_code)]
-    pub async fn process_key_request(
-        &self,
-        _content_id: String,
-        _asset_id: String,
-        _spc_data: Vec<u8>,
-        _content_key: Vec<u8>,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-        Err("FairPlay support not compiled in (use --features fairplay)".into())
+        Ok(crate::modules::license::issuer::IssuedLicense {
+            ckc: response.ckc_data,
+            spc_asset_id: response.asset_id,
+        })
     }
 
     /// Get SDK version (if available)

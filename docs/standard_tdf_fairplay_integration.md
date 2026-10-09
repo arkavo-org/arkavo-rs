@@ -179,28 +179,30 @@ with open("manifest.json", "w") as f:
 
 ### 1. Start Playback Session
 
-> **These examples run against production and `/media/v1/*` currently takes no
-> caller authentication** — `session_start` and `media_key_request` accept a
-> caller-supplied `userId`/`assetId` with no `Authorization` extractor, and
-> `/media/v1/*` is always served locally (never proxied). Treat the session id
-> as a bearer secret, and do not expose these routes to untrusted networks
-> until an auth extractor is added.
+> **Authentication required.** Every `/media/v1/*` route except
+> `GET /media/v1/certificate` needs `Authorization: Bearer <passkey CWT>`. The
+> token's `aud` must contain both `arkavo` and the platform audience
+> (`MEDIA_PLATFORM_AUDIENCE`), `sub` must be person-shaped, and agent tokens are
+> refused. Sessions are keyed by the token `sub`; a body `userId` is ignored.
+> Errors: 401 missing, invalid or expired token, or no platform audience (sign in again); 400 `invalid_request` (missing `tdfManifest` or `spcData`, bad base64, oversized `spcData`, manifest not JSON, session protocol not fairplay, or an SPC the FairPlay SDK refuses as malformed); 403 not a person, a session that is missing or not owned by the caller (key request, heartbeat and terminate), a parseable manifest that fails the checks (generic "manifest refused"), or a platform deny or refusal (generic "platform refused"); 429 `concurrency_limit` on session start; 404 `session_not_found` on heartbeat only if the session expires between the ownership check and the update; 503 platform, identity or credential unavailable, a FairPlay SDK or credential fault, or the session store (Redis) unavailable on start, heartbeat, terminate or key request.
 
 ```bash
 curl -X POST https://platform.arkavo.net/media/v1/session/start \
+  -H "Authorization: Bearer $PASSKEY_CWT" \
   -H "Content-Type: application/json" \
   -d '{
-    "userId": "user123",
     "assetId": "movie456",
     "protocol": "fairplay"
   }'
 ```
 
+`protocol` must be `"fairplay"`: it defaults to tdf3, and a key request on a tdf3 session returns 400. The session id has the form `<sub>:<assetId>:<uuid>`.
+
 Response:
 ```json
 {
-  "sessionId": "abc123-session-id",
-  "status": "created"
+  "sessionId": "<sub>:movie456:<uuid>",
+  "status": "started"
 }
 ```
 
@@ -211,39 +213,39 @@ Response:
 MANIFEST_B64=$(base64 < manifest.json)
 
 curl -X POST https://platform.arkavo.net/media/v1/key-request \
+  -H "Authorization: Bearer $PASSKEY_CWT" \
   -H "Content-Type: application/json" \
   -d '{
-    "sessionId": "abc123-session-id",
-    "userId": "user123",
+    "sessionId": "<sub>:movie456:<uuid>",
     "assetId": "movie456",
     "spcData": "BASE64_SPC_FROM_AVPLAYER",
     "tdfManifest": "'$MANIFEST_B64'"
   }'
 ```
 
-### 3. Alternative: Direct Wrapped Key
+The full manifest is required; there is no wrapped-key-only alternative
+(`tdfWrappedKey` has been removed). The manifest must contain exactly one wrapped
+key-access object for a KAS in `MEDIA_KAS_URLS`, and its policy must have a uuid
+and at least one `dataAttributes` entry.
 
-If you only have the wrapped key (not full manifest):
+Clients MUST use `skd://<policy uuid>` as the asset id in the SPC. The server passes the bare policy uuid to the FairPlay SDK; a mismatch with the SPC's asset id is only logged as a warning. The platform `GetDecision` must permit.
 
-```bash
-curl -X POST https://platform.arkavo.net/media/v1/key-request \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sessionId": "abc123-session-id",
-    "userId": "user123",
-    "assetId": "movie456",
-    "spcData": "BASE64_SPC_FROM_AVPLAYER",
-    "tdfWrappedKey": "BASE64_RSA_WRAPPED_DEK"
-  }'
-```
+**Policy binding.** `policyBinding.hash` is
+`base64(HMAC-SHA256(DEK, <base64 policy string>))`, where the HMAC input is the
+base64 policy string exactly as it appears in the manifest. The hex binding form
+is refused. The DEK is wrapped with RSA-OAEP (SHA-1). The CKC carries a lease of
+`MEDIA_FPS_LEASE_SECONDS` (default 3600) and is streaming-only.
+
+TDF3 (non-FairPlay) media key requests are disabled and return 403.
 
 ### Response
 
 ```json
 {
-  "sessionPublicKey": "-----BEGIN PUBLIC KEY-----...",
+  "sessionPublicKey": "",
   "wrappedKey": "BASE64_FAIRPLAY_CKC",
-  "status": "success"
+  "status": "success",
+  "metadata": { "protocol": "fairplay", "lease_seconds": 3600 }
 }
 ```
 
@@ -279,9 +281,9 @@ class FairPlayHandler: NSObject, AVContentKeySessionDelegate {
     }
 
     func requestCKC(spc: Data, manifest: String, completion: @escaping (Data) -> Void) {
+        // Add "Authorization: Bearer <passkey CWT>" to the URLRequest.
         let request: [String: Any] = [
             "sessionId": sessionId,
-            "userId": userId,
             "assetId": assetId,
             "spcData": spc.base64EncodedString(),
             "tdfManifest": manifest
@@ -344,8 +346,11 @@ The server enforces policies via `media_policy_contract.rs`:
 ### Production Requirements
 
 - RSA key must be configured (`KAS_RSA_KEY_PATH`)
-- Production builds reject requests without `tdfManifest` or `tdfWrappedKey`
-- Debug builds allow fallback for development only
+- A missing `tdfManifest` or `spcData`, bad base64, oversized `spcData`, a manifest that is not JSON, or a non-fairplay session returns 400 `invalid_request`
+- A parseable manifest that fails the checks returns 403 "manifest refused"; a platform deny or refusal returns 403 "platform refused"
+- An SPC the FairPlay SDK refuses as malformed returns 400 `invalid_request`; an SDK or credential fault returns 503
+- With licensing configured and `KAS_RSA_KEY_PATH` loaded, `KAS_PROXY_MODE` must be `rest` or `both`: arks refuses to start otherwise, because the local `/kas/v2/rewrap` shim would release the same RSA-wrapped keys without a policy decision
+- `ARKS_MEDIA_CLIENT_SECRET` and `OPENTDF_PLATFORM_URL` must be set for licensing; without the secret FairPlay key requests return 503
 
 ## API Reference
 
@@ -367,11 +372,11 @@ Response:
 
 ### POST /media/v1/session/start
 
-Initialize playback session.
+Initialize playback session. Requires `Authorization: Bearer <passkey CWT>`;
+the session is keyed by the token `sub` and any `userId` in the body is ignored.
 
 ```json
 {
-  "userId": "string",
   "assetId": "string",
   "protocol": "fairplay"
 }
@@ -379,16 +384,15 @@ Initialize playback session.
 
 ### POST /media/v1/key-request
 
-Request content key with TDF manifest.
+Request content key with TDF manifest. Requires
+`Authorization: Bearer <passkey CWT>`.
 
 ```json
 {
   "sessionId": "string",
-  "userId": "string",
   "assetId": "string",
   "spcData": "base64-fairplay-spc",
-  "tdfManifest": "base64-manifest-json",
-  "tdfWrappedKey": "base64-rsa-wrapped-dek"  // Alternative to tdfManifest
+  "tdfManifest": "base64-manifest-json"
 }
 ```
 

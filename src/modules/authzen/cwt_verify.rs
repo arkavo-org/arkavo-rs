@@ -164,6 +164,7 @@ fn parse_claims(payload: &[u8]) -> Result<DecodedClaims, VerifyError> {
     let mut arkavo_patreon = None;
     let mut scope = None;
     let mut auth_time = None;
+    let mut agent_marker = false;
     for (k, v) in entries {
         let key_id = match &k {
             Value::Integer(i) => format!("i:{}", i128::from(*i)),
@@ -210,7 +211,11 @@ fn parse_claims(payload: &[u8]) -> Result<DecodedClaims, VerifyError> {
                 ("arkavo_account_id", Value::Text(s)) => arkavo_account_id = Some(s),
                 ("client_id", Value::Text(s)) => client_id = Some(s),
                 ("arkavo_roles", Value::Array(a)) => {
-                    arkavo_roles = Some(text_array(a)?);
+                    let roles = text_array(a)?;
+                    if roles.iter().any(|r| r == "agent") {
+                        agent_marker = true;
+                    }
+                    arkavo_roles = Some(roles);
                 }
                 ("arkavo_entitlements", Value::Array(a)) => {
                     arkavo_entitlements = Some(text_array(a)?);
@@ -227,6 +232,9 @@ fn parse_claims(payload: &[u8]) -> Result<DecodedClaims, VerifyError> {
                 }
                 ("auth_time", ref v) => {
                     auth_time = Some(numeric_date(v).ok_or(VerifyError::Malformed)?);
+                }
+                ("arkavo_npe", _) | ("arkavo_swarm", _) | ("arkavo_state_version", _) => {
+                    agent_marker = true;
                 }
                 _ => {}
             },
@@ -264,6 +272,7 @@ fn parse_claims(payload: &[u8]) -> Result<DecodedClaims, VerifyError> {
         arkavo_patreon,
         scope,
         auth_time,
+        agent_marker,
     })
 }
 
@@ -858,5 +867,71 @@ mod tests {
         let claims = verify_header_token(&tagged, &vk, opts())
             .expect("61(18(COSE_Sign1)) is RFC 8392 legal");
         assert_eq!(claims.sub, "arkavo:u1");
+    }
+
+    fn base_entries_with(extra: Vec<(Value, Value)>) -> Vec<(Value, Value)> {
+        let mut v = vec![
+            (
+                Value::Integer(1.into()),
+                Value::Text("https://identity.test".into()),
+            ),
+            (
+                Value::Integer(2.into()),
+                Value::Text("550e8400-e29b-41d4-a716-446655440000".into()),
+            ),
+            (Value::Integer(3.into()), Value::Text("arkavo".into())),
+            (
+                Value::Integer(4.into()),
+                Value::Integer((NOW + 3600).into()),
+            ),
+            (Value::Integer(6.into()), Value::Integer(NOW.into())),
+            (Value::Integer(7.into()), Value::Bytes(vec![9u8; 16])),
+        ];
+        v.extend(extra);
+        v
+    }
+
+    #[test]
+    fn agent_marker_false_for_plain_person() {
+        let (sk, vk) = keypair();
+        let t = mint_map(&sk, KID, base_entries_with(vec![]));
+        assert!(!verify_header_token(&t, &vk, opts()).unwrap().agent_marker);
+    }
+
+    #[test]
+    fn agent_marker_set_by_each_claim() {
+        let cases: Vec<(Value, Value)> = vec![
+            (
+                Value::Text("arkavo_npe".into()),
+                Value::Map(vec![(
+                    Value::Text("type".into()),
+                    Value::Text("agent".into()),
+                )]),
+            ),
+            (
+                Value::Text("arkavo_npe".into()),
+                Value::Text("garbage".into()),
+            ),
+            (Value::Text("arkavo_swarm".into()), Value::Text("s1".into())),
+            (
+                Value::Text("arkavo_state_version".into()),
+                Value::Integer(0.into()),
+            ),
+            (
+                Value::Text("arkavo_roles".into()),
+                Value::Array(vec![
+                    Value::Text("reader".into()),
+                    Value::Text("agent".into()),
+                ]),
+            ),
+        ];
+        let (sk, vk) = keypair();
+        for (k, v) in cases {
+            let t = mint_map(&sk, KID, base_entries_with(vec![(k.clone(), v)]));
+            assert!(
+                verify_header_token(&t, &vk, opts()).unwrap().agent_marker,
+                "{k:?}"
+            );
+        }
     }
 }

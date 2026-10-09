@@ -75,6 +75,11 @@ pub fn person_subject(claims: &DecodedClaims) -> Option<String> {
     if claims.scope.is_some() || claims.auth_time.is_some() {
         return None;
     }
+    // Any agent marker (`arkavo_npe`, `arkavo_swarm`, `arkavo_state_version`
+    // or the `agent` role) means the token acts for an agent, not a person.
+    if claims.agent_marker {
+        return None;
+    }
     let non_person = claims
         .arkavo_roles
         .as_ref()
@@ -119,6 +124,7 @@ mod tests {
             arkavo_patreon: None,
             scope: None,
             auth_time: None,
+            agent_marker: false,
         }
     }
 
@@ -146,6 +152,9 @@ mod tests {
         assert_eq!(person_subject(&c), None);
         let mut c = person();
         c.auth_time = Some(1);
+        assert_eq!(person_subject(&c), None);
+        let mut c = person();
+        c.agent_marker = true;
         assert_eq!(person_subject(&c), None);
         for role in ["service-account", "agent"] {
             let mut c = person();

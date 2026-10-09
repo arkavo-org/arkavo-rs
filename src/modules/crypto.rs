@@ -33,18 +33,6 @@ pub fn public_key_to_pem(public_key: &PublicKey) -> Result<String, Box<dyn Error
     Ok(pem::encode(&pem_encoded))
 }
 
-/// Base64 encode data using standard encoding
-pub fn base64_encode(data: &[u8]) -> String {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
-    STANDARD.encode(data)
-}
-
-/// Base64 decode data using standard encoding
-pub fn base64_decode(data: &str) -> Result<Vec<u8>, base64::DecodeError> {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
-    STANDARD.decode(data)
-}
-
 // ==================== ECDSA Signature Verification ====================
 
 #[allow(dead_code)]

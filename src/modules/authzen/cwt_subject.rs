@@ -43,6 +43,9 @@ pub struct DecodedClaims {
     pub scope: Option<String>,
     /// OIDC access tokens carry `auth_time`; a passkey auth CWT never does.
     pub auth_time: Option<u64>,
+    /// Any agent marker (arkavo_npe, arkavo_swarm, arkavo_state_version, or
+    /// the `agent` role). Presence alone counts, whatever the value.
+    pub agent_marker: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -338,6 +341,7 @@ mod tests {
             arkavo_patreon: None,
             scope: None,
             auth_time: None,
+            agent_marker: false,
         }
     }
 

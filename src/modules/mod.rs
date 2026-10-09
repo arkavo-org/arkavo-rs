@@ -7,6 +7,7 @@ pub mod fairplay;
 #[cfg(feature = "http3")]
 pub mod h3;
 pub mod http_rewrap;
+pub mod license;
 pub mod media_api;
 pub mod moderation;
 pub mod ntdf_token;
