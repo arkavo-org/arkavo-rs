@@ -17,6 +17,9 @@ pub struct CheckedPolicy {
     pub dek: Vec<u8>,
     pub policy_uuid: String,
     pub fqns: Vec<String>,
+    /// Recording's content IV from `encryptionInformation.method.iv`; the
+    /// FairPlay CKC carries it (ADR-0050).
+    pub content_iv: [u8; 16],
 }
 
 /// scheme://host[:non-default-port][/path], lower-cased by `url`, with a
@@ -125,10 +128,17 @@ pub fn check_manifest(
     if fqns.is_empty() {
         return Err(LicenseError::Forbidden("policy has no data attributes"));
     }
+    let content_iv = ei
+        .pointer("/method/iv")
+        .and_then(Value::as_str)
+        .and_then(|s| STANDARD.decode(s.trim()).ok())
+        .and_then(|iv| <[u8; 16]>::try_from(iv).ok())
+        .ok_or(LicenseError::Forbidden("content iv must be 16 bytes"))?;
     Ok(CheckedPolicy {
         dek,
         policy_uuid,
         fqns,
+        content_iv,
     })
 }
 
@@ -165,6 +175,42 @@ mod tests {
             hex::encode(&p.dek),
             "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
         );
+        assert_eq!(
+            hex::encode(p.content_iv),
+            "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+        );
+    }
+
+    #[test]
+    fn content_iv_must_be_16_bytes() {
+        let twelve = STANDARD.encode([7u8; 12]);
+        let seventeen = STANDARD.encode([7u8; 17]);
+        for iv in [
+            json!(""),
+            json!(twelve),
+            json!(seventeen),
+            json!("not base64!"),
+            json!(16),
+        ] {
+            let mut m = allowed();
+            m["encryptionInformation"]["method"]["iv"] = iv.clone();
+            assert!(
+                matches!(
+                    check(&m),
+                    Err(LicenseError::Forbidden("content iv must be 16 bytes"))
+                ),
+                "{iv}"
+            );
+        }
+        let mut m = allowed();
+        m["encryptionInformation"]["method"]
+            .as_object_mut()
+            .unwrap()
+            .remove("iv");
+        assert!(matches!(
+            check(&m),
+            Err(LicenseError::Forbidden("content iv must be 16 bytes"))
+        ));
     }
 
     #[test]
