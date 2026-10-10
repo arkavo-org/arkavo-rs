@@ -1,7 +1,7 @@
 //! Duplicate-key detection for JSON. `serde_json::Value` keeps the last of
 //! repeated object keys without saying so, while the viewer refuses them
-//! (arkavo-ios ADR-0055 §7 step 1), so a profile v2 manifest and its policy
-//! are checked here before anything is read from them.
+//! (arkavo-ios ADR-0055 §7 step 1), so every manifest and its decoded policy
+//! are checked here before the profile is chosen or anything is read.
 
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use std::collections::HashSet;

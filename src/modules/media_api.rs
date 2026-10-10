@@ -312,6 +312,13 @@ pub async fn authorize_license(
         }
         warn!("license {rid}: SPC asset id does not match the policy uuid");
     }
+    // Both fields are the service's own, not the client's: the SDK asset id is
+    // the policy uuid (v1) or `<uuid>/<id>` (v2). Never the SPC's asset id.
+    info!(
+        "license {rid}: issued asset_id={} content_type={}",
+        terms.asset_id,
+        terms.content_type.sdk_name()
+    );
     Ok(issued)
 }
 
@@ -1146,6 +1153,56 @@ mod license_pipeline_tests {
                 LicenseError::Forbidden("manifest refused"),
                 "{component:?}"
             );
+        }
+        assert!(fake.seen_key.lock().unwrap().is_none());
+    }
+
+    /// The platform decision runs for profile v2 as for v1: a valid request
+    /// for either component, under a deny, is refused and no key is issued.
+    #[tokio::test]
+    async fn v2_platform_deny_never_reaches_issuer() {
+        let server = platform("DECISION_DENY").await;
+        for component in ["video", "audio"] {
+            let fake = Arc::new(FakeIssuer::new(Some(
+                format!("{UUID}/{component}").as_str(),
+            )));
+            let st = state(&server, fake.clone());
+            let err = authorize_license(&st, &person(), &payload_v2(UUID, Some(component)), "rid")
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(
+                err,
+                LicenseError::Forbidden("platform refused"),
+                "{component}"
+            );
+            assert!(fake.seen_key.lock().unwrap().is_none(), "{component}");
+        }
+    }
+
+    /// A v2 manifest with a broken content IV is the generic 403, where v1
+    /// keeps its 400 (see `empty_content_iv_is_400_not_403`).
+    #[tokio::test]
+    async fn v2_broken_content_iv_is_the_generic_403() {
+        let server = platform("DECISION_PERMIT").await;
+        let fake = Arc::new(FakeIssuer::new(None));
+        let st = state(&server, fake.clone());
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let bad_ivs = [
+            json!(""),
+            json!(b64.encode([7u8; 12])),
+            json!(b64.encode([7u8; 17])),
+        ];
+        for bad in bad_ivs {
+            let mut m: serde_json::Value = serde_json::from_str(manifest_v2()).unwrap();
+            m["encryptionInformation"]["method"]["iv"] = bad.clone();
+            let mut p = payload_v2(UUID, Some("video"));
+            p.tdf_manifest = Some(b64.encode(m.to_string()));
+            let err = authorize_license(&st, &person(), &p, "rid")
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(err, LicenseError::Forbidden("manifest refused"), "{bad}");
         }
         assert!(fake.seen_key.lock().unwrap().is_none());
     }

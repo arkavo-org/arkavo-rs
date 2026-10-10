@@ -31,6 +31,26 @@ pub enum LicenseContentType {
     Audio,
 }
 
+impl LicenseContentType {
+    /// The SDK `content-type` string. Pure, so it is tested without the
+    /// `fairplay` feature; the feature-gated issuer maps to the SDK's enum and
+    /// a gated test ties that mapping to this one.
+    pub fn sdk_name(self) -> &'static str {
+        match self {
+            LicenseContentType::Uhd => "uhd",
+            LicenseContentType::Audio => "audio",
+        }
+    }
+
+    #[cfg(feature = "fairplay")]
+    fn to_sdk(self) -> fairplay_wrapper::ContentType {
+        match self {
+            LicenseContentType::Uhd => fairplay_wrapper::ContentType::Uhd,
+            LicenseContentType::Audio => fairplay_wrapper::ContentType::Audio,
+        }
+    }
+}
+
 #[async_trait::async_trait]
 pub trait LicenseIssuer: Send + Sync {
     async fn issue(
@@ -56,16 +76,12 @@ impl LicenseIssuer for crate::modules::fairplay::FairPlayHandler {
         content_type: LicenseContentType,
         lease_secs: u32,
     ) -> Result<IssuedLicense, IssueError> {
-        let content_type = match content_type {
-            LicenseContentType::Uhd => fairplay_wrapper::ContentType::Uhd,
-            LicenseContentType::Audio => fairplay_wrapper::ContentType::Audio,
-        };
         self.process_key_request(
             spc,
             content_key.to_vec(),
             content_iv.to_vec(),
             asset_id.to_string(),
-            content_type,
+            content_type.to_sdk(),
             lease_secs,
         )
         .await
@@ -79,6 +95,26 @@ impl LicenseIssuer for crate::modules::fairplay::FairPlayHandler {
                 IssueError::Sdk(e.to_string())
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_types_map_to_the_sdk_strings() {
+        assert_eq!(LicenseContentType::Uhd.sdk_name(), "uhd");
+        assert_eq!(LicenseContentType::Audio.sdk_name(), "audio");
+    }
+
+    /// The feature-gated mapping to the SDK's enum names the same strings.
+    #[cfg(feature = "fairplay")]
+    #[test]
+    fn sdk_enum_mapping_matches_the_names() {
+        for t in [LicenseContentType::Uhd, LicenseContentType::Audio] {
+            assert_eq!(t.to_sdk().as_str(), t.sdk_name());
+        }
     }
 }
 

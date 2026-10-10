@@ -87,15 +87,14 @@ pub fn check_manifest(
 ) -> Result<CheckedPolicy, LicenseError> {
     let m: Value = serde_json::from_slice(manifest_json)
         .map_err(|_| LicenseError::BadRequest("manifest is not JSON"))?;
+    // serde_json keeps the last of repeated keys and the viewer refuses them,
+    // so refusing them here, for every manifest and before the profile is
+    // chosen, means both read one document. A manifest with two
+    // `encryptionInformation` members (one per profile) is refused here.
+    if !has_unique_keys(manifest_json) {
+        return Err(LicenseError::Forbidden("duplicate JSON key"));
+    }
     let ei = m.get("encryptionInformation").ok_or(FORBIDDEN_MANIFEST)?;
-    // A broken package, not an authorization outcome: 400, so the viewer
-    // does not tell the person they lack access. The IV is not secret.
-    let content_iv = ei
-        .pointer("/method/iv")
-        .and_then(Value::as_str)
-        .and_then(|s| STANDARD.decode(s.trim()).ok())
-        .and_then(|iv| <[u8; 16]>::try_from(iv).ok())
-        .ok_or(LicenseError::BadRequest("content iv must be 16 bytes"))?;
     let kaos = ei
         .get("keyAccess")
         .and_then(Value::as_array)
@@ -104,20 +103,34 @@ pub fn check_manifest(
         .get("policy")
         .and_then(Value::as_str)
         .ok_or(FORBIDDEN_MANIFEST)?;
-    // Read before any key is unwrapped, to choose the profile. Nothing read
-    // here is acted on until every binding over `policy_b64` has verified.
+    // The profile is chosen from this policy before any binding has verified.
+    // That is safe: both paths then verify every key access's binding over
+    // the whole `policy_b64` string, so nothing read here is acted on unless
+    // the policy is the one the keys are bound to.
     let policy_bytes = STANDARD
         .decode(policy_b64)
         .map_err(|_| FORBIDDEN_MANIFEST)?;
     let policy: Value = serde_json::from_slice(&policy_bytes).map_err(|_| FORBIDDEN_MANIFEST)?;
-    let keys = match policy.get(COMPONENTS_KEY) {
+    if !has_unique_keys(&policy_bytes) {
+        return Err(LicenseError::Forbidden("duplicate JSON key"));
+    }
+    let components = policy.get(COMPONENTS_KEY);
+    // The IV is not secret. A broken v1 package is a 400, so the viewer does
+    // not tell the person they lack access; a v2 manifest is one of the
+    // service's closed-schema refusals (ADR-0055 §7), the generic 403.
+    let content_iv = ei
+        .pointer("/method/iv")
+        .and_then(Value::as_str)
+        .and_then(|s| STANDARD.decode(s.trim()).ok())
+        .and_then(|iv| <[u8; 16]>::try_from(iv).ok())
+        .ok_or(if components.is_some() {
+            LicenseError::Forbidden("content iv must be 16 bytes")
+        } else {
+            LicenseError::BadRequest("content iv must be 16 bytes")
+        })?;
+    let keys = match components {
         None => PolicyKeys::Single(check_single_key(kaos, policy_b64, rsa, kas_urls)?),
         Some(list) => {
-            // serde_json keeps the last of repeated keys and the viewer refuses
-            // them, so refusing them here means both read one document.
-            if !has_unique_keys(manifest_json) || !has_unique_keys(&policy_bytes) {
-                return Err(LicenseError::Forbidden("duplicate JSON key"));
-            }
             PolicyKeys::Components(check_components(list, kaos, policy_b64, rsa, kas_urls)?)
         }
     };
@@ -176,6 +189,7 @@ fn check_components(
         verify_policy_binding(kao, &key, policy_b64)?;
         let mut mac = Hmac::<Sha256>::new_from_slice(&key).map_err(|_| FORBIDDEN_MANIFEST)?;
         mac.update(KEY_BINDING_PREFIX.as_bytes());
+        // The entry's id, because the v2 shape forces id == kind.
         mac.update(kind.as_str().as_bytes());
         mac.verify_slice(&key_binding)
             .map_err(|_| LicenseError::Forbidden("key binding mismatch"))?;
@@ -184,6 +198,8 @@ fn check_components(
             return Err(LicenseError::Forbidden("components share a key"));
         }
         checked.push(CheckedComponent {
+            // Equal to the entry's id only because `component_shape` forces
+            // id == kind.
             id: kind.as_str().to_string(),
             kind,
             key,
@@ -827,6 +843,78 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    /// serde_json would read the last `encryptionInformation`: here the v1
+    /// one, while the viewer's strict reader would see the v2 one first (or
+    /// refuse). Both orders are refused.
+    #[test]
+    fn two_encryption_information_members_are_refused() {
+        let v1_ei = allowed()["encryptionInformation"].to_string();
+        let v2_ei = v2()["encryptionInformation"].to_string();
+        for (first, last) in [(&v2_ei, &v1_ei), (&v1_ei, &v2_ei)] {
+            let text =
+                format!(r#"{{"encryptionInformation":{first},"encryptionInformation":{last}}}"#);
+            // Without the duplicate, the last one alone is a good manifest.
+            assert!(check_manifest(
+                format!(r#"{{"encryptionInformation":{last}}}"#).as_bytes(),
+                &key(),
+                &kas()
+            )
+            .is_ok());
+            assert_eq!(
+                check_manifest(text.as_bytes(), &key(), &kas()).err(),
+                Some(LicenseError::Forbidden("duplicate JSON key"))
+            );
+        }
+    }
+
+    /// Profile v1 gets the same duplicate-key refusal: in the manifest and in
+    /// the decoded policy (the binding is over the repeated text, so it holds).
+    #[test]
+    fn v1_duplicate_json_keys_are_refused() {
+        let dup_manifest = allowed().to_string().replacen('{', r#"{"payload":{},"#, 1);
+        let policy = r#"{"uuid":"00000000-0000-0000-0000-000000000000","uuid":"3f1c9e2a-7b4d-4e8f-9a21-5c6d7e8f9a0b","body":{"dataAttributes":[{"attribute":"https://patreon.arkavo.com/attr/campaign/value/1"}],"dissem":[]}}"#;
+        let dup_policy = rebind(policy).to_string();
+        for text in [dup_manifest, dup_policy] {
+            assert_eq!(
+                check_manifest(text.as_bytes(), &key(), &kas()).err(),
+                Some(LicenseError::Forbidden("duplicate JSON key")),
+                "{text}"
+            );
+        }
+    }
+
+    /// A broken IV in a v2 manifest is a closed-schema refusal (the generic
+    /// 403 at the endpoint), where v1 keeps its 400.
+    #[test]
+    fn v2_content_iv_must_be_16_bytes() {
+        let twelve = STANDARD.encode([7u8; 12]);
+        let seventeen = STANDARD.encode([7u8; 17]);
+        for iv in [
+            json!(""),
+            json!(twelve),
+            json!(seventeen),
+            json!("not base64!"),
+            json!(16),
+        ] {
+            let mut m = v2();
+            m["encryptionInformation"]["method"]["iv"] = iv.clone();
+            assert_eq!(
+                check(&m).err(),
+                Some(LicenseError::Forbidden("content iv must be 16 bytes")),
+                "{iv}"
+            );
+        }
+        let mut m = v2();
+        m["encryptionInformation"]["method"]
+            .as_object_mut()
+            .unwrap()
+            .remove("iv");
+        assert_eq!(
+            check(&m).err(),
+            Some(LicenseError::Forbidden("content iv must be 16 bytes"))
+        );
     }
 
     /// The second key access gets every check the first does.

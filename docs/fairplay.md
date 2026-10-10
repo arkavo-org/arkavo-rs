@@ -236,7 +236,7 @@ is ignored.
   be the policy uuid. The client's SPC asset id MUST be `<policy uuid>/<id>`, which is
   `skd://<policy uuid>/<id>` without the scheme.
 - The CKC carries the component's key: `video` as `uhd` content, `audio` as `audio` content.
-  Both require HDCP Type 1 and use `cbcs` encryption. The SDK `asset-id` is `<policy uuid>/<id>`.
+  The SDK `asset-id` is `<policy uuid>/<id>`.
 - Every refusal is the same 403 `forbidden` ("manifest refused"), and the specific reason is only
   logged. A refusal happens before the platform decision when the manifest or policy repeats a
   JSON key, the list has any other shape, the key-access count differs from the component count,
@@ -246,9 +246,13 @@ is ignored.
 - Each component's acquisition and each component's renewal is its own license request, with its
   own session (start, key request, end).
 
-Both profiles: the policy needs a uuid and at least one `dataAttributes` entry.
-`encryptionInformation.method.iv` must be the recording's 16-byte content IV in base64; a missing
-or malformed IV is a broken package and gets 400 `invalid_request`, not 403. The CKC carries it.
+Both profiles: the policy needs a uuid and at least one `dataAttributes` entry, and neither the
+manifest nor the decoded policy may repeat a JSON key (refused before the profile is chosen).
+`encryptionInformation.method.iv` must be the recording's 16-byte content IV in base64. In
+profile v1 a missing or malformed IV is a broken package and gets 400 `invalid_request`, not 403;
+in profile v2 it is the generic 403 "manifest refused". The CKC carries it.
+Every license, v1 and v2, is issued with `cbcs` encryption and requires HDCP Type 1; where the
+content type is `uhd` (all of v1, and v2 `video`) it also requires security level Main.
 The policy binding is `base64(HMAC-SHA256(key, <base64 policy string>))`; the hex form is refused.
 The platform `GetDecision` must permit. The CKC carries a lease of `MEDIA_FPS_LEASE_SECONDS` and
 is streaming-only. `tdfWrappedKey` is no longer accepted.
