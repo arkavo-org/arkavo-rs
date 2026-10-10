@@ -215,9 +215,11 @@ pub fn build_request_json(request: &SpcRequest) -> Result<serde_json::Value, Fai
     let mut asset_info = serde_json::json!({
         "content-key": hex::encode(&request.content_key),
         "content-iv": hex::encode(&request.content_iv),
-        // The SDK refuses a CKC without a content type. HD: security level
-        // Baseline or higher and HDCP (Type 0, the SDK default).
-        "content-type": "hd",
+        // The SDK refuses a CKC without a content type. UHD: the device must
+        // support security level Main, and the SDK refuses UHD unless HDCP
+        // Type 1 is required.
+        "content-type": "uhd",
+        "hdcp-type": 1,
         // HLS FairPlay (SAMPLE-AES) segments.
         "encryption-scheme": "cbcs",
     });
@@ -390,7 +392,8 @@ mod request_json_tests {
         assert_eq!(info["content-key"], "000102030405060708090a0b0c0d0e0f");
         assert_eq!(info["content-iv"], "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
         assert_eq!(info["lease-duration"], 3600);
-        assert_eq!(info["content-type"], "hd");
+        assert_eq!(info["content-type"], "uhd");
+        assert_eq!(info["hdcp-type"], 1);
         assert_eq!(info["encryption-scheme"], "cbcs");
         // The SDK ignores item-level key material; none may be left there.
         for k in ["ck", "content-key", "content-iv", "lease-duration"] {

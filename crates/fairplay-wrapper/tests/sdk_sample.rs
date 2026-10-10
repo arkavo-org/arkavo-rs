@@ -15,7 +15,7 @@ fn sample_spc_yields_ckc_with_asset_info_request() {
         return;
     };
     let ksm = PathBuf::from(ksm);
-    let sample = std::fs::read_to_string(ksm.join("Test_Inputs/iOS/spc_ios_hd_lease_2048.json"))
+    let sample = std::fs::read_to_string(ksm.join("Test_Inputs/iOS/spc_ios_uhd_lease_2048.json"))
         .expect("sample input");
     let sample: serde_json::Value = serde_json::from_str(&sample).unwrap();
     let item = &sample["fairplay-streaming-request"]["create-ckc"][0];

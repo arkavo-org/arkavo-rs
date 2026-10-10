@@ -222,8 +222,9 @@ recording's 16-byte content IV in base64. The CKC carries it with the first 16
 bytes of the DEK. The policy binding is
 `base64(HMAC-SHA256(DEK, <base64 policy string>))`; the hex form is refused.
 The platform `GetDecision` must permit. The CKC carries a lease of
-`MEDIA_FPS_LEASE_SECONDS`, is streaming-only, and is issued as `hd` content
-(security level Baseline, HDCP Type 0) with `cbcs` encryption. `tdfWrappedKey` is no longer
+`MEDIA_FPS_LEASE_SECONDS`, is streaming-only, and is issued as `uhd` content
+(the device must support security level Main; HDCP Type 1 required) with `cbcs`
+encryption. `tdfWrappedKey` is no longer
 accepted.
 
 #### TDF3 Request (disabled)
