@@ -858,6 +858,23 @@ mod license_pipeline_tests {
     }
 
     #[tokio::test]
+    async fn empty_content_iv_is_400_not_403() {
+        // A broken package must not read as "no access" in the viewer.
+        let server = platform("DECISION_PERMIT").await;
+        let fake = Arc::new(FakeIssuer::new(None));
+        let st = state(&server, fake.clone());
+        let mut m: serde_json::Value = serde_json::from_str(manifest()).unwrap();
+        m["encryptionInformation"]["method"]["iv"] = json!("");
+        let err = authorize_license(&st, &person(), &payload(&m.to_string()), "rid")
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(err, LicenseError::BadRequest("content iv must be 16 bytes"));
+        assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(fake.seen_key.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn missing_manifest_is_400_and_wrapped_key_is_ignored() {
         let server = platform("DECISION_PERMIT").await;
         let st = state(&server, Arc::new(FakeIssuer::new(None)));

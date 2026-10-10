@@ -45,6 +45,14 @@ pub fn check_manifest(
     let m: Value = serde_json::from_slice(manifest_json)
         .map_err(|_| LicenseError::BadRequest("manifest is not JSON"))?;
     let ei = m.get("encryptionInformation").ok_or(FORBIDDEN_MANIFEST)?;
+    // A broken package, not an authorization outcome: 400, so the viewer
+    // does not tell the person they lack access. The IV is not secret.
+    let content_iv = ei
+        .pointer("/method/iv")
+        .and_then(Value::as_str)
+        .and_then(|s| STANDARD.decode(s.trim()).ok())
+        .and_then(|iv| <[u8; 16]>::try_from(iv).ok())
+        .ok_or(LicenseError::BadRequest("content iv must be 16 bytes"))?;
     let kaos = ei
         .get("keyAccess")
         .and_then(Value::as_array)
@@ -128,12 +136,6 @@ pub fn check_manifest(
     if fqns.is_empty() {
         return Err(LicenseError::Forbidden("policy has no data attributes"));
     }
-    let content_iv = ei
-        .pointer("/method/iv")
-        .and_then(Value::as_str)
-        .and_then(|s| STANDARD.decode(s.trim()).ok())
-        .and_then(|iv| <[u8; 16]>::try_from(iv).ok())
-        .ok_or(LicenseError::Forbidden("content iv must be 16 bytes"))?;
     Ok(CheckedPolicy {
         dek,
         policy_uuid,
@@ -197,7 +199,7 @@ mod tests {
             assert!(
                 matches!(
                     check(&m),
-                    Err(LicenseError::Forbidden("content iv must be 16 bytes"))
+                    Err(LicenseError::BadRequest("content iv must be 16 bytes"))
                 ),
                 "{iv}"
             );
@@ -209,7 +211,7 @@ mod tests {
             .remove("iv");
         assert!(matches!(
             check(&m),
-            Err(LicenseError::Forbidden("content iv must be 16 bytes"))
+            Err(LicenseError::BadRequest("content iv must be 16 bytes"))
         ));
     }
 
