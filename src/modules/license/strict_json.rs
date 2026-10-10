@@ -9,13 +9,11 @@ use std::fmt;
 
 /// True when `bytes` is one JSON value in which no object repeats a key,
 /// compared after unescaping. False for anything that is not JSON.
-#[cfg_attr(not(test), allow(dead_code))] // Task 2 adds the first caller.
 pub fn has_unique_keys(bytes: &[u8]) -> bool {
     serde_json::from_slice::<UniqueKeys>(bytes).is_ok()
 }
 
 /// Deserializes any JSON value, failing on a repeated key at any depth.
-#[cfg_attr(not(test), allow(dead_code))]
 struct UniqueKeys;
 
 impl<'de> Deserialize<'de> for UniqueKeys {
@@ -24,7 +22,6 @@ impl<'de> Deserialize<'de> for UniqueKeys {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 struct UniqueKeysVisitor;
 
 impl<'de> Visitor<'de> for UniqueKeysVisitor {
@@ -97,8 +94,10 @@ mod tests {
             r#"{"a":1,"a":1}"#,
             r#"{"a":1,"b":{"c":1,"c":2}}"#,
             r#"[{"x":[{"k":1,"k":2}]}]"#,
-            // The same key once unescaped.
+            // The same key spelled twice, with different values.
             r#"{"uuid":"a","uuid":"b"}"#,
+            // The same key once unescaped: \u0075 is "u".
+            r#"{"uuid":1,"\u0075uid":2}"#,
         ] {
             assert!(!has_unique_keys(bad.as_bytes()), "{bad}");
         }

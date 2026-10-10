@@ -1,9 +1,11 @@
 Test-only fixtures for `license::tdf_policy` and the media license tests.
 
 Nothing here is committed key material. The RSA test key, `manifest_allowed.json`
-and the two bad bindings (`binding_hex.txt`, `binding_raw_json.txt`) are generated
-at test time by `gen_fixtures.sh <output-dir>`, which uses only the openssl CLI so
-arks' verifier is checked against an independent producer. The `#[cfg(test)]`
+(profile v1: one 32-byte DEK), `manifest_v2.json` (profile v2, arkavo-ios ADR-0055:
+the shared test vectors' video and audio keys, `arkavo:components` policy and
+bindings) and the two bad bindings (`binding_hex.txt`, `binding_raw_json.txt`) are
+generated at test time by `gen_fixtures.sh <output-dir>`, which uses only the openssl
+CLI so arks' verifier is checked against an independent producer. The `#[cfg(test)]`
 helper `license::fixtures::fixtures()` runs the script once per test process
 (via `OnceLock`) into a fresh temp directory and deletes it after reading.
 

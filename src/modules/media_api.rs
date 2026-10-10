@@ -6,6 +6,7 @@ use crate::modules::fairplay::MediaProtocol;
 use crate::modules::http_rewrap::RewrapState;
 use crate::modules::license::issuer::{IssueError, IssuedLicense};
 use crate::modules::license::person_token::Person;
+use crate::modules::license::tdf_policy::PolicyKeys;
 use crate::modules::license::LicenseError;
 use axum::{
     extract::{ConnectInfo, Path, State},
@@ -217,8 +218,19 @@ pub async fn authorize_license(
             }
         })?;
 
-    let mut key = [0u8; 16];
-    key.copy_from_slice(&policy.dek[..16]);
+    let key = match &policy.keys {
+        PolicyKeys::Single(dek) => {
+            let mut key = [0u8; 16];
+            key.copy_from_slice(&dek[..16]);
+            key
+        }
+        // A profile v2 key needs the request's component, which the request
+        // does not carry yet: refused like any other manifest.
+        PolicyKeys::Components(_) => {
+            warn!("license {rid}: manifest refused: profile v2 needs a component");
+            return Err(LicenseError::Forbidden("manifest refused"));
+        }
+    };
     let issued = issuer
         .issue(
             spc,
