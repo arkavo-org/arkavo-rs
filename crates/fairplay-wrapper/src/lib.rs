@@ -75,6 +75,12 @@ impl FairPlayKeyServer {
                 std::env::set_var("FPS_CERT_PATH", certs);
             }
         }
+        match std::env::var("FPS_CERT_PATH") {
+            Ok(p) => log::info!("FairPlay certificates: {p}"),
+            Err(_) => {
+                log::warn!("FairPlay certificates: no certificates JSON found; SDK default path")
+            }
+        }
 
         // Initialize SDK (one-time operation)
         INIT.call_once(|| {
