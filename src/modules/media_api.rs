@@ -1193,7 +1193,11 @@ mod license_pipeline_tests {
             json!(b64.encode([7u8; 12])),
             json!(b64.encode([7u8; 17])),
         ];
-        for bad in bad_ivs {
+        for (label, bad) in [
+            ("empty iv", bad_ivs[0].clone()),
+            ("12-byte iv", bad_ivs[1].clone()),
+            ("17-byte iv", bad_ivs[2].clone()),
+        ] {
             let mut m: serde_json::Value = serde_json::from_str(manifest_v2()).unwrap();
             m["encryptionInformation"]["method"]["iv"] = bad.clone();
             let mut p = payload_v2(UUID, Some("video"));
@@ -1202,7 +1206,7 @@ mod license_pipeline_tests {
                 .await
                 .err()
                 .unwrap();
-            assert_eq!(err, LicenseError::Forbidden("manifest refused"), "{bad}");
+            assert_eq!(err, LicenseError::Forbidden("manifest refused"), "{label}");
         }
         assert!(fake.seen_key.lock().unwrap().is_none());
     }
@@ -1574,7 +1578,7 @@ mod session_auth_tests {
             "tdfManifest": b64.encode(manifest()),
         });
         let (status, v) = send(&app, "POST", "/key", Some(&token(&sub)), body).await;
-        assert_eq!(status, StatusCode::OK, "{v}");
+        assert_eq!(status, StatusCode::OK, "key request was not 200 OK");
         assert_eq!(v["wrappedKey"], b64.encode(b"fake-ckc"));
         assert_eq!(v["metadata"]["protocol"], "fairplay");
         assert_eq!(v["status"], "success");

@@ -367,12 +367,12 @@ mod tests {
     fn content_iv_must_be_16_bytes() {
         let twelve = STANDARD.encode([7u8; 12]);
         let seventeen = STANDARD.encode([7u8; 17]);
-        for iv in [
-            json!(""),
-            json!(twelve),
-            json!(seventeen),
-            json!("not base64!"),
-            json!(16),
+        for (label, iv) in [
+            ("empty iv", json!("")),
+            ("12-byte iv", json!(twelve)),
+            ("17-byte iv", json!(seventeen)),
+            ("non-base64 iv", json!("not base64!")),
+            ("numeric iv", json!(16)),
         ] {
             let mut m = allowed();
             m["encryptionInformation"]["method"]["iv"] = iv.clone();
@@ -381,7 +381,7 @@ mod tests {
                     check(&m),
                     Err(LicenseError::BadRequest("content iv must be 16 bytes"))
                 ),
-                "{iv}"
+                "{label}"
             );
         }
         let mut m = allowed();
@@ -796,12 +796,12 @@ mod tests {
                 MALFORMED,
             ),
         ];
-        for (list, reason) in cases {
+        for (i, (list, reason)) in cases.into_iter().enumerate() {
             let m = v2_manifest(&policy_with(&list), &[&video_key(), &audio_key()]);
             assert_eq!(
                 check(&m).err(),
                 Some(LicenseError::Forbidden(reason)),
-                "{list}"
+                "component list case {i}"
             );
         }
     }
@@ -836,11 +836,15 @@ mod tests {
             &[&video_key(), &audio_key()],
         )
         .to_string();
-        for text in [dup_manifest, dup_uuid, dup_list] {
+        for (label, text) in [
+            ("duplicate payload", dup_manifest),
+            ("duplicate uuid", dup_uuid),
+            ("duplicate components", dup_list),
+        ] {
             assert_eq!(
                 check_manifest(text.as_bytes(), &key(), &kas()).err(),
                 Some(LicenseError::Forbidden("duplicate JSON key")),
-                "{text}"
+                "{label}"
             );
         }
     }
@@ -876,11 +880,14 @@ mod tests {
         let dup_manifest = allowed().to_string().replacen('{', r#"{"payload":{},"#, 1);
         let policy = r#"{"uuid":"00000000-0000-0000-0000-000000000000","uuid":"3f1c9e2a-7b4d-4e8f-9a21-5c6d7e8f9a0b","body":{"dataAttributes":[{"attribute":"https://patreon.arkavo.com/attr/campaign/value/1"}],"dissem":[]}}"#;
         let dup_policy = rebind(policy).to_string();
-        for text in [dup_manifest, dup_policy] {
+        for (label, text) in [
+            ("duplicate payload", dup_manifest),
+            ("duplicate policy", dup_policy),
+        ] {
             assert_eq!(
                 check_manifest(text.as_bytes(), &key(), &kas()).err(),
                 Some(LicenseError::Forbidden("duplicate JSON key")),
-                "{text}"
+                "{label}"
             );
         }
     }
@@ -891,19 +898,19 @@ mod tests {
     fn v2_content_iv_must_be_16_bytes() {
         let twelve = STANDARD.encode([7u8; 12]);
         let seventeen = STANDARD.encode([7u8; 17]);
-        for iv in [
-            json!(""),
-            json!(twelve),
-            json!(seventeen),
-            json!("not base64!"),
-            json!(16),
+        for (label, iv) in [
+            ("empty iv", json!("")),
+            ("12-byte iv", json!(twelve)),
+            ("17-byte iv", json!(seventeen)),
+            ("non-base64 iv", json!("not base64!")),
+            ("numeric iv", json!(16)),
         ] {
             let mut m = v2();
             m["encryptionInformation"]["method"]["iv"] = iv.clone();
             assert_eq!(
                 check(&m).err(),
                 Some(LicenseError::Forbidden("content iv must be 16 bytes")),
-                "{iv}"
+                "{label}"
             );
         }
         let mut m = v2();
