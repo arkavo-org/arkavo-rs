@@ -1218,6 +1218,22 @@ mod license_pipeline_tests {
         assert!(fake.seen_key.lock().unwrap().is_none());
     }
 
+    /// Profile v1 keeps issuing when the SPC's asset id differs from the
+    /// policy uuid, or is absent: that is only logged (today's viewer and
+    /// packages depend on it). Only profile v2 refuses.
+    #[tokio::test]
+    async fn v1_still_issues_on_an_spc_asset_id_mismatch() {
+        let server = platform("DECISION_PERMIT").await;
+        for spc_asset_id in [Some("other"), None] {
+            let fake = Arc::new(FakeIssuer::new(spc_asset_id));
+            let st = state(&server, fake.clone());
+            let out = authorize_license(&st, &person(), &payload(manifest()), "rid")
+                .await
+                .unwrap_or_else(|e| panic!("{spc_asset_id:?}: {e:?}"));
+            assert_eq!(out.ckc, b"fake-ckc", "{spc_asset_id:?}");
+        }
+    }
+
     /// Today's viewer and packages keep working: v1 ignores `component`.
     #[tokio::test]
     async fn v1_ignores_component() {

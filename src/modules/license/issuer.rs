@@ -3,7 +3,9 @@
 
 pub struct IssuedLicense {
     pub ckc: Vec<u8>,
-    /// The asset id inside the SPC (client-chosen); logged, never trusted.
+    /// The asset id inside the SPC (client-chosen). Never logged and never
+    /// trusted: it can only make profile v2 refuse (the CKC is dropped); it
+    /// never grants anything.
     pub spc_asset_id: Option<String>,
 }
 
