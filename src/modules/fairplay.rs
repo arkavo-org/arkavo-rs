@@ -60,13 +60,14 @@ impl FairPlayHandler {
     /// Process FairPlay key request
     ///
     /// Takes an SPC from the client and returns a leased CKC with the encrypted
-    /// content key. `asset_id` is the TDF policy uuid, sent to the SDK as both
+    /// content key and the recording's content IV. `asset_id` is the TDF policy uuid, sent to the SDK as both
     /// `content-id` and `asset-id`.
     #[cfg(feature = "fairplay")]
     pub async fn process_key_request(
         &self,
         spc_data: Vec<u8>,
         content_key: Vec<u8>,
+        content_iv: Vec<u8>,
         asset_id: String,
         lease_secs: u32,
     ) -> Result<
@@ -85,6 +86,7 @@ impl FairPlayHandler {
             spc_data,
             asset_id,
             content_key,
+            content_iv,
             lease_duration_secs: Some(lease_secs),
         };
 

@@ -18,6 +18,8 @@ DEK_HEX=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
 UUID=3f1c9e2a-7b4d-4e8f-9a21-5c6d7e8f9a0b
 FQN=https://patreon.arkavo.com/attr/campaign-tier/value/11111111_gold
 KAS_URL=https://platform.arkavo.net/kas
+# Content IV f0f1..ff, base64 as TDF writes it.
+IV_B64=8PHy8/T19vf4+fr7/P3+/w==
 
 "$OPENSSL" genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$OUT/test_kas_rsa_private.pem" 2>/dev/null
 "$OPENSSL" pkey -in "$OUT/test_kas_rsa_private.pem" -pubout -out "$WORK/pub.pem"
@@ -44,7 +46,7 @@ cat > "$OUT/manifest_allowed.json" <<EOF
  "encryptionInformation":{"type":"split","policy":"$POLICY_B64",
   "keyAccess":[{"type":"wrapped","url":"$KAS_URL","protocol":"kas","wrappedKey":"$WRAPPED",
    "policyBinding":{"alg":"HS256","hash":"$BINDING"}}],
-  "method":{"algorithm":"AES-256-GCM","isStreamable":true,"iv":""},
+  "method":{"algorithm":"AES-256-GCM","isStreamable":true,"iv":"$IV_B64"},
   "integrityInformation":{"rootSignature":{"alg":"HS256","sig":""},"segmentHashAlg":"GMAC","segments":[]}}}
 EOF
 echo "fixtures regenerated"

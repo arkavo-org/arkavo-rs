@@ -17,6 +17,9 @@ pub struct CheckedPolicy {
     pub dek: Vec<u8>,
     pub policy_uuid: String,
     pub fqns: Vec<String>,
+    /// Recording's content IV from `encryptionInformation.method.iv`; the
+    /// FairPlay CKC carries it (ADR-0050).
+    pub content_iv: [u8; 16],
 }
 
 /// scheme://host[:non-default-port][/path], lower-cased by `url`, with a
@@ -42,6 +45,14 @@ pub fn check_manifest(
     let m: Value = serde_json::from_slice(manifest_json)
         .map_err(|_| LicenseError::BadRequest("manifest is not JSON"))?;
     let ei = m.get("encryptionInformation").ok_or(FORBIDDEN_MANIFEST)?;
+    // A broken package, not an authorization outcome: 400, so the viewer
+    // does not tell the person they lack access. The IV is not secret.
+    let content_iv = ei
+        .pointer("/method/iv")
+        .and_then(Value::as_str)
+        .and_then(|s| STANDARD.decode(s.trim()).ok())
+        .and_then(|iv| <[u8; 16]>::try_from(iv).ok())
+        .ok_or(LicenseError::BadRequest("content iv must be 16 bytes"))?;
     let kaos = ei
         .get("keyAccess")
         .and_then(Value::as_array)
@@ -129,6 +140,7 @@ pub fn check_manifest(
         dek,
         policy_uuid,
         fqns,
+        content_iv,
     })
 }
 
@@ -165,6 +177,42 @@ mod tests {
             hex::encode(&p.dek),
             "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
         );
+        assert_eq!(
+            hex::encode(p.content_iv),
+            "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+        );
+    }
+
+    #[test]
+    fn content_iv_must_be_16_bytes() {
+        let twelve = STANDARD.encode([7u8; 12]);
+        let seventeen = STANDARD.encode([7u8; 17]);
+        for iv in [
+            json!(""),
+            json!(twelve),
+            json!(seventeen),
+            json!("not base64!"),
+            json!(16),
+        ] {
+            let mut m = allowed();
+            m["encryptionInformation"]["method"]["iv"] = iv.clone();
+            assert!(
+                matches!(
+                    check(&m),
+                    Err(LicenseError::BadRequest("content iv must be 16 bytes"))
+                ),
+                "{iv}"
+            );
+        }
+        let mut m = allowed();
+        m["encryptionInformation"]["method"]
+            .as_object_mut()
+            .unwrap()
+            .remove("iv");
+        assert!(matches!(
+            check(&m),
+            Err(LicenseError::BadRequest("content iv must be 16 bytes"))
+        ));
     }
 
     #[test]

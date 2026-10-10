@@ -25,6 +25,7 @@ pub trait LicenseIssuer: Send + Sync {
         &self,
         spc: Vec<u8>,
         content_key: [u8; 16],
+        content_iv: [u8; 16],
         asset_id: &str,
         lease_secs: u32,
     ) -> Result<IssuedLicense, IssueError>;
@@ -37,21 +38,28 @@ impl LicenseIssuer for crate::modules::fairplay::FairPlayHandler {
         &self,
         spc: Vec<u8>,
         content_key: [u8; 16],
+        content_iv: [u8; 16],
         asset_id: &str,
         lease_secs: u32,
     ) -> Result<IssuedLicense, IssueError> {
-        self.process_key_request(spc, content_key.to_vec(), asset_id.to_string(), lease_secs)
-            .await
-            .map_err(|e| {
-                let malformed = e
-                    .downcast_ref::<fairplay_wrapper::FairPlayError>()
-                    .is_some_and(fairplay_wrapper::FairPlayError::is_malformed_spc);
-                if malformed {
-                    IssueError::MalformedSpc(e.to_string())
-                } else {
-                    IssueError::Sdk(e.to_string())
-                }
-            })
+        self.process_key_request(
+            spc,
+            content_key.to_vec(),
+            content_iv.to_vec(),
+            asset_id.to_string(),
+            lease_secs,
+        )
+        .await
+        .map_err(|e| {
+            let malformed = e
+                .downcast_ref::<fairplay_wrapper::FairPlayError>()
+                .is_some_and(fairplay_wrapper::FairPlayError::is_malformed_spc);
+            if malformed {
+                IssueError::MalformedSpc(e.to_string())
+            } else {
+                IssueError::Sdk(e.to_string())
+            }
+        })
     }
 }
 
@@ -64,6 +72,7 @@ pub mod test_support {
     /// failure it was built with.
     pub struct FakeIssuer {
         pub seen_key: Mutex<Option<[u8; 16]>>,
+        pub seen_iv: Mutex<Option<[u8; 16]>>,
         pub seen_lease: Mutex<Option<u32>>,
         pub spc_asset_id: Option<String>,
         pub failure: Option<IssueError>,
@@ -73,6 +82,7 @@ pub mod test_support {
         pub fn new(spc_asset_id: Option<&str>) -> Self {
             Self {
                 seen_key: Mutex::new(None),
+                seen_iv: Mutex::new(None),
                 seen_lease: Mutex::new(None),
                 spc_asset_id: spc_asset_id.map(str::to_string),
                 failure: None,
@@ -93,10 +103,12 @@ pub mod test_support {
             &self,
             _spc: Vec<u8>,
             content_key: [u8; 16],
+            content_iv: [u8; 16],
             _asset_id: &str,
             lease_secs: u32,
         ) -> Result<IssuedLicense, IssueError> {
             *self.seen_key.lock().unwrap() = Some(content_key);
+            *self.seen_iv.lock().unwrap() = Some(content_iv);
             *self.seen_lease.lock().unwrap() = Some(lease_secs);
             if let Some(f) = &self.failure {
                 return Err(f.clone());

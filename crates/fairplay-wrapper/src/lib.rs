@@ -17,6 +17,7 @@
 //!     spc_data: vec![/* SPC bytes */],
 //!     asset_id: "asset-001".to_string(),
 //!     content_key: vec![/* 16-byte DEK */],
+//!     content_iv: vec![/* 16-byte content IV */],
 //!     lease_duration_secs: Some(3600),
 //! };
 //!
@@ -63,6 +64,23 @@ impl FairPlayKeyServer {
     pub fn new(credentials_path: PathBuf) -> Result<Self, FairPlayError> {
         // Set environment variable for fpssdk to find certificates
         std::env::set_var("FAIRPLAY_CREDENTIALS_PATH", &credentials_path);
+        // The SDK itself only reads FPS_CERT_PATH (the certificates JSON file)
+        // and otherwise falls back to a path relative to the working directory.
+        if std::env::var_os("FPS_CERT_PATH").is_none() {
+            let certs = ["certificates.json", "test_certificates.json"]
+                .iter()
+                .map(|name| credentials_path.join(name))
+                .find(|p| p.exists());
+            if let Some(certs) = certs {
+                std::env::set_var("FPS_CERT_PATH", certs);
+            }
+        }
+        match std::env::var("FPS_CERT_PATH") {
+            Ok(p) => log::info!("FairPlay certificates: {p}"),
+            Err(_) => {
+                log::warn!("FairPlay certificates: no certificates JSON found; SDK default path")
+            }
+        }
 
         // Initialize SDK (one-time operation)
         INIT.call_once(|| {
@@ -98,6 +116,7 @@ impl FairPlayKeyServer {
     ///     spc_data: vec![0x01, 0x02, 0x03],  // Client SPC
     ///     asset_id: "asset-123".to_string(),
     ///     content_key: vec![0xAA; 16],  // 16-byte DEK
+    ///     content_iv: vec![0xBB; 16],   // 16-byte content IV
     ///     lease_duration_secs: Some(3600),
     /// };
     /// let response = server.process_spc(request).unwrap();
@@ -108,8 +127,15 @@ impl FairPlayKeyServer {
             request.content_id,
             request.asset_id
         );
+        // Baseline for the SDK 27 upgrade: which SPC versions devices send.
+        match spc_version(&request.spc_data) {
+            Some(v) => log::info!("FairPlay SPC version {v:#010x}"),
+            None => log::info!("FairPlay SPC shorter than its version field"),
+        }
 
-        let json_request = build_request_json(&request);
+        // Never hand the SDK key material it would have to repair: its decode
+        // warnings and its panic handler print the request to stderr (#83).
+        let json_request = build_request_json(&request)?;
         let json_str = serde_json::to_string(&json_request)?;
 
         // Call fpssdk FFI
@@ -173,20 +199,47 @@ impl FairPlayKeyServer {
     }
 }
 
+/// AES-128 key and IV length the SDK expects in `asset-info`.
+const KEY_IV_LEN: usize = 16;
+
 /// Build the SDK JSON request for one CKC. Never requests `offline-hls`.
-pub fn build_request_json(request: &SpcRequest) -> serde_json::Value {
+///
+/// The SDK reads the key, IV and lease only from `asset-info[0]`, as hex
+/// strings; anything at the item level is ignored and the CKC would carry a
+/// zero key and IV.
+pub fn build_request_json(request: &SpcRequest) -> Result<serde_json::Value, FairPlayError> {
+    if request.content_key.len() != KEY_IV_LEN || request.content_iv.len() != KEY_IV_LEN {
+        return Err(FairPlayError::InvalidKeyMaterial);
+    }
     // SDK 26 issues a streaming licence unless an `offline-hls` object is present, so omitting it requests a streaming, non-persistable licence.
-    let mut item = serde_json::json!({
+    let mut asset_info = serde_json::json!({
+        "content-key": hex::encode(&request.content_key),
+        "content-iv": hex::encode(&request.content_iv),
+        // The SDK refuses a CKC without a content type. UHD: the device must
+        // support security level Main, and the SDK refuses UHD unless HDCP
+        // Type 1 is required.
+        "content-type": "uhd",
+        "hdcp-type": 1,
+        // HLS FairPlay (SAMPLE-AES) segments.
+        "encryption-scheme": "cbcs",
+    });
+    // Without `lease-duration` the SDK issues a licence with no lease.
+    if let Some(secs) = request.lease_duration_secs {
+        asset_info["lease-duration"] = serde_json::json!(secs);
+    }
+    let item = serde_json::json!({
         "id": 1,
-        "content-id": request.content_id,
         "spc": base64::engine::general_purpose::STANDARD.encode(&request.spc_data),
         "asset-id": request.asset_id,
-        "ck": base64::engine::general_purpose::STANDARD.encode(&request.content_key),
+        "asset-info": [asset_info],
     });
-    if let Some(secs) = request.lease_duration_secs {
-        item["lease-duration"] = serde_json::json!(secs);
-    }
-    serde_json::json!({ "fairplay-streaming-request": { "create-ckc": [item] } })
+    Ok(serde_json::json!({ "fairplay-streaming-request": { "create-ckc": [item] } }))
+}
+
+/// SPC version, the first 4 bytes of the SPC container (not secret).
+pub fn spc_version(spc: &[u8]) -> Option<u32> {
+    spc.get(..4)
+        .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
 }
 
 /// Extract the CKC and echoed asset id from the SDK JSON response.
@@ -225,8 +278,10 @@ pub struct SpcRequest {
     pub spc_data: Vec<u8>,
     /// Asset identifier for tracking
     pub asset_id: String,
-    /// Content key (DEK) to encrypt in CKC (typically 16 bytes for AES-128)
+    /// Content key to encrypt in the CKC; exactly 16 bytes (AES-128)
     pub content_key: Vec<u8>,
+    /// Content IV for the recording; exactly 16 bytes
+    pub content_iv: Vec<u8>,
     /// CKC lease in seconds; None sends no lease. Streaming licence type only; `offline-hls` is never requested.
     pub lease_duration_secs: Option<u32>,
 }
@@ -252,6 +307,11 @@ pub enum FairPlayError {
     /// SDK response was missing expected fields
     #[error("Invalid response from FairPlay SDK")]
     InvalidResponse,
+
+    /// Content key or IV is not 16 bytes; refused before the SDK is called.
+    /// The text is fixed and never carries the bytes.
+    #[error("content key or IV is not 16 bytes")]
+    InvalidKeyMaterial,
 
     /// JSON serialization/deserialization error
     #[error("JSON error: {0}")]
@@ -316,21 +376,67 @@ mod request_json_tests {
             content_id: "c".into(),
             spc_data: vec![1, 2],
             asset_id: "a".into(),
-            content_key: vec![0; 16],
+            content_key: (0u8..16).collect(),
+            content_iv: (0xf0u8..=0xff).collect(),
             lease_duration_secs: lease,
         }
     }
 
     #[test]
-    fn lease_is_sent_and_never_offline() {
-        let v = build_request_json(&req(Some(3600)));
+    fn key_iv_and_lease_go_in_asset_info() {
+        let v = build_request_json(&req(Some(3600))).unwrap();
         let item = &v["fairplay-streaming-request"]["create-ckc"][0];
-        assert_eq!(item["lease-duration"], 3600);
+        let infos = item["asset-info"].as_array().unwrap();
+        assert_eq!(infos.len(), 1);
+        let info = &infos[0];
+        assert_eq!(info["content-key"], "000102030405060708090a0b0c0d0e0f");
+        assert_eq!(info["content-iv"], "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
+        assert_eq!(info["lease-duration"], 3600);
+        assert_eq!(info["content-type"], "uhd");
+        assert_eq!(info["hdcp-type"], 1);
+        assert_eq!(info["encryption-scheme"], "cbcs");
+        // The SDK ignores item-level key material; none may be left there.
+        for k in ["ck", "content-key", "content-iv", "lease-duration"] {
+            assert!(item.get(k).is_none(), "{k} at item level");
+        }
         assert!(item.get("offline-hls").is_none());
-        let v = build_request_json(&req(None));
-        assert!(v["fairplay-streaming-request"]["create-ckc"][0]
-            .get("lease-duration")
-            .is_none());
+        assert!(info.get("offline-hls").is_none());
+        assert_eq!(item["asset-id"], "a");
+    }
+
+    #[test]
+    fn no_lease_omits_lease_duration() {
+        let v = build_request_json(&req(None)).unwrap();
+        let info = &v["fairplay-streaming-request"]["create-ckc"][0]["asset-info"][0];
+        assert!(info.get("lease-duration").is_none());
+    }
+
+    #[test]
+    fn wrong_length_key_or_iv_is_refused_without_echo() {
+        for (key, iv) in [
+            (15, 16),
+            (17, 16),
+            (32, 16),
+            (0, 16),
+            (16, 12),
+            (16, 0),
+            (16, 32),
+        ] {
+            let mut r = req(Some(60));
+            r.content_key = vec![0xab; key];
+            r.content_iv = vec![0xcd; iv];
+            let e = build_request_json(&r).unwrap_err();
+            assert!(matches!(e, FairPlayError::InvalidKeyMaterial), "{key}/{iv}");
+            let text = e.to_string();
+            assert!(!text.contains("ab") && !text.contains("cd"), "{text}");
+            assert!(!e.is_malformed_spc());
+        }
+    }
+
+    #[test]
+    fn spc_version_reads_first_four_bytes() {
+        assert_eq!(spc_version(&[0, 0, 0, 2, 9, 9]), Some(2));
+        assert_eq!(spc_version(&[0, 0, 1]), None);
     }
 
     #[test]

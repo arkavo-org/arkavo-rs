@@ -114,6 +114,10 @@ The credentials directory must contain:
 - `certificates.json` or `test_certificates.json`
 - FPS certificate files (`*.bin`)
 
+The SDK itself reads only `FPS_CERT_PATH` (the path of the certificates JSON
+file). When it is unset, arks points it at `certificates.json` in this
+directory, or at `test_certificates.json` if there is no `certificates.json`.
+
 ## Architecture
 
 ### Crate Structure
@@ -213,10 +217,15 @@ Content-Type: application/json
 
 Clients MUST use `skd://<policy uuid>` as the asset id in the SPC. The server passes the bare policy uuid to the FairPlay SDK; a mismatch with the SPC's asset id is only logged as a warning. The manifest must have exactly one wrapped key-access object for an
 accepted KAS (`MEDIA_KAS_URLS`) and a policy with a uuid and at least one
-`dataAttributes` entry. The policy binding is
+`dataAttributes` entry. `encryptionInformation.method.iv` must be the
+recording's 16-byte content IV in base64; a missing or malformed IV is a broken
+package and gets 400 `invalid_request`, not 403. The CKC carries it with the first 16
+bytes of the DEK. The policy binding is
 `base64(HMAC-SHA256(DEK, <base64 policy string>))`; the hex form is refused.
 The platform `GetDecision` must permit. The CKC carries a lease of
-`MEDIA_FPS_LEASE_SECONDS` and is streaming-only. `tdfWrappedKey` is no longer
+`MEDIA_FPS_LEASE_SECONDS`, is streaming-only, and is issued as `uhd` content
+(the device must support security level Main; HDCP Type 1 required) with `cbcs`
+encryption. `tdfWrappedKey` is no longer
 accepted.
 
 #### TDF3 Request (disabled)

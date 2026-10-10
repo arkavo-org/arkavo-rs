@@ -220,7 +220,13 @@ pub async fn authorize_license(
     let mut key = [0u8; 16];
     key.copy_from_slice(&policy.dek[..16]);
     let issued = issuer
-        .issue(spc, key, &policy.policy_uuid, license.lease_secs)
+        .issue(
+            spc,
+            key,
+            policy.content_iv,
+            &policy.policy_uuid,
+            license.lease_secs,
+        )
         .await
         .map_err(|e| match e {
             IssueError::MalformedSpc(detail) => {
@@ -797,6 +803,14 @@ mod license_pipeline_tests {
             [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
         );
         assert_eq!(*fake.seen_lease.lock().unwrap(), Some(3600));
+        // The manifest's method.iv, decoded from base64.
+        assert_eq!(
+            fake.seen_iv.lock().unwrap().unwrap(),
+            [
+                0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd,
+                0xfe, 0xff
+            ]
+        );
     }
 
     #[tokio::test]
@@ -840,6 +854,23 @@ mod license_pipeline_tests {
             .err()
             .unwrap();
         assert_eq!(err, LicenseError::Forbidden("platform refused"));
+        assert!(fake.seen_key.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn empty_content_iv_is_400_not_403() {
+        // A broken package must not read as "no access" in the viewer.
+        let server = platform("DECISION_PERMIT").await;
+        let fake = Arc::new(FakeIssuer::new(None));
+        let st = state(&server, fake.clone());
+        let mut m: serde_json::Value = serde_json::from_str(manifest()).unwrap();
+        m["encryptionInformation"]["method"]["iv"] = json!("");
+        let err = authorize_license(&st, &person(), &payload(&m.to_string()), "rid")
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(err, LicenseError::BadRequest("content iv must be 16 bytes"));
+        assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
         assert!(fake.seen_key.lock().unwrap().is_none());
     }
 

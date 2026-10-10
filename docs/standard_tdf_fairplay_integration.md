@@ -226,7 +226,9 @@ curl -X POST https://platform.arkavo.net/media/v1/key-request \
 The full manifest is required; there is no wrapped-key-only alternative
 (`tdfWrappedKey` has been removed). The manifest must contain exactly one wrapped
 key-access object for a KAS in `MEDIA_KAS_URLS`, and its policy must have a uuid
-and at least one `dataAttributes` entry.
+and at least one `dataAttributes` entry. `encryptionInformation.method.iv` must
+be the recording's 16-byte content IV in base64 (400 `invalid_request`
+otherwise); the CKC carries it.
 
 Clients MUST use `skd://<policy uuid>` as the asset id in the SPC. The server passes the bare policy uuid to the FairPlay SDK; a mismatch with the SPC's asset id is only logged as a warning. The platform `GetDecision` must permit.
 
