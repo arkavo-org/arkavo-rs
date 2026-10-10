@@ -4,7 +4,7 @@
 /// session management, and rental window tracking.
 use crate::modules::fairplay::MediaProtocol;
 use crate::modules::http_rewrap::RewrapState;
-use crate::modules::license::issuer::{IssueError, IssuedLicense};
+use crate::modules::license::issuer::{IssueError, IssuedLicense, LicenseContentType};
 use crate::modules::license::person_token::Person;
 use crate::modules::license::tdf_policy::PolicyKeys;
 use crate::modules::license::LicenseError;
@@ -237,6 +237,7 @@ pub async fn authorize_license(
             key,
             policy.content_iv,
             &policy.policy_uuid,
+            LicenseContentType::Uhd,
             license.lease_secs,
         )
         .await
@@ -696,12 +697,15 @@ mod license_pipeline_tests {
     use crate::modules::authzen::cose_keys::CoseKeyCache;
     use crate::modules::license::config::LicenseAuthz;
     use crate::modules::license::issuer::test_support::FakeIssuer;
+    use crate::modules::license::issuer::LicenseContentType;
     use crate::modules::license::pdp::PlatformPdp;
     use crate::modules::license::person_token::{Person, PersonTokenVerifier};
     use rsa::pkcs8::DecodePrivateKey;
     use serde_json::json;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const UUID: &str = "3f1c9e2a-7b4d-4e8f-9a21-5c6d7e8f9a0b";
 
     pub(super) fn manifest() -> &'static str {
         &crate::modules::license::fixtures::fixtures().manifest_allowed
@@ -823,6 +827,22 @@ mod license_pipeline_tests {
                 0xfe, 0xff
             ]
         );
+    }
+
+    /// Profile v1 is issued as before: `uhd`, under the bare policy uuid.
+    #[tokio::test]
+    async fn v1_is_issued_as_uhd_under_the_policy_uuid() {
+        let server = platform("DECISION_PERMIT").await;
+        let fake = Arc::new(FakeIssuer::new(Some(UUID)));
+        let st = state(&server, fake.clone());
+        authorize_license(&st, &person(), &payload(manifest()), "rid")
+            .await
+            .unwrap();
+        assert_eq!(
+            *fake.seen_content_type.lock().unwrap(),
+            Some(LicenseContentType::Uhd)
+        );
+        assert_eq!(fake.seen_asset_id.lock().unwrap().as_deref(), Some(UUID));
     }
 
     #[tokio::test]

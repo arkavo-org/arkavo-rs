@@ -19,6 +19,19 @@ pub enum IssueError {
     MalformedSpc(String),
 }
 
+/// The FairPlay content type a CKC is issued as (arkavo-ios ADR-0055 §7).
+/// Both require HDCP Type 1.
+// Nothing constructs `Audio` until Task 4 (per-component content type), which
+// removes this attribute.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LicenseContentType {
+    /// Video: security level Main; sealed for the device's secure video path.
+    Uhd,
+    /// Audio: security level audio; usable by the audio decoder.
+    Audio,
+}
+
 #[async_trait::async_trait]
 pub trait LicenseIssuer: Send + Sync {
     async fn issue(
@@ -27,6 +40,7 @@ pub trait LicenseIssuer: Send + Sync {
         content_key: [u8; 16],
         content_iv: [u8; 16],
         asset_id: &str,
+        content_type: LicenseContentType,
         lease_secs: u32,
     ) -> Result<IssuedLicense, IssueError>;
 }
@@ -40,13 +54,19 @@ impl LicenseIssuer for crate::modules::fairplay::FairPlayHandler {
         content_key: [u8; 16],
         content_iv: [u8; 16],
         asset_id: &str,
+        content_type: LicenseContentType,
         lease_secs: u32,
     ) -> Result<IssuedLicense, IssueError> {
+        let content_type = match content_type {
+            LicenseContentType::Uhd => fairplay_wrapper::ContentType::Uhd,
+            LicenseContentType::Audio => fairplay_wrapper::ContentType::Audio,
+        };
         self.process_key_request(
             spc,
             content_key.to_vec(),
             content_iv.to_vec(),
             asset_id.to_string(),
+            content_type,
             lease_secs,
         )
         .await
@@ -68,12 +88,14 @@ pub mod test_support {
     use super::*;
     use std::sync::Mutex;
 
-    /// Records the key it was asked to issue and returns a fixed CKC, or the
+    /// Records what it was asked to issue and returns a fixed CKC, or the
     /// failure it was built with.
     pub struct FakeIssuer {
         pub seen_key: Mutex<Option<[u8; 16]>>,
         pub seen_iv: Mutex<Option<[u8; 16]>>,
         pub seen_lease: Mutex<Option<u32>>,
+        pub seen_asset_id: Mutex<Option<String>>,
+        pub seen_content_type: Mutex<Option<LicenseContentType>>,
         pub spc_asset_id: Option<String>,
         pub failure: Option<IssueError>,
     }
@@ -84,6 +106,8 @@ pub mod test_support {
                 seen_key: Mutex::new(None),
                 seen_iv: Mutex::new(None),
                 seen_lease: Mutex::new(None),
+                seen_asset_id: Mutex::new(None),
+                seen_content_type: Mutex::new(None),
                 spc_asset_id: spc_asset_id.map(str::to_string),
                 failure: None,
             }
@@ -104,12 +128,15 @@ pub mod test_support {
             _spc: Vec<u8>,
             content_key: [u8; 16],
             content_iv: [u8; 16],
-            _asset_id: &str,
+            asset_id: &str,
+            content_type: LicenseContentType,
             lease_secs: u32,
         ) -> Result<IssuedLicense, IssueError> {
             *self.seen_key.lock().unwrap() = Some(content_key);
             *self.seen_iv.lock().unwrap() = Some(content_iv);
             *self.seen_lease.lock().unwrap() = Some(lease_secs);
+            *self.seen_asset_id.lock().unwrap() = Some(asset_id.to_string());
+            *self.seen_content_type.lock().unwrap() = Some(content_type);
             if let Some(f) = &self.failure {
                 return Err(f.clone());
             }
