@@ -159,10 +159,7 @@ impl SessionManager {
             .expire(&user_sessions_key, SESSION_HEARTBEAT_TIMEOUT)
             .await?;
 
-        info!(
-            "Created session {} for user {} on asset {}",
-            session.session_id, session.user_id, session.asset_id
-        );
+        info!("Created session on asset {}", session.asset_id);
 
         Ok(())
     }
@@ -248,10 +245,7 @@ impl SessionManager {
             // Delete session data
             let _: () = conn.del(&session_key).await?;
 
-            info!(
-                "Terminated session {} for user {}",
-                session_id, session.user_id
-            );
+            info!("Terminated session on asset {}", session.asset_id);
         }
 
         Ok(())
@@ -329,10 +323,7 @@ impl SessionManager {
         }
 
         if cleaned > 0 {
-            info!(
-                "Cleaned up {} expired sessions for user {}",
-                cleaned, user_id
-            );
+            info!("Cleaned up {} expired sessions", cleaned);
         }
 
         Ok(cleaned)

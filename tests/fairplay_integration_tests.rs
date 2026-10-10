@@ -101,7 +101,7 @@ async fn test_1_1a_session_start_tdf3() {
         "Session ID has incorrect format"
     );
 
-    println!("✅ Test 1.1a PASS: TDF3 session created: {}", session_id);
+    println!("✅ Test 1.1a PASS: TDF3 session created");
 }
 
 #[tokio::test]
@@ -145,10 +145,7 @@ async fn test_1_1b_session_start_fairplay() {
         "Session ID has incorrect format"
     );
 
-    println!(
-        "✅ Test 1.1b PASS: FairPlay session created: {}",
-        session_id
-    );
+    println!("✅ Test 1.1b PASS: FairPlay session created");
 }
 
 #[tokio::test]

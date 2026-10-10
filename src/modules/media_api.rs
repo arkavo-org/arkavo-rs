@@ -487,7 +487,7 @@ pub async fn session_heartbeat(
             message: "session not found".to_string(),
         }),
         Err(e) => {
-            error!("Heartbeat failed for session {}: {}", session_id, e);
+            error!("Session heartbeat failed: {}", e);
             Err(LicenseError::Unavailable("session store unavailable").into())
         }
     }
@@ -525,7 +525,7 @@ pub async fn session_terminate(
     match state.session_manager.terminate_session(&session_id).await {
         Ok(_) => Ok(StatusCode::NO_CONTENT),
         Err(e) => {
-            error!("Failed to terminate session {}: {}", session_id, e);
+            error!("Failed to terminate session: {}", e);
             Err(LicenseError::Unavailable("session store unavailable").into())
         }
     }
