@@ -219,106 +219,65 @@ impl MediaMetrics {
     pub fn log_event(&self, event: &MediaEvent) {
         match event {
             MediaEvent::KeyRequest {
-                session_id,
-                user_id,
-                result,
-                latency_ms,
-                ..
+                result, latency_ms, ..
             } => {
-                info!(
-                    "KEY_REQUEST session={} user={} result={:?} latency_ms={}",
-                    session_id, user_id, result, latency_ms
-                );
+                info!("KEY_REQUEST result={:?} latency_ms={}", result, latency_ms);
             }
-            MediaEvent::SessionStart {
-                session_id,
-                user_id,
-                asset_id,
-                ..
-            } => {
-                info!(
-                    "SESSION_START session={} user={} asset={}",
-                    session_id, user_id, asset_id
-                );
+            MediaEvent::SessionStart { asset_id, .. } => {
+                info!("SESSION_START asset={}", asset_id);
             }
             MediaEvent::SessionEnd {
-                session_id,
-                user_id,
                 duration_seconds,
                 reason,
                 ..
             } => {
                 info!(
-                    "SESSION_END session={} user={} duration={}s reason={:?}",
-                    session_id, user_id, duration_seconds, reason
+                    "SESSION_END duration={}s reason={:?}",
+                    duration_seconds, reason
                 );
             }
             MediaEvent::PolicyDenial {
-                user_id,
                 asset_id,
                 denial_reason,
                 ..
             } => {
-                info!(
-                    "POLICY_DENIAL user={} asset={} reason={}",
-                    user_id, asset_id, denial_reason
-                );
+                info!("POLICY_DENIAL asset={} reason={}", asset_id, denial_reason);
             }
             MediaEvent::ConcurrencyLimit {
-                user_id,
                 current_streams,
                 max_streams,
                 ..
             } => {
                 info!(
-                    "CONCURRENCY_LIMIT user={} current={} max={}",
-                    user_id, current_streams, max_streams
+                    "CONCURRENCY_LIMIT current={} max={}",
+                    current_streams, max_streams
                 );
             }
             MediaEvent::RentalWindow {
-                user_id,
-                asset_id,
-                action,
-                ..
+                asset_id, action, ..
             } => {
-                info!(
-                    "RENTAL_WINDOW user={} asset={} action={:?}",
-                    user_id, asset_id, action
-                );
+                info!("RENTAL_WINDOW asset={} action={:?}", asset_id, action);
             }
             MediaEvent::C2paValidationSuccess {
-                user_id,
                 asset_id,
                 creator,
                 ai_generated,
                 ..
             } => {
                 info!(
-                    "C2PA_VALIDATION_SUCCESS user={} asset={} creator={:?} ai_generated={:?}",
-                    user_id, asset_id, creator, ai_generated
+                    "C2PA_VALIDATION_SUCCESS asset={} creator={:?} ai_generated={:?}",
+                    asset_id, creator, ai_generated
                 );
             }
             MediaEvent::C2paValidationFailure {
-                user_id,
-                asset_id,
-                error,
-                ..
+                asset_id, error, ..
             } => {
-                info!(
-                    "C2PA_VALIDATION_FAILURE user={} asset={} error={}",
-                    user_id, asset_id, error
-                );
+                info!("C2PA_VALIDATION_FAILURE asset={} error={}", asset_id, error);
             }
             MediaEvent::C2paPolicyDenial {
-                user_id,
-                asset_id,
-                reason,
-                ..
+                asset_id, reason, ..
             } => {
-                info!(
-                    "C2PA_POLICY_DENIAL user={} asset={} reason={}",
-                    user_id, asset_id, reason
-                );
+                info!("C2PA_POLICY_DENIAL asset={} reason={}", asset_id, reason);
             }
         }
     }
