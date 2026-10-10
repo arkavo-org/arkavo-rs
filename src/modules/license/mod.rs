@@ -7,6 +7,7 @@ pub mod fixtures;
 pub mod issuer;
 pub mod pdp;
 pub mod person_token;
+pub mod strict_json;
 pub mod tdf_policy;
 
 use axum::http::StatusCode;

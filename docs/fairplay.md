@@ -195,10 +195,11 @@ Content-Type: application/json
 
 {
   "sessionId": "session_id",
-  "assetId": "asset_456",
+  "assetId": "3f1c9e2a-7b4d-4e8f-9a21-5c6d7e8f9a0b",
   "segmentIndex": 0,
   "spcData": "base64_encoded_spc_from_client",
-  "tdfManifest": "base64_encoded_full_tdf_manifest"
+  "tdfManifest": "base64_encoded_full_tdf_manifest",
+  "component": "video"
 }
 ```
 
@@ -215,18 +216,46 @@ Content-Type: application/json
 }
 ```
 
-Clients MUST use `skd://<policy uuid>` as the asset id in the SPC. The server passes the bare policy uuid to the FairPlay SDK; a mismatch with the SPC's asset id is only logged as a warning. The manifest must have exactly one wrapped key-access object for an
-accepted KAS (`MEDIA_KAS_URLS`) and a policy with a uuid and at least one
-`dataAttributes` entry. `encryptionInformation.method.iv` must be the
-recording's 16-byte content IV in base64; a missing or malformed IV is a broken
-package and gets 400 `invalid_request`, not 403. The CKC carries it with the first 16
-bytes of the DEK. The policy binding is
-`base64(HMAC-SHA256(DEK, <base64 policy string>))`; the hex form is refused.
-The platform `GetDecision` must permit. The CKC carries a lease of
-`MEDIA_FPS_LEASE_SECONDS`, is streaming-only, and is issued as `uhd` content
-(the device must support security level Main; HDCP Type 1 required) with `cbcs`
-encryption. `tdfWrappedKey` is no longer
-accepted.
+The service supports two package profiles, told apart by the policy (arkavo-ios ADR-0055).
+
+**Profile v1** (a policy without `arkavo:components`; kept while any viewer build reads it):
+Clients MUST use `skd://<policy uuid>` as the asset id in the SPC. The server passes the bare
+policy uuid to the FairPlay SDK; a mismatch with the SPC's asset id is only logged as a warning.
+The manifest must have exactly one wrapped key-access object for an accepted KAS
+(`MEDIA_KAS_URLS`). The CKC carries the first 16 bytes of the DEK as `uhd` content. `component`
+is ignored.
+
+**Profile v2** (a policy with an `arkavo:components` member):
+- The policy lists the package's components: `{"id":"video","kind":"video","keyBinding":…}`,
+  then optionally `{"id":"audio","kind":"audio","keyBinding":…}`, each with exactly those keys.
+  `keyBinding` is `base64(HMAC-SHA256(key, "arkavo:fps:component:v1:" + id))`.
+- `keyAccess` holds one wrapped key per component, in the list's order. Each must name an
+  accepted KAS, unwrap to exactly 16 bytes, and carry its own policy binding, computed with its
+  own key. No two components may share a key.
+- The request must carry `"component":"<id>"` naming one of the components, and `assetId` must
+  be the policy uuid. The client's SPC asset id MUST be `<policy uuid>/<id>`, which is
+  `skd://<policy uuid>/<id>` without the scheme.
+- The CKC carries the component's key: `video` as `uhd` content, `audio` as `audio` content.
+  The SDK `asset-id` is `<policy uuid>/<id>`.
+- Every refusal is the same 403 `forbidden` ("manifest refused"), and the specific reason is only
+  logged. A refusal happens before the platform decision when the manifest or policy repeats a
+  JSON key, the list has any other shape, the key-access count differs from the component count,
+  a key fails any of the checks above, `component` is missing or unknown, or `assetId` is not the
+  policy uuid. The SDK reads the SPC's asset id in the same call that computes the CKC, so a
+  mismatch there drops the CKC; it is never returned.
+- Each component's acquisition and each component's renewal is its own license request, with its
+  own session (start, key request, end).
+
+Both profiles: the policy needs a uuid and at least one `dataAttributes` entry, and neither the
+manifest nor the decoded policy may repeat a JSON key (refused before the profile is chosen).
+`encryptionInformation.method.iv` must be the recording's 16-byte content IV in base64. In
+profile v1 a missing or malformed IV is a broken package and gets 400 `invalid_request`, not 403;
+in profile v2 it is the generic 403 "manifest refused". The CKC carries it.
+Every license, v1 and v2, is issued with `cbcs` encryption and requires HDCP Type 1; where the
+content type is `uhd` (all of v1, and v2 `video`) it also requires security level Main.
+The policy binding is `base64(HMAC-SHA256(key, <base64 policy string>))`; the hex form is refused.
+The platform `GetDecision` must permit. The CKC carries a lease of `MEDIA_FPS_LEASE_SECONDS` and
+is streaming-only. `tdfWrappedKey` is no longer accepted.
 
 #### TDF3 Request (disabled)
 

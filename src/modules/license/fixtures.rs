@@ -8,6 +8,8 @@ use std::sync::OnceLock;
 pub struct Fixtures {
     pub key_pem: String,
     pub manifest_allowed: String,
+    /// Profile v2: the shared test vectors' two keys and policy.
+    pub manifest_v2: String,
     pub binding_hex: String,
     pub binding_raw_json: String,
 }
@@ -38,6 +40,7 @@ fn generate() -> Fixtures {
     let f = Fixtures {
         key_pem: read("test_kas_rsa_private.pem"),
         manifest_allowed: read("manifest_allowed.json"),
+        manifest_v2: read("manifest_v2.json"),
         binding_hex: read("binding_hex.txt"),
         binding_raw_json: read("binding_raw_json.txt"),
     };

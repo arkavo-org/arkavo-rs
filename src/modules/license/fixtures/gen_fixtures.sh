@@ -3,8 +3,8 @@
 # verifier is checked against an independent producer of the binding and
 # the RSA-OAEP-SHA1 wrap. TEST KEY ONLY — never a real KAS key.
 # Usage: gen_fixtures.sh <output-dir>   (optional: OPENSSL=/path/to/openssl)
-# Writes test_kas_rsa_private.pem, manifest_allowed.json, binding_hex.txt and
-# binding_raw_json.txt into <output-dir>. Nothing generated is committed.
+# Writes test_kas_rsa_private.pem, manifest_allowed.json, manifest_v2.json,
+# binding_hex.txt and binding_raw_json.txt into <output-dir>. Nothing generated is committed.
 set -euo pipefail
 OUT="${1:?usage: gen_fixtures.sh <output-dir>}"
 mkdir -p "$OUT"
@@ -46,6 +46,46 @@ cat > "$OUT/manifest_allowed.json" <<EOF
  "encryptionInformation":{"type":"split","policy":"$POLICY_B64",
   "keyAccess":[{"type":"wrapped","url":"$KAS_URL","protocol":"kas","wrappedKey":"$WRAPPED",
    "policyBinding":{"alg":"HS256","hash":"$BINDING"}}],
+  "method":{"algorithm":"AES-256-GCM","isStreamable":true,"iv":"$IV_B64"},
+  "integrityInformation":{"rootSignature":{"alg":"HS256","sig":""},"segmentHashAlg":"GMAC","segments":[]}}}
+EOF
+# Profile v2 (arkavo-ios ADR-0055): one 16-byte key per component. The keys,
+# the policy and the bindings are the shared test vectors of arkavo-ios's
+# FairPlay profile v2 plan; tdf_policy's tests pin them.
+VIDEO_KEY_HEX=000102030405060708090a0b0c0d0e0f
+AUDIO_KEY_HEX=101112131415161718191a1b1c1d1e1f
+V2_FQN=https://patreon.arkavo.com/attr/campaign-tier/value/13167240_24457368
+
+# $1: key hex. Prints base64(RSA-OAEP-SHA1(key)) for the test KAS key.
+wrap_key() {
+  local esc
+  esc=$(printf '%s' "$1" | sed 's/../\\x&/g')
+  printf "$esc" > "$WORK/key.bin"
+  "$OPENSSL" pkeyutl -encrypt -pubin -inkey "$WORK/pub.pem" \
+    -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha1 -pkeyopt rsa_mgf1_md:sha1 \
+    -in "$WORK/key.bin" | base64 | tr -d '\n'
+}
+# $1: key hex; data on stdin. Prints base64(HMAC-SHA256(key, data)).
+hmac_b64() {
+  "$OPENSSL" dgst -sha256 -mac HMAC -macopt "hexkey:$1" -binary | base64 | tr -d '\n'
+}
+
+VIDEO_KEY_BINDING=$(printf '%s' "arkavo:fps:component:v1:video" | hmac_b64 "$VIDEO_KEY_HEX")
+AUDIO_KEY_BINDING=$(printf '%s' "arkavo:fps:component:v1:audio" | hmac_b64 "$AUDIO_KEY_HEX")
+V2_POLICY="{\"arkavo:components\":[{\"id\":\"video\",\"kind\":\"video\",\"keyBinding\":\"$VIDEO_KEY_BINDING\"},{\"id\":\"audio\",\"kind\":\"audio\",\"keyBinding\":\"$AUDIO_KEY_BINDING\"}],\"arkavo:classification\":{\"filter\":\"passed\",\"flagged\":[],\"v\":1},\"body\":{\"dataAttributes\":[{\"attribute\":\"$V2_FQN\"}],\"dissem\":[]},\"uuid\":\"$UUID\"}"
+V2_POLICY_B64=$(printf '%s' "$V2_POLICY" | base64 | tr -d '\n')
+VIDEO_WRAPPED=$(wrap_key "$VIDEO_KEY_HEX")
+AUDIO_WRAPPED=$(wrap_key "$AUDIO_KEY_HEX")
+VIDEO_POLICY_BINDING=$(printf '%s' "$V2_POLICY_B64" | hmac_b64 "$VIDEO_KEY_HEX")
+AUDIO_POLICY_BINDING=$(printf '%s' "$V2_POLICY_B64" | hmac_b64 "$AUDIO_KEY_HEX")
+
+cat > "$OUT/manifest_v2.json" <<EOF
+{"payload":{"type":"reference","url":"0.payload","protocol":"zip","isEncrypted":true},
+ "encryptionInformation":{"type":"split","policy":"$V2_POLICY_B64",
+  "keyAccess":[{"type":"wrapped","url":"$KAS_URL","protocol":"kas","wrappedKey":"$VIDEO_WRAPPED",
+    "policyBinding":{"alg":"HS256","hash":"$VIDEO_POLICY_BINDING"}},
+   {"type":"wrapped","url":"$KAS_URL","protocol":"kas","wrappedKey":"$AUDIO_WRAPPED",
+    "policyBinding":{"alg":"HS256","hash":"$AUDIO_POLICY_BINDING"}}],
   "method":{"algorithm":"AES-256-GCM","isStreamable":true,"iv":"$IV_B64"},
   "integrityInformation":{"rootSignature":{"alg":"HS256","sig":""},"segmentHashAlg":"GMAC","segments":[]}}}
 EOF

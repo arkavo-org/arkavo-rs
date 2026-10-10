@@ -59,9 +59,10 @@ impl FairPlayHandler {
 
     /// Process FairPlay key request
     ///
-    /// Takes an SPC from the client and returns a leased CKC with the encrypted
-    /// content key and the recording's content IV. `asset_id` is the TDF policy uuid, sent to the SDK as both
-    /// `content-id` and `asset-id`.
+    /// Takes an SPC from the client and returns a leased CKC with the content
+    /// key and the recording's content IV. `asset_id` is the policy uuid
+    /// (profile v1) or `<policy uuid>/<component id>` (profile v2), sent to the
+    /// SDK as `asset-id`; `content_type` is the component's SDK content type.
     #[cfg(feature = "fairplay")]
     pub async fn process_key_request(
         &self,
@@ -69,14 +70,16 @@ impl FairPlayHandler {
         content_key: Vec<u8>,
         content_iv: Vec<u8>,
         asset_id: String,
+        content_type: fairplay_wrapper::ContentType,
         lease_secs: u32,
     ) -> Result<
         crate::modules::license::issuer::IssuedLicense,
         Box<dyn std::error::Error + Send + Sync>,
     > {
         log::debug!(
-            "Processing FairPlay key request: asset_id={} spc_len={} lease_secs={}",
+            "Processing FairPlay key request: asset_id={} content_type={} spc_len={} lease_secs={}",
             asset_id,
+            content_type.as_str(),
             spc_data.len(),
             lease_secs
         );
@@ -87,6 +90,7 @@ impl FairPlayHandler {
             asset_id,
             content_key,
             content_iv,
+            content_type,
             lease_duration_secs: Some(lease_secs),
         };
 

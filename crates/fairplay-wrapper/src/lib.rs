@@ -6,7 +6,7 @@
 //! # Usage
 //!
 //! ```no_run
-//! use fairplay_wrapper::{FairPlayKeyServer, SpcRequest};
+//! use fairplay_wrapper::{ContentType, FairPlayKeyServer, SpcRequest};
 //! use std::path::PathBuf;
 //!
 //! let credentials_path = PathBuf::from("./credentials");
@@ -18,6 +18,7 @@
 //!     asset_id: "asset-001".to_string(),
 //!     content_key: vec![/* 16-byte DEK */],
 //!     content_iv: vec![/* 16-byte content IV */],
+//!     content_type: ContentType::Uhd,
 //!     lease_duration_secs: Some(3600),
 //! };
 //!
@@ -109,7 +110,7 @@ impl FairPlayKeyServer {
     ///
     /// # Example
     /// ```no_run
-    /// # use fairplay_wrapper::{FairPlayKeyServer, SpcRequest};
+    /// # use fairplay_wrapper::{ContentType, FairPlayKeyServer, SpcRequest};
     /// # let server = FairPlayKeyServer::new("./creds".into()).unwrap();
     /// let request = SpcRequest {
     ///     content_id: "asset-123".to_string(),
@@ -117,6 +118,7 @@ impl FairPlayKeyServer {
     ///     asset_id: "asset-123".to_string(),
     ///     content_key: vec![0xAA; 16],  // 16-byte DEK
     ///     content_iv: vec![0xBB; 16],   // 16-byte content IV
+    ///     content_type: ContentType::Uhd,
     ///     lease_duration_secs: Some(3600),
     /// };
     /// let response = server.process_spc(request).unwrap();
@@ -202,6 +204,26 @@ impl FairPlayKeyServer {
 /// AES-128 key and IV length the SDK expects in `asset-info`.
 const KEY_IV_LEN: usize = 16;
 
+/// The SDK `content-type` a CKC is issued as (arkavo-ios ADR-0055 §7). Both
+/// are issued with HDCP Type 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentType {
+    /// Video: security level Main; with SPC v3 keys the SDK seals the key
+    /// for the device's secure video path.
+    Uhd,
+    /// Audio: security level audio; the key is usable by the audio decoder.
+    Audio,
+}
+
+impl ContentType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ContentType::Uhd => "uhd",
+            ContentType::Audio => "audio",
+        }
+    }
+}
+
 /// Build the SDK JSON request for one CKC. Never requests `offline-hls`.
 ///
 /// The SDK reads the key, IV and lease only from `asset-info[0]`, as hex
@@ -217,8 +239,8 @@ pub fn build_request_json(request: &SpcRequest) -> Result<serde_json::Value, Fai
         "content-iv": hex::encode(&request.content_iv),
         // The SDK refuses a CKC without a content type. UHD: the device must
         // support security level Main, and the SDK refuses UHD unless HDCP
-        // Type 1 is required.
-        "content-type": "uhd",
+        // Type 1 is required. Audio is issued with HDCP Type 1 too (ADR-0055).
+        "content-type": request.content_type.as_str(),
         "hdcp-type": 1,
         // HLS FairPlay (SAMPLE-AES) segments.
         "encryption-scheme": "cbcs",
@@ -282,6 +304,8 @@ pub struct SpcRequest {
     pub content_key: Vec<u8>,
     /// Content IV for the recording; exactly 16 bytes
     pub content_iv: Vec<u8>,
+    /// The SDK content type: `Uhd` for video, `Audio` for audio.
+    pub content_type: ContentType,
     /// CKC lease in seconds; None sends no lease. Streaming licence type only; `offline-hls` is never requested.
     pub lease_duration_secs: Option<u32>,
 }
@@ -378,6 +402,7 @@ mod request_json_tests {
             asset_id: "a".into(),
             content_key: (0u8..16).collect(),
             content_iv: (0xf0u8..=0xff).collect(),
+            content_type: ContentType::Uhd,
             lease_duration_secs: lease,
         }
     }
@@ -402,6 +427,24 @@ mod request_json_tests {
         assert!(item.get("offline-hls").is_none());
         assert!(info.get("offline-hls").is_none());
         assert_eq!(item["asset-id"], "a");
+    }
+
+    /// ADR-0055: audio keys are issued as `audio`, still with HDCP Type 1.
+    #[test]
+    fn audio_is_issued_as_audio_with_hdcp_type_1() {
+        let mut r = req(Some(60));
+        r.content_type = ContentType::Audio;
+        let v = build_request_json(&r).unwrap();
+        let info = &v["fairplay-streaming-request"]["create-ckc"][0]["asset-info"][0];
+        assert_eq!(info["content-type"], "audio");
+        assert_eq!(info["hdcp-type"], 1);
+        assert_eq!(info["encryption-scheme"], "cbcs");
+    }
+
+    #[test]
+    fn content_types_name_the_sdk_values() {
+        assert_eq!(ContentType::Uhd.as_str(), "uhd");
+        assert_eq!(ContentType::Audio.as_str(), "audio");
     }
 
     #[test]

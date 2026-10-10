@@ -208,6 +208,9 @@ Response:
 
 ### 2. Request Content Key (with TDF manifest)
 
+Profile v1 example (a policy without `arkavo:components`); a profile v2 request also
+carries `"component":"video"` or `"audio"`, and its `assetId` is the policy uuid.
+
 ```bash
 # Base64 encode manifest.json
 MANIFEST_B64=$(base64 < manifest.json)
@@ -224,19 +227,34 @@ curl -X POST https://platform.arkavo.net/media/v1/key-request \
 ```
 
 The full manifest is required; there is no wrapped-key-only alternative
-(`tdfWrappedKey` has been removed). The manifest must contain exactly one wrapped
-key-access object for a KAS in `MEDIA_KAS_URLS`, and its policy must have a uuid
-and at least one `dataAttributes` entry. `encryptionInformation.method.iv` must
-be the recording's 16-byte content IV in base64 (400 `invalid_request`
-otherwise); the CKC carries it.
+(`tdfWrappedKey` has been removed). The manifest must contain one wrapped
+key-access object (profile v1) or one per component (profile v2), each for a KAS
+in `MEDIA_KAS_URLS`, and its policy must have a uuid
+and at least one `dataAttributes` entry. Neither the manifest nor the decoded
+policy may repeat a JSON key (403). `encryptionInformation.method.iv` must
+be the recording's 16-byte content IV in base64 (profile v1: 400
+`invalid_request` otherwise; profile v2: the generic 403 "manifest refused");
+the CKC carries it.
 
-Clients MUST use `skd://<policy uuid>` as the asset id in the SPC. The server passes the bare policy uuid to the FairPlay SDK; a mismatch with the SPC's asset id is only logged as a warning. The platform `GetDecision` must permit.
+Two package profiles exist, told apart by the policy (arkavo-ios ADR-0055); the full
+contract is in `docs/fairplay.md`. For **profile v1** (no `arkavo:components`), clients MUST
+use `skd://<policy uuid>` as the asset id in the SPC; the server passes the bare policy uuid to
+the FairPlay SDK, and a mismatch with the SPC's asset id is only logged as a warning. For
+**profile v2** (a policy with `arkavo:components`), the manifest holds one wrapped 16-byte key
+per component (`video`, then optionally `audio`), the request names the `component` and its
+`assetId` is the policy uuid, and the SPC asset id MUST be `<policy uuid>/<id>`; a mismatch
+drops the CKC and the client gets the generic 403 "manifest refused". The platform
+`GetDecision` must permit.
 
 **Policy binding.** `policyBinding.hash` is
-`base64(HMAC-SHA256(DEK, <base64 policy string>))`, where the HMAC input is the
-base64 policy string exactly as it appears in the manifest. The hex binding form
-is refused. The DEK is wrapped with RSA-OAEP (SHA-1). The CKC carries a lease of
-`MEDIA_FPS_LEASE_SECONDS` (default 3600) and is streaming-only.
+`base64(HMAC-SHA256(key, <base64 policy string>))`, computed with each key access's
+own content key (one per component in profile v2, so each component's key access
+carries its own binding), where the HMAC input is the base64 policy string exactly
+as it appears in the manifest. The hex binding form is refused. Each content key is
+wrapped with RSA-OAEP (SHA-1). The CKC carries a lease of
+`MEDIA_FPS_LEASE_SECONDS` (default 3600) and is streaming-only. Every license
+(v1 and v2) requires HDCP Type 1 and `cbcs`, and, where the content type is `uhd`,
+security level Main.
 
 TDF3 (non-FairPlay) media key requests are disabled and return 403.
 
