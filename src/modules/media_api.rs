@@ -6,7 +6,7 @@ use crate::modules::fairplay::MediaProtocol;
 use crate::modules::http_rewrap::RewrapState;
 use crate::modules::license::issuer::{IssueError, IssuedLicense, LicenseContentType};
 use crate::modules::license::person_token::Person;
-use crate::modules::license::tdf_policy::PolicyKeys;
+use crate::modules::license::tdf_policy::{CheckedPolicy, ComponentKind, PolicyKeys};
 use crate::modules::license::LicenseError;
 use axum::{
     extract::{ConnectInfo, Path, State},
@@ -64,6 +64,9 @@ pub struct MediaKeyRequest {
     pub spc_data: Option<String>, // Base64-encoded (for FairPlay)
     /// Base64-encoded manifest.json from Standard TDF (required for FairPlay)
     pub tdf_manifest: Option<String>,
+    /// Profile v2 (arkavo-ios ADR-0055): the component whose key is
+    /// requested, e.g. "video". Required for v2 manifests, ignored for v1.
+    pub component: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -153,8 +156,64 @@ fn detect_protocol(payload: &MediaKeyRequest) -> Option<MediaProtocol> {
     }
 }
 
-/// Authorize and issue a FairPlay license: TDF manifest check, platform
-/// decision for the person, then a leased CKC for the policy's key.
+/// What one license request issues. Holds a content key: never log it.
+struct LicenseTerms {
+    key: [u8; 16],
+    content_type: LicenseContentType,
+    /// The SDK `asset-id`; under profile v2 also what the SPC's must be.
+    asset_id: String,
+    /// Profile v2 refuses an SPC asset id other than `asset_id`; v1 logs it.
+    exact_spc_asset_id: bool,
+}
+
+/// Profile v1 issues the first 16 bytes of its one DEK as `uhd` under the
+/// bare policy uuid, and ignores `component`. Profile v2 (ADR-0055 §7 step 4)
+/// needs `assetId` to be the policy uuid and `component` to name one of the
+/// package's components, and issues that component's key under its kind's
+/// content type as `<policy uuid>/<id>`.
+fn select_terms(
+    policy: &CheckedPolicy,
+    payload: &MediaKeyRequest,
+) -> Result<LicenseTerms, LicenseError> {
+    match &policy.keys {
+        PolicyKeys::Single(dek) => {
+            let mut key = [0u8; 16];
+            key.copy_from_slice(&dek[..16]);
+            Ok(LicenseTerms {
+                key,
+                content_type: LicenseContentType::Uhd,
+                asset_id: policy.policy_uuid.clone(),
+                exact_spc_asset_id: false,
+            })
+        }
+        PolicyKeys::Components(components) => {
+            if payload.asset_id != policy.policy_uuid {
+                return Err(LicenseError::Forbidden("assetId is not the policy uuid"));
+            }
+            let id = payload
+                .component
+                .as_deref()
+                .ok_or(LicenseError::Forbidden("component is required"))?;
+            let component = components
+                .iter()
+                .find(|c| c.id == id)
+                .ok_or(LicenseError::Forbidden("unknown component"))?;
+            Ok(LicenseTerms {
+                key: component.key,
+                content_type: match component.kind {
+                    ComponentKind::Video => LicenseContentType::Uhd,
+                    ComponentKind::Audio => LicenseContentType::Audio,
+                },
+                asset_id: format!("{}/{}", policy.policy_uuid, component.id),
+                exact_spc_asset_id: true,
+            })
+        }
+    }
+}
+
+/// Authorize and issue a FairPlay license: TDF manifest check, the request's
+/// component and identities (profile v2), platform decision for the person,
+/// then a leased CKC under the component's terms (arkavo-ios ADR-0055 §7).
 pub async fn authorize_license(
     state: &MediaApiState,
     person: &Person,
@@ -204,6 +263,12 @@ pub async fn authorize_license(
                     other => other,
                 }
             })?;
+    // A v2 request without a component, naming another, or for another asset
+    // is refused like a bad manifest, before the platform decision.
+    let terms = select_terms(&policy, payload).map_err(|e| {
+        warn!("license {rid}: manifest refused: {}", e.reason());
+        LicenseError::Forbidden("manifest refused")
+    })?;
     // Same for the platform: an explicit deny and a bad-input refusal (e.g. an
     // unknown attribute) look identical to the client; 503s pass through.
     license
@@ -218,26 +283,13 @@ pub async fn authorize_license(
             }
         })?;
 
-    let key = match &policy.keys {
-        PolicyKeys::Single(dek) => {
-            let mut key = [0u8; 16];
-            key.copy_from_slice(&dek[..16]);
-            key
-        }
-        // A profile v2 key needs the request's component, which the request
-        // does not carry yet: refused like any other manifest.
-        PolicyKeys::Components(_) => {
-            warn!("license {rid}: manifest refused: profile v2 needs a component");
-            return Err(LicenseError::Forbidden("manifest refused"));
-        }
-    };
     let issued = issuer
         .issue(
             spc,
-            key,
+            terms.key,
             policy.content_iv,
-            &policy.policy_uuid,
-            LicenseContentType::Uhd,
+            &terms.asset_id,
+            terms.content_type,
             license.lease_secs,
         )
         .await
@@ -251,7 +303,13 @@ pub async fn authorize_license(
                 LicenseError::Unavailable("FairPlay license service unavailable")
             }
         })?;
-    if issued.spc_asset_id.as_deref() != Some(policy.policy_uuid.as_str()) {
+    if issued.spc_asset_id.as_deref() != Some(terms.asset_id.as_str()) {
+        if terms.exact_spc_asset_id {
+            // The SDK reads the SPC's asset id in the call that makes the CKC,
+            // so the CKC exists here; it is dropped, never returned.
+            warn!("license {rid}: manifest refused: SPC asset id does not name the component");
+            return Err(LicenseError::Forbidden("manifest refused"));
+        }
         warn!("license {rid}: SPC asset id does not match the policy uuid");
     }
     Ok(issued)
@@ -560,6 +618,7 @@ mod tests {
             nanotdf_header: Some("base64header".to_string()),
             spc_data: None,
             tdf_manifest: None,
+            component: None,
         };
 
         assert_eq!(detect_protocol(&request), Some(MediaProtocol::TDF3));
@@ -575,6 +634,7 @@ mod tests {
             nanotdf_header: None,
             spc_data: Some("base64spc".to_string()),
             tdf_manifest: None,
+            component: None,
         };
 
         assert_eq!(detect_protocol(&request), Some(MediaProtocol::FairPlay));
@@ -591,6 +651,7 @@ mod tests {
             nanotdf_header: None,
             spc_data: Some("base64spc".to_string()),
             tdf_manifest: Some("base64manifest".to_string()),
+            component: None,
         };
 
         assert_eq!(detect_protocol(&request), Some(MediaProtocol::FairPlay));
@@ -606,6 +667,7 @@ mod tests {
             nanotdf_header: None,
             spc_data: None,
             tdf_manifest: None,
+            component: None,
         };
 
         assert_eq!(detect_protocol(&request), None);
@@ -622,6 +684,7 @@ mod tests {
             nanotdf_header: None,
             spc_data: None,
             tdf_manifest: None,
+            component: None,
         };
 
         assert_eq!(detect_protocol(&request), None);
@@ -706,6 +769,35 @@ mod license_pipeline_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const UUID: &str = "3f1c9e2a-7b4d-4e8f-9a21-5c6d7e8f9a0b";
+
+    fn video_key() -> [u8; 16] {
+        std::array::from_fn(|i| i as u8)
+    }
+    fn audio_key() -> [u8; 16] {
+        std::array::from_fn(|i| 0x10 + i as u8)
+    }
+    fn iv() -> [u8; 16] {
+        std::array::from_fn(|i| 0xf0 + i as u8)
+    }
+
+    fn manifest_v2() -> &'static str {
+        &crate::modules::license::fixtures::fixtures().manifest_v2
+    }
+
+    /// A key request for the profile v2 fixture with `assetId` and, when
+    /// given, `component`.
+    fn payload_v2(asset_id: &str, component: Option<&str>) -> MediaKeyRequest {
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let mut body = json!({
+            "sessionId": "s", "assetId": asset_id,
+            "spcData": b64.encode([1u8, 2, 3]),
+            "tdfManifest": b64.encode(manifest_v2()),
+        });
+        if let Some(component) = component {
+            body["component"] = json!(component);
+        }
+        serde_json::from_value(body).unwrap()
+    }
 
     pub(super) fn manifest() -> &'static str {
         &crate::modules::license::fixtures::fixtures().manifest_allowed
@@ -984,6 +1076,163 @@ mod license_pipeline_tests {
             .unwrap();
         assert_eq!(err, LicenseError::Forbidden("manifest refused"));
         assert!(fake.seen_key.lock().unwrap().is_none());
+    }
+
+    /// ADR-0055 §7: the video key, as `uhd`, under `<uuid>/video`.
+    #[tokio::test]
+    async fn v2_video_is_issued_as_uhd_under_its_component_id() {
+        let server = platform("DECISION_PERMIT").await;
+        let fake = Arc::new(FakeIssuer::new(Some(format!("{UUID}/video").as_str())));
+        let st = state(&server, fake.clone());
+        let out = authorize_license(&st, &person(), &payload_v2(UUID, Some("video")), "rid")
+            .await
+            .unwrap();
+        assert_eq!(out.ckc, b"fake-ckc");
+        assert_eq!(fake.seen_key.lock().unwrap().unwrap(), video_key());
+        assert_eq!(fake.seen_iv.lock().unwrap().unwrap(), iv());
+        assert_eq!(*fake.seen_lease.lock().unwrap(), Some(3600));
+        assert_eq!(
+            *fake.seen_content_type.lock().unwrap(),
+            Some(LicenseContentType::Uhd)
+        );
+        assert_eq!(
+            fake.seen_asset_id.lock().unwrap().as_deref(),
+            Some(format!("{UUID}/video").as_str())
+        );
+    }
+
+    /// ADR-0055 §7: the audio key, as `audio`, under `<uuid>/audio`.
+    #[tokio::test]
+    async fn v2_audio_is_issued_as_audio_under_its_component_id() {
+        let server = platform("DECISION_PERMIT").await;
+        let fake = Arc::new(FakeIssuer::new(Some(format!("{UUID}/audio").as_str())));
+        let st = state(&server, fake.clone());
+        let out = authorize_license(&st, &person(), &payload_v2(UUID, Some("audio")), "rid")
+            .await
+            .unwrap();
+        assert_eq!(out.ckc, b"fake-ckc");
+        assert_eq!(fake.seen_key.lock().unwrap().unwrap(), audio_key());
+        assert_eq!(fake.seen_iv.lock().unwrap().unwrap(), iv());
+        assert_eq!(
+            *fake.seen_content_type.lock().unwrap(),
+            Some(LicenseContentType::Audio)
+        );
+        assert_eq!(
+            fake.seen_asset_id.lock().unwrap().as_deref(),
+            Some(format!("{UUID}/audio").as_str())
+        );
+    }
+
+    /// No component, or one the package lacks, is refused like a bad
+    /// manifest, before the platform decision (here a deny).
+    #[tokio::test]
+    async fn v2_component_must_name_one_of_the_package() {
+        let server = platform("DECISION_DENY").await;
+        let fake = Arc::new(FakeIssuer::new(None));
+        let st = state(&server, fake.clone());
+        for component in [
+            None,
+            Some("subtitles"),
+            Some("Video"),
+            Some(""),
+            Some("video "),
+        ] {
+            let err = authorize_license(&st, &person(), &payload_v2(UUID, component), "rid")
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(
+                err,
+                LicenseError::Forbidden("manifest refused"),
+                "{component:?}"
+            );
+        }
+        assert!(fake.seen_key.lock().unwrap().is_none());
+    }
+
+    /// `assetId` must be the policy uuid itself, before the decision.
+    #[tokio::test]
+    async fn v2_asset_id_must_be_the_policy_uuid() {
+        let server = platform("DECISION_DENY").await;
+        let fake = Arc::new(FakeIssuer::new(None));
+        let st = state(&server, fake.clone());
+        let with_id = format!("{UUID}/video");
+        let upper = UUID.to_uppercase();
+        for asset_id in ["a", with_id.as_str(), upper.as_str()] {
+            let err =
+                authorize_license(&st, &person(), &payload_v2(asset_id, Some("video")), "rid")
+                    .await
+                    .err()
+                    .unwrap();
+            assert_eq!(
+                err,
+                LicenseError::Forbidden("manifest refused"),
+                "{asset_id}"
+            );
+        }
+        assert!(fake.seen_key.lock().unwrap().is_none());
+    }
+
+    /// The SDK reads the SPC's asset id in the call that makes the CKC: a
+    /// profile v2 CKC whose SPC names anything but `<uuid>/<id>` is dropped
+    /// and the client gets the generic refusal.
+    #[tokio::test]
+    async fn v2_spc_asset_id_must_name_the_component() {
+        let server = platform("DECISION_PERMIT").await;
+        let audio = format!("{UUID}/audio");
+        for spc_asset_id in [None, Some(UUID), Some(audio.as_str()), Some("other")] {
+            let fake = Arc::new(FakeIssuer::new(spc_asset_id));
+            let st = state(&server, fake.clone());
+            let err = authorize_license(&st, &person(), &payload_v2(UUID, Some("video")), "rid")
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(
+                err,
+                LicenseError::Forbidden("manifest refused"),
+                "{spc_asset_id:?}"
+            );
+            // The one profile v2 refusal that comes after the SDK call.
+            assert!(fake.seen_key.lock().unwrap().is_some());
+        }
+    }
+
+    /// A swap only the service can see never reaches the SDK.
+    #[tokio::test]
+    async fn v2_swapped_key_access_never_reaches_the_issuer() {
+        let server = platform("DECISION_PERMIT").await;
+        let fake = Arc::new(FakeIssuer::new(Some(format!("{UUID}/video").as_str())));
+        let st = state(&server, fake.clone());
+        let mut m: serde_json::Value = serde_json::from_str(manifest_v2()).unwrap();
+        m["encryptionInformation"]["keyAccess"]
+            .as_array_mut()
+            .unwrap()
+            .swap(0, 1);
+        let mut p = payload_v2(UUID, Some("video"));
+        p.tdf_manifest = Some(base64::engine::general_purpose::STANDARD.encode(m.to_string()));
+        let err = authorize_license(&st, &person(), &p, "rid")
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(err, LicenseError::Forbidden("manifest refused"));
+        assert!(fake.seen_key.lock().unwrap().is_none());
+    }
+
+    /// Today's viewer and packages keep working: v1 ignores `component`.
+    #[tokio::test]
+    async fn v1_ignores_component() {
+        let server = platform("DECISION_PERMIT").await;
+        let fake = Arc::new(FakeIssuer::new(Some(UUID)));
+        let st = state(&server, fake.clone());
+        let mut p = payload(manifest());
+        p.component = Some("audio".into());
+        authorize_license(&st, &person(), &p, "rid").await.unwrap();
+        assert_eq!(fake.seen_key.lock().unwrap().unwrap(), video_key());
+        assert_eq!(
+            *fake.seen_content_type.lock().unwrap(),
+            Some(LicenseContentType::Uhd)
+        );
+        assert_eq!(fake.seen_asset_id.lock().unwrap().as_deref(), Some(UUID));
     }
 }
 

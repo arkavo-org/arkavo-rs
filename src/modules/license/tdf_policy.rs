@@ -41,7 +41,6 @@ impl ComponentKind {
 
 /// One profile v2 component whose key unwrapped, verified its policy binding
 /// and matched its `keyBinding`.
-#[cfg_attr(not(test), allow(dead_code))] // Task 4 reads id and kind.
 pub struct CheckedComponent {
     pub id: String,
     pub kind: ComponentKind,
@@ -54,7 +53,6 @@ pub enum PolicyKeys {
     /// Profile v1: the whole DEK, 16 or 32 bytes.
     Single(Vec<u8>),
     /// Profile v2: one key per component, in the policy's order.
-    #[cfg_attr(not(test), allow(dead_code))] // Task 4 reads the components.
     Components(Vec<CheckedComponent>),
 }
 

@@ -21,9 +21,6 @@ pub enum IssueError {
 
 /// The FairPlay content type a CKC is issued as (arkavo-ios ADR-0055 §7).
 /// Both require HDCP Type 1.
-// Nothing constructs `Audio` until Task 4 (per-component content type), which
-// removes this attribute.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LicenseContentType {
     /// Video: security level Main; sealed for the device's secure video path.
