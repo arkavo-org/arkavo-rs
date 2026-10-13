@@ -290,16 +290,27 @@ pub(super) mod tests {
             &manifest,
             Some(&encrypted),
             &key,
-            &["https://kas.example".into()],
+            &["https://platform.arkavo.net".into()],
         )
         .unwrap();
         let PolicyKeys::Components(tracks) = checked.keys else {
             panic!("expected components")
         };
-        assert_eq!(tracks.len(), 1);
-        assert_eq!(tracks[0].id, "video");
-        assert_eq!(tracks[0].key, [7; 16]);
-        assert_eq!(tracks[0].content_iv, Some([8; 16]));
+        let expected: Envelope =
+            serde_json::from_slice(&std::fs::read(directory.join("test-envelope.json")).unwrap())
+                .unwrap();
+        assert_eq!(tracks.len(), expected.tracks.len());
+        for (actual, expected) in tracks.iter().zip(expected.tracks) {
+            assert_eq!(actual.id, expected.id);
+            assert_eq!(
+                actual.key.as_slice(),
+                STANDARD.decode(expected.key).unwrap()
+            );
+            assert_eq!(
+                actual.content_iv.unwrap().as_slice(),
+                STANDARD.decode(expected.iv).unwrap()
+            );
+        }
     }
 
     #[test]
