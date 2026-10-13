@@ -1060,7 +1060,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Media DRM router
     let media_router = Router::new()
-        .route("/media/v1/key-request", post(media_api::media_key_request))
+        .route(
+            "/media/v1/key-request",
+            post(media_api::media_key_request)
+                .layer(axum::extract::DefaultBodyLimit::max(6 * 1024 * 1024)),
+        )
         .route(
             "/media/v1/certificate",
             get(media_api::fairplay_certificate),

@@ -4,7 +4,7 @@ The profile `urn:arkavo:fairplay:key-envelope:1` separates standard OpenTDF encr
 
 ## Request and authorization
 
-`POST /media/v1/key-request` retains the person token, owned playback session, `assetId` (the policy UUID), `component` (`video` or `audio`), base64 `spcData`, and base64 `tdfManifest`. It additionally requires base64 `tdfPayload`, the exact encrypted bytes of `0.payload`. The request does not carry plaintext track keys. Legacy manifests omit `tdfPayload` and continue through their existing v1/v2 validation.
+`POST /media/v1/key-request` retains the person token, owned playback session, `assetId` (the policy UUID), `component` (`video` or `audio`), base64 `spcData`, and base64 `tdfManifest`. It additionally requires base64 `tdfPayload`, the exact encrypted bytes of `0.payload`. The request does not carry plaintext track keys. The endpoint allows a bounded 6 MiB JSON body so both base64 fields fit; decoded manifests are limited to 2 MiB and encrypted payloads to 2,097,180 bytes. Legacy manifests omit `tdfPayload` and continue through their existing v1/v2 validation.
 
 The KSM verifies the manifest and policy, unwraps a single 32-byte DEK, verifies its policy HMAC, validates segment and root integrity, decrypts the bounded envelope, and checks its track keys, IVs and inventory against the bound policy. It then obtains the platform decision for the viewer. A permit issues the requested track's key and IV through the existing leased CKC path. The SPC asset identifier must equal `<policy uuid>/<component>`. Refusal occurs before the issuer for malformed envelopes, unknown components, asset mismatches, or denied policy. A mismatched SPC causes the generated CKC to be discarded.
 

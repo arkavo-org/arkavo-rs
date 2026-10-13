@@ -23,6 +23,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 // Constants for input validation
+const MAX_MANIFEST_SIZE: usize = 2 * 1024 * 1024;
 const MAX_SPC_DATA_SIZE: usize = 64 * 1024; // 64KB max for SPC data
 
 // Re-import session manager types
@@ -242,9 +243,15 @@ pub async fn authorize_license(
         .tdf_manifest
         .as_deref()
         .ok_or(LicenseError::BadRequest("tdfManifest is required"))?;
+    if manifest_b64.len() > MAX_MANIFEST_SIZE.div_ceil(3) * 4 {
+        return Err(LicenseError::BadRequest("tdfManifest too large"));
+    }
     let manifest = base64::engine::general_purpose::STANDARD
         .decode(manifest_b64)
         .map_err(|_| LicenseError::BadRequest("tdfManifest is not base64"))?;
+    if manifest.len() > MAX_MANIFEST_SIZE {
+        return Err(LicenseError::BadRequest("tdfManifest too large"));
+    }
     let spc_b64 = payload
         .spc_data
         .as_deref()
@@ -1109,6 +1116,21 @@ mod license_pipeline_tests {
             .err()
             .unwrap();
         assert_eq!(err, LicenseError::Forbidden("manifest refused"));
+        assert!(fake.seen_key.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn oversized_manifest_is_rejected_before_decoding_or_issuing() {
+        let server = platform("DECISION_PERMIT").await;
+        let fake = Arc::new(FakeIssuer::new(None));
+        let st = state(&server, fake.clone());
+        let mut request = payload(manifest());
+        request.tdf_manifest = Some("A".repeat(MAX_MANIFEST_SIZE.div_ceil(3) * 4 + 1));
+        let err = authorize_license(&st, &person(), &request, "rid")
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(err, LicenseError::BadRequest("tdfManifest too large"));
         assert!(fake.seen_key.lock().unwrap().is_none());
     }
 
