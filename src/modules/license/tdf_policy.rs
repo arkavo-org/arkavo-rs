@@ -6,6 +6,9 @@
 //! and a `keyBinding` naming its component. Both need at least one data
 //! attribute, every one of them well formed.
 
+#[path = "key_envelope.rs"]
+mod key_envelope;
+
 use super::strict_json::has_unique_keys;
 use super::LicenseError;
 use base64::engine::general_purpose::STANDARD;
@@ -46,6 +49,8 @@ pub struct CheckedComponent {
     pub kind: ComponentKind,
     /// Never log it.
     pub key: [u8; 16],
+    /// Per-track IV for the OpenTDF key-envelope profile.
+    pub content_iv: Option<[u8; 16]>,
 }
 
 /// The checked content keys. Never log them.
@@ -80,8 +85,20 @@ pub fn normalize_kas_url(raw: &str) -> Option<String> {
 
 const FORBIDDEN_MANIFEST: LicenseError = LicenseError::Forbidden("manifest refused");
 
+#[cfg(test)]
 pub fn check_manifest(
     manifest_json: &[u8],
+    rsa: &RsaPrivateKey,
+    kas_urls: &[String],
+) -> Result<CheckedPolicy, LicenseError> {
+    check_manifest_with_payload(manifest_json, None, rsa, kas_urls)
+}
+
+/// The encrypted payload is transported separately from the unchanged manifest.
+/// Legacy manifests cannot silently consume an envelope payload.
+pub fn check_manifest_with_payload(
+    manifest_json: &[u8],
+    payload: Option<&[u8]>,
     rsa: &RsaPrivateKey,
     kas_urls: &[String],
 ) -> Result<CheckedPolicy, LicenseError> {
@@ -113,6 +130,12 @@ pub fn check_manifest(
     let policy: Value = serde_json::from_slice(&policy_bytes).map_err(|_| FORBIDDEN_MANIFEST)?;
     if !has_unique_keys(&policy_bytes) {
         return Err(LicenseError::Forbidden("duplicate JSON key"));
+    }
+    if policy.get("arkavo:fpsProfile").is_some() {
+        return key_envelope::check(&m, &policy, policy_b64, payload, rsa, kas_urls);
+    }
+    if payload.is_some() {
+        return Err(FORBIDDEN_MANIFEST);
     }
     let components = policy.get(COMPONENTS_KEY);
     // The IV is not secret. A broken v1 package is a 400, so the viewer does
@@ -203,6 +226,7 @@ fn check_components(
             id: kind.as_str().to_string(),
             kind,
             key,
+            content_iv: None,
         });
     }
     Ok(checked)
@@ -971,4 +995,9 @@ mod tests {
             Some(LicenseError::Forbidden("policy has no data attributes"))
         );
     }
+}
+
+#[cfg(test)]
+pub(crate) fn envelope_test_fixture() -> (Value, Vec<u8>) {
+    key_envelope::test_fixture()
 }

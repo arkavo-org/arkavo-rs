@@ -1,6 +1,6 @@
-# Standard TDF + FairPlay Integration
+# Legacy TDF-shaped FairPlay Integration
 
-OpenTDF Standard TDF format for FairPlay DRM key delivery on Apple devices.
+This document describes the legacy Arkavo wrapping format; its CBC manifest is not an interoperable OpenTDF payload. New standard payload integration is specified in [FairPlay key-envelope profile](fairplay-key-envelope.md).
 
 ## Overview
 

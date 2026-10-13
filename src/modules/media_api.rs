@@ -64,6 +64,8 @@ pub struct MediaKeyRequest {
     pub spc_data: Option<String>, // Base64-encoded (for FairPlay)
     /// Base64-encoded manifest.json from Standard TDF (required for FairPlay)
     pub tdf_manifest: Option<String>,
+    /// Base64 encrypted 0.payload for the OpenTDF FairPlay key-envelope profile.
+    pub tdf_payload: Option<String>,
     /// Profile v2 (arkavo-ios ADR-0055): the component whose key is
     /// requested, e.g. "video". Required for v2 manifests, ignored for v1.
     pub component: Option<String>,
@@ -159,6 +161,7 @@ fn detect_protocol(payload: &MediaKeyRequest) -> Option<MediaProtocol> {
 /// What one license request issues. Holds a content key: never log it.
 struct LicenseTerms {
     key: [u8; 16],
+    iv: [u8; 16],
     content_type: LicenseContentType,
     /// The SDK `asset-id`; under profile v2 also what the SPC's must be.
     asset_id: String,
@@ -181,6 +184,7 @@ fn select_terms(
             key.copy_from_slice(&dek[..16]);
             Ok(LicenseTerms {
                 key,
+                iv: policy.content_iv,
                 content_type: LicenseContentType::Uhd,
                 asset_id: policy.policy_uuid.clone(),
                 exact_spc_asset_id: false,
@@ -200,6 +204,7 @@ fn select_terms(
                 .ok_or(LicenseError::Forbidden("unknown component"))?;
             Ok(LicenseTerms {
                 key: component.key,
+                iv: component.content_iv.unwrap_or(policy.content_iv),
                 content_type: match component.kind {
                     ComponentKind::Video => LicenseContentType::Uhd,
                     ComponentKind::Audio => LicenseContentType::Audio,
@@ -251,18 +256,35 @@ pub async fn authorize_license(
         .decode(spc_b64)
         .map_err(|_| LicenseError::BadRequest("spcData is not base64"))?;
 
+    let encrypted_payload = payload
+        .tdf_payload
+        .as_deref()
+        .map(|encoded| {
+            if encoded.len() > 2_796_240 {
+                return Err(LicenseError::BadRequest("tdfPayload too large"));
+            }
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|_| LicenseError::BadRequest("tdfPayload is not base64"))
+        })
+        .transpose()?;
+
     // Every manifest refusal reaches the client as one generic reason, so the
     // endpoint is not an oracle for which check failed. The specific reason
     // (a static string, never key material) is logged here.
-    let policy =
-        crate::modules::license::tdf_policy::check_manifest(&manifest, rsa, &license.kas_urls)
-            .map_err(|e| {
-                warn!("license {rid}: manifest refused: {}", e.reason());
-                match e {
-                    LicenseError::Forbidden(_) => LicenseError::Forbidden("manifest refused"),
-                    other => other,
-                }
-            })?;
+    let policy = crate::modules::license::tdf_policy::check_manifest_with_payload(
+        &manifest,
+        encrypted_payload.as_deref(),
+        rsa,
+        &license.kas_urls,
+    )
+    .map_err(|e| {
+        warn!("license {rid}: manifest refused: {}", e.reason());
+        match e {
+            LicenseError::Forbidden(_) => LicenseError::Forbidden("manifest refused"),
+            other => other,
+        }
+    })?;
     // A v2 request without a component, naming another, or for another asset
     // is refused like a bad manifest, before the platform decision.
     let terms = select_terms(&policy, payload).map_err(|e| {
@@ -287,7 +309,7 @@ pub async fn authorize_license(
         .issue(
             spc,
             terms.key,
-            policy.content_iv,
+            terms.iv,
             &terms.asset_id,
             terms.content_type,
             license.lease_secs,
@@ -625,6 +647,7 @@ mod tests {
             nanotdf_header: Some("base64header".to_string()),
             spc_data: None,
             tdf_manifest: None,
+            tdf_payload: None,
             component: None,
         };
 
@@ -641,6 +664,7 @@ mod tests {
             nanotdf_header: None,
             spc_data: Some("base64spc".to_string()),
             tdf_manifest: None,
+            tdf_payload: None,
             component: None,
         };
 
@@ -658,6 +682,7 @@ mod tests {
             nanotdf_header: None,
             spc_data: Some("base64spc".to_string()),
             tdf_manifest: Some("base64manifest".to_string()),
+            tdf_payload: None,
             component: None,
         };
 
@@ -674,6 +699,7 @@ mod tests {
             nanotdf_header: None,
             spc_data: None,
             tdf_manifest: None,
+            tdf_payload: None,
             component: None,
         };
 
@@ -691,6 +717,7 @@ mod tests {
             nanotdf_header: None,
             spc_data: None,
             tdf_manifest: None,
+            tdf_payload: None,
             component: None,
         };
 
@@ -1083,6 +1110,53 @@ mod license_pipeline_tests {
             .unwrap();
         assert_eq!(err, LicenseError::Forbidden("manifest refused"));
         assert!(fake.seen_key.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn envelope_issues_only_ckc_for_the_requested_track() {
+        let server = platform("DECISION_PERMIT").await;
+        let (manifest, encrypted) = crate::modules::license::tdf_policy::envelope_test_fixture();
+        for (component, key, iv, kind) in [
+            ("video", [1; 16], [3; 16], LicenseContentType::Uhd),
+            ("audio", [2; 16], [4; 16], LicenseContentType::Audio),
+        ] {
+            let fake = Arc::new(FakeIssuer::new(Some(&format!("{UUID}/{component}"))));
+            let st = state(&server, fake.clone());
+            let mut request = payload(&manifest.to_string());
+            request.asset_id = UUID.into();
+            request.component = Some(component.into());
+            request.tdf_payload =
+                Some(base64::engine::general_purpose::STANDARD.encode(&encrypted));
+            let out = authorize_license(&st, &person(), &request, "rid")
+                .await
+                .unwrap();
+            assert_eq!(out.ckc, b"fake-ckc");
+            assert_eq!(*fake.seen_key.lock().unwrap(), Some(key));
+            assert_eq!(*fake.seen_iv.lock().unwrap(), Some(iv));
+            assert_eq!(*fake.seen_content_type.lock().unwrap(), Some(kind));
+        }
+    }
+
+    #[tokio::test]
+    async fn envelope_refusal_or_pdp_denial_never_calls_issuer() {
+        for decision in ["DECISION_DENY", "DECISION_PERMIT"] {
+            let server = platform(decision).await;
+            let fake = Arc::new(FakeIssuer::new(None));
+            let st = state(&server, fake.clone());
+            let (manifest, mut encrypted) =
+                crate::modules::license::tdf_policy::envelope_test_fixture();
+            if decision == "DECISION_PERMIT" {
+                encrypted[12] ^= 1;
+            }
+            let mut request = payload(&manifest.to_string());
+            request.asset_id = UUID.into();
+            request.component = Some("video".into());
+            request.tdf_payload = Some(base64::engine::general_purpose::STANDARD.encode(encrypted));
+            assert!(authorize_license(&st, &person(), &request, "rid")
+                .await
+                .is_err());
+            assert!(fake.seen_key.lock().unwrap().is_none());
+        }
     }
 
     /// ADR-0055 §7: the video key, as `uhd`, under `<uuid>/video`.
