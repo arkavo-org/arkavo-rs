@@ -208,7 +208,18 @@ pub(super) mod tests {
     use rsa::{pkcs1::DecodeRsaPrivateKey, pkcs8::DecodePrivateKey, RsaPublicKey};
     use serde_json::json;
 
-    const DEK: [u8; 32] = [0x41; 32];
+    use rand_core::RngCore;
+    use std::sync::OnceLock;
+
+    // Shared only within this test process so mutation tests can rebind/reseal fixtures.
+    fn dek() -> &'static [u8; 32] {
+        static DEK: OnceLock<[u8; 32]> = OnceLock::new();
+        DEK.get_or_init(|| {
+            let mut key = [0; 32];
+            OsRng.fill_bytes(&mut key);
+            key
+        })
+    }
     fn hmac(key: &[u8], data: &[u8]) -> String {
         let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key).unwrap();
         mac.update(data);
@@ -219,18 +230,20 @@ pub(super) mod tests {
     }
     fn seal(manifest: &mut Value, plaintext: &Value) -> Vec<u8> {
         let plaintext = serde_json::to_vec(plaintext).unwrap();
-        let cipher = Aes256Gcm::new_from_slice(&DEK).unwrap();
-        let mut payload = vec![0x23; 12];
+        let cipher = Aes256Gcm::new_from_slice(dek()).unwrap();
+        let mut nonce = [0; 12];
+        OsRng.fill_bytes(&mut nonce);
+        let mut payload = nonce.to_vec();
         payload.extend(
             cipher
-                .encrypt(Nonce::from_slice(&[0x23; 12]), plaintext.as_slice())
+                .encrypt(Nonce::from_slice(&nonce), plaintext.as_slice())
                 .unwrap(),
         );
         let tag = &payload[payload.len() - 16..];
         manifest["encryptionInformation"]["integrityInformation"] = json!({
             "segmentHashAlg":"GMAC", "segmentSizeDefault":MAX_PLAINTEXT,
             "encryptedSegmentSizeDefault":MAX_PLAINTEXT+28,
-            "rootSignature":{"alg":"HS256", "sig":hmac(&DEK,tag)},
+            "rootSignature":{"alg":"HS256", "sig":hmac(dek(),tag)},
             "segments":[{"hash":STANDARD.encode(tag),"segmentSize":plaintext.len(),"encryptedSegmentSize":payload.len()}]
         });
         payload
@@ -238,7 +251,7 @@ pub(super) mod tests {
     fn bind(manifest: &mut Value, policy: &Value) {
         let b64 = STANDARD.encode(serde_json::to_vec(policy).unwrap());
         manifest["encryptionInformation"]["keyAccess"][0]["policyBinding"]["hash"] =
-            json!(hmac(&DEK, b64.as_bytes()));
+            json!(hmac(dek(), b64.as_bytes()));
         manifest["encryptionInformation"]["policy"] = json!(b64);
     }
     pub(super) fn fixture() -> (Value, Value, Value, Vec<u8>) {
@@ -257,7 +270,7 @@ pub(super) mod tests {
         ]});
         let envelope = json!({"profile":PROFILE,"assetId":"recording-1","contentKeyId":uuid,"tracks":tracks,"files":files});
         let wrapped = RsaPublicKey::from(&key())
-            .encrypt(&mut OsRng, Oaep::new::<Sha1>(), &DEK)
+            .encrypt(&mut OsRng, Oaep::new::<Sha1>(), dek())
             .unwrap();
         let mut manifest = json!({"schemaVersion":"4.3.0", "payload":{"type":"reference","url":"0.payload","protocol":"zip","isEncrypted":true,"mimeType":"application/json"},
             "encryptionInformation":{"type":"split", "method":{"algorithm":"AES-256-GCM","isStreamable":true,"iv":""},
