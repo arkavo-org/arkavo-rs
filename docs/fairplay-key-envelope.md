@@ -14,9 +14,11 @@ Malformed envelopes, unknown components, a request `assetId` other than the poli
 
 ## Wire profile
 
-- `schemaVersion` is `4.3.0`.
+Only Arkavo producers (the ArkavoMediaKit packager) write this profile. It is a strict subset of OpenTDF 4.3.0, and archives from other OpenTDF SDKs are not expected to pass it.
+
+- `schemaVersion` is `4.3.0`, the root field every OpenTDF SDK writes; the spec's `tdf_spec_version` is not used.
 - `payload` is a ZIP reference to `0.payload`, encrypted, MIME `application/json`.
-- `encryptionInformation.type` is `split`, with exactly one RSA-OAEP wrapped 32-byte key and a raw HS256 policy binding. The KAO uses protocol `kas`; no `encryptedMetadata` is emitted or accepted by this profile.
+- `encryptionInformation.type` is `split`, with exactly one RSA-OAEP wrapped 32-byte key and a raw HS256 policy binding: `hash` is base64 of the raw HMAC-SHA256, as the OpenTDF spec defines it. The reference Go SDK's base64-of-hex form is refused. The KAO uses protocol `kas`; no `encryptedMetadata` is emitted or accepted by this profile.
 - `method` is AES-256-GCM, streamable, with empty `iv`; the nonce is the first 12 payload bytes.
 - Exactly one segment is accepted, with plaintext no larger than 2,097,152 bytes and ciphertext size plaintext + 28. Default segment sizes are 2,097,152 and 2,097,180. The GMAC segment hash is base64 of its trailing 16-byte GCM tag. The HS256 root signature is base64 of raw HMAC-SHA256(DEK, decoded tag).
 - Bound policy `arkavo:fpsProfile` contains the profile URI. Existing `arkavo:components` retains each component's ID, kind and keyBinding. `arkavo:mediaIVs` maps the component IDs to base64 16-byte IVs. `arkavo:media` lists `{name,sha256}` for the encrypted HLS files with canonical base64 SHA-256 digests.
