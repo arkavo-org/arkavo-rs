@@ -8,6 +8,7 @@
 
 #[path = "key_envelope.rs"]
 mod key_envelope;
+pub use key_envelope::MAX_ENCRYPTED_PAYLOAD;
 
 use super::strict_json::has_unique_keys;
 use super::LicenseError;
@@ -68,6 +69,9 @@ pub struct CheckedPolicy {
     /// Recording's content IV from `encryptionInformation.method.iv`; the
     /// FairPlay CKC carries it (ADR-0050).
     pub content_iv: [u8; 16],
+    /// Key-envelope profile only: the authenticated recording identifier,
+    /// which must equal the playback session's asset id.
+    pub recording_id: Option<String>,
 }
 
 /// scheme://host[:non-default-port][/path], lower-cased by `url`, with a
@@ -91,15 +95,20 @@ pub fn check_manifest(
     rsa: &RsaPrivateKey,
     kas_urls: &[String],
 ) -> Result<CheckedPolicy, LicenseError> {
-    check_manifest_with_payload(manifest_json, None, rsa, kas_urls)
+    check_manifest_with_payload(manifest_json, None, rsa, None, kas_urls)
 }
 
 /// The encrypted payload is transported separately from the unchanged manifest.
 /// Legacy manifests cannot silently consume an envelope payload.
+///
+/// Key-envelope manifests unwrap only with `envelope_rsa`, the KSM-only
+/// wrapping key the platform KAS does not hold; without it they are refused,
+/// so a viewer's raw platform rewrap can never yield the track keys.
 pub fn check_manifest_with_payload(
     manifest_json: &[u8],
     payload: Option<&[u8]>,
     rsa: &RsaPrivateKey,
+    envelope_rsa: Option<&RsaPrivateKey>,
     kas_urls: &[String],
 ) -> Result<CheckedPolicy, LicenseError> {
     let m: Value = serde_json::from_slice(manifest_json)
@@ -132,7 +141,12 @@ pub fn check_manifest_with_payload(
         return Err(LicenseError::Forbidden("duplicate JSON key"));
     }
     if policy.get("arkavo:fpsProfile").is_some() {
-        return key_envelope::check(&m, &policy, policy_b64, payload, rsa, kas_urls);
+        let envelope_rsa = envelope_rsa.ok_or(LicenseError::Forbidden(
+            "key-envelope profile not configured",
+        ))?;
+        // A missing payload is a malformed request, not a refusal.
+        let payload = payload.ok_or(LicenseError::BadRequest("tdfPayload is required"))?;
+        return key_envelope::check(&m, &policy, policy_b64, payload, envelope_rsa, kas_urls);
     }
     if payload.is_some() {
         return Err(FORBIDDEN_MANIFEST);
@@ -163,6 +177,7 @@ pub fn check_manifest_with_payload(
         policy_uuid,
         fqns,
         content_iv,
+        recording_id: None,
     })
 }
 

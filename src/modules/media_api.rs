@@ -9,8 +9,9 @@ use crate::modules::license::person_token::Person;
 use crate::modules::license::tdf_policy::{CheckedPolicy, ComponentKind, PolicyKeys};
 use crate::modules::license::LicenseError;
 use axum::{
-    extract::{ConnectInfo, Path, State},
-    http::StatusCode,
+    async_trait,
+    extract::{ConnectInfo, FromRequestParts, Path, State},
+    http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -25,6 +26,10 @@ use uuid::Uuid;
 // Constants for input validation
 const MAX_MANIFEST_SIZE: usize = 2 * 1024 * 1024;
 const MAX_SPC_DATA_SIZE: usize = 64 * 1024; // 64KB max for SPC data
+use crate::modules::license::tdf_policy::MAX_ENCRYPTED_PAYLOAD;
+/// The key-request body limit: room for a base64 manifest and a base64
+/// key-envelope payload. Only read once the person token has verified.
+pub const MAX_KEY_REQUEST_BODY: usize = 6 * 1024 * 1024;
 
 // Re-import session manager types
 use crate::media_metrics::{
@@ -178,7 +183,19 @@ struct LicenseTerms {
 fn select_terms(
     policy: &CheckedPolicy,
     payload: &MediaKeyRequest,
+    session_asset_id: &str,
 ) -> Result<LicenseTerms, LicenseError> {
+    // The key-envelope profile authenticates the recording it names; the
+    // session must have been started for that recording.
+    if policy
+        .recording_id
+        .as_deref()
+        .is_some_and(|r| r != session_asset_id)
+    {
+        return Err(LicenseError::Forbidden(
+            "envelope names another recording than the session",
+        ));
+    }
     match &policy.keys {
         PolicyKeys::Single(dek) => {
             let mut key = [0u8; 16];
@@ -220,10 +237,12 @@ fn select_terms(
 /// Authorize and issue a FairPlay license: TDF manifest check, the request's
 /// component and identities (profile v2), platform decision for the person,
 /// then a leased CKC under the component's terms (arkavo-ios ADR-0055 §7).
+/// `session_asset_id` is the owned session's asset id.
 pub async fn authorize_license(
     state: &MediaApiState,
     person: &Person,
     payload: &MediaKeyRequest,
+    session_asset_id: &str,
     rid: &str,
 ) -> Result<IssuedLicense, LicenseError> {
     let license = state
@@ -267,7 +286,7 @@ pub async fn authorize_license(
         .tdf_payload
         .as_deref()
         .map(|encoded| {
-            if encoded.len() > 2_796_240 {
+            if encoded.len() > MAX_ENCRYPTED_PAYLOAD.div_ceil(3) * 4 {
                 return Err(LicenseError::BadRequest("tdfPayload too large"));
             }
             base64::engine::general_purpose::STANDARD
@@ -279,12 +298,22 @@ pub async fn authorize_license(
     // Every manifest refusal reaches the client as one generic reason, so the
     // endpoint is not an oracle for which check failed. The specific reason
     // (a static string, never key material) is logged here.
-    let policy = crate::modules::license::tdf_policy::check_manifest_with_payload(
-        &manifest,
-        encrypted_payload.as_deref(),
-        rsa,
-        &license.kas_urls,
-    )
+    // RSA unwrap, AES-GCM over up to 2 MiB and JSON scans: off the async
+    // workers, so a key request does not stall unrelated traffic.
+    let rsa = rsa.clone();
+    let envelope_rsa = license.envelope_rsa.clone();
+    let kas_urls = license.kas_urls.clone();
+    let policy = tokio::task::spawn_blocking(move || {
+        crate::modules::license::tdf_policy::check_manifest_with_payload(
+            &manifest,
+            encrypted_payload.as_deref(),
+            &rsa,
+            envelope_rsa.as_deref(),
+            &kas_urls,
+        )
+    })
+    .await
+    .map_err(|_| LicenseError::Unavailable("manifest check failed"))?
     .map_err(|e| {
         warn!("license {rid}: manifest refused: {}", e.reason());
         match e {
@@ -294,7 +323,7 @@ pub async fn authorize_license(
     })?;
     // A v2 request without a component, naming another, or for another asset
     // is refused like a bad manifest, before the platform decision.
-    let terms = select_terms(&policy, payload).map_err(|e| {
+    let terms = select_terms(&policy, payload, session_asset_id).map_err(|e| {
         warn!("license {rid}: manifest refused: {}", e.reason());
         LicenseError::Forbidden("manifest refused")
     })?;
@@ -365,6 +394,27 @@ async fn require_owned_session(
     }
 }
 
+/// The viewer, verified from the headers alone. As an extractor ahead of
+/// `Json`, it refuses an unauthenticated request before its body is read.
+pub struct VerifiedPerson(pub Person);
+
+#[async_trait]
+impl FromRequestParts<Arc<MediaApiState>> for VerifiedPerson {
+    type Rejection = ErrorResponse;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<MediaApiState>,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(VerifiedPerson(
+            state
+                .person_tokens
+                .verify(&parts.headers, Utc::now().timestamp())
+                .await?,
+        ))
+    }
+}
+
 // ==================== API Handlers ====================
 
 /// POST /media/v1/key-request
@@ -372,15 +422,11 @@ async fn require_owned_session(
 /// platform decision → leased CKC. TDF3 media keys are refused.
 pub async fn media_key_request(
     State(state): State<Arc<MediaApiState>>,
-    headers: axum::http::HeaderMap,
+    VerifiedPerson(person): VerifiedPerson,
     Json(payload): Json<MediaKeyRequest>,
 ) -> Result<Json<MediaKeyResponse>, ErrorResponse> {
     let timer = RequestTimer::start();
     let rid = Uuid::new_v4().to_string();
-    let person = state
-        .person_tokens
-        .verify(&headers, Utc::now().timestamp())
-        .await?;
     match detect_protocol(&payload) {
         Some(MediaProtocol::FairPlay) => {}
         Some(MediaProtocol::TDF3) => {
@@ -407,7 +453,7 @@ pub async fn media_key_request(
             }
             _ => LicenseError::Unavailable("session store unavailable"),
         })?;
-    let result = authorize_license(&state, &person, &payload, &rid).await;
+    let result = authorize_license(&state, &person, &payload, &session.asset_id, &rid).await;
     let outcome = match &result {
         Ok(_) => KeyRequestResult::Success,
         Err(LicenseError::Forbidden(_)) => KeyRequestResult::PolicyDenied,
@@ -809,6 +855,9 @@ mod license_pipeline_tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    /// The owned session's asset id: the envelope fixture's recording.
+    const SESSION_ASSET: &str = "recording-1";
+
     const UUID: &str = "3f1c9e2a-7b4d-4e8f-9a21-5c6d7e8f9a0b";
 
     fn video_key() -> [u8; 16] {
@@ -896,6 +945,12 @@ mod license_pipeline_tests {
             )
             .unwrap()],
             lease_secs: 3600,
+            envelope_rsa: Some(Arc::new(
+                rsa::RsaPrivateKey::from_pkcs8_pem(
+                    &crate::modules::license::fixtures::fixtures().envelope_key_pem,
+                )
+                .unwrap(),
+            )),
         })
     }
 
@@ -942,7 +997,7 @@ mod license_pipeline_tests {
             "3f1c9e2a-7b4d-4e8f-9a21-5c6d7e8f9a0b",
         )));
         let st = state(&server, fake.clone());
-        let out = authorize_license(&st, &person(), &payload(manifest()), "rid")
+        let out = authorize_license(&st, &person(), &payload(manifest()), SESSION_ASSET, "rid")
             .await
             .unwrap();
         assert_eq!(out.ckc, b"fake-ckc");
@@ -968,7 +1023,7 @@ mod license_pipeline_tests {
         let server = platform("DECISION_PERMIT").await;
         let fake = Arc::new(FakeIssuer::new(Some(UUID)));
         let st = state(&server, fake.clone());
-        authorize_license(&st, &person(), &payload(manifest()), "rid")
+        authorize_license(&st, &person(), &payload(manifest()), SESSION_ASSET, "rid")
             .await
             .unwrap();
         assert_eq!(
@@ -983,7 +1038,7 @@ mod license_pipeline_tests {
         let server = platform("DECISION_DENY").await;
         let fake = Arc::new(FakeIssuer::new(None));
         let st = state(&server, fake.clone());
-        let err = authorize_license(&st, &person(), &payload(manifest()), "rid")
+        let err = authorize_license(&st, &person(), &payload(manifest()), SESSION_ASSET, "rid")
             .await
             .err()
             .unwrap();
@@ -1014,7 +1069,7 @@ mod license_pipeline_tests {
             .await;
         let fake = Arc::new(FakeIssuer::new(None));
         let st = state(&s, fake.clone());
-        let err = authorize_license(&st, &person(), &payload(manifest()), "rid")
+        let err = authorize_license(&st, &person(), &payload(manifest()), SESSION_ASSET, "rid")
             .await
             .err()
             .unwrap();
@@ -1030,10 +1085,16 @@ mod license_pipeline_tests {
         let st = state(&server, fake.clone());
         let mut m: serde_json::Value = serde_json::from_str(manifest()).unwrap();
         m["encryptionInformation"]["method"]["iv"] = json!("");
-        let err = authorize_license(&st, &person(), &payload(&m.to_string()), "rid")
-            .await
-            .err()
-            .unwrap();
+        let err = authorize_license(
+            &st,
+            &person(),
+            &payload(&m.to_string()),
+            SESSION_ASSET,
+            "rid",
+        )
+        .await
+        .err()
+        .unwrap();
         assert_eq!(err, LicenseError::BadRequest("content iv must be 16 bytes"));
         assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
         assert!(fake.seen_key.lock().unwrap().is_none());
@@ -1047,7 +1108,7 @@ mod license_pipeline_tests {
             "sessionId":"s","userId":"u","assetId":"a","spcData":"AQID","tdfWrappedKey":"AAAA"}))
         .unwrap();
         assert!(matches!(
-            authorize_license(&st, &person(), &p, "rid").await,
+            authorize_license(&st, &person(), &p, SESSION_ASSET, "rid").await,
             Err(LicenseError::BadRequest(_))
         ));
     }
@@ -1058,7 +1119,7 @@ mod license_pipeline_tests {
         let mut st = state(&server, Arc::new(FakeIssuer::new(None)));
         st.license = None;
         assert!(matches!(
-            authorize_license(&st, &person(), &payload(manifest()), "rid").await,
+            authorize_license(&st, &person(), &payload(manifest()), SESSION_ASSET, "rid").await,
             Err(LicenseError::Unavailable(_))
         ));
     }
@@ -1080,7 +1141,7 @@ mod license_pipeline_tests {
             ),
         ] {
             let st = state(&server, Arc::new(FakeIssuer::failing(fail)));
-            let err = authorize_license(&st, &person(), &payload(manifest()), "rid")
+            let err = authorize_license(&st, &person(), &payload(manifest()), SESSION_ASSET, "rid")
                 .await
                 .err()
                 .unwrap();
@@ -1111,7 +1172,7 @@ mod license_pipeline_tests {
         assert_ne!(native, LicenseError::Forbidden("manifest refused"));
 
         // ...but the client only ever sees the generic one.
-        let err = authorize_license(&st, &person(), &payload(&tampered), "rid")
+        let err = authorize_license(&st, &person(), &payload(&tampered), SESSION_ASSET, "rid")
             .await
             .err()
             .unwrap();
@@ -1126,7 +1187,7 @@ mod license_pipeline_tests {
         let st = state(&server, fake.clone());
         let mut request = payload(manifest());
         request.tdf_manifest = Some("A".repeat(MAX_MANIFEST_SIZE.div_ceil(3) * 4 + 1));
-        let err = authorize_license(&st, &person(), &request, "rid")
+        let err = authorize_license(&st, &person(), &request, SESSION_ASSET, "rid")
             .await
             .err()
             .unwrap();
@@ -1149,7 +1210,7 @@ mod license_pipeline_tests {
             request.component = Some(component.into());
             request.tdf_payload =
                 Some(base64::engine::general_purpose::STANDARD.encode(&encrypted));
-            let out = authorize_license(&st, &person(), &request, "rid")
+            let out = authorize_license(&st, &person(), &request, SESSION_ASSET, "rid")
                 .await
                 .unwrap();
             assert_eq!(out.ckc, b"fake-ckc");
@@ -1157,6 +1218,85 @@ mod license_pipeline_tests {
             assert_eq!(*fake.seen_iv.lock().unwrap(), Some(iv));
             assert_eq!(*fake.seen_content_type.lock().unwrap(), Some(kind));
         }
+    }
+
+    fn envelope_request(component: &str) -> MediaKeyRequest {
+        let (manifest, encrypted) = crate::modules::license::tdf_policy::envelope_test_fixture();
+        let mut request = payload(&manifest.to_string());
+        request.asset_id = UUID.into();
+        request.component = Some(component.into());
+        request.tdf_payload = Some(base64::engine::general_purpose::STANDARD.encode(encrypted));
+        request
+    }
+
+    #[tokio::test]
+    async fn envelope_without_payload_is_a_bad_request() {
+        let server = platform("DECISION_PERMIT").await;
+        let fake = Arc::new(FakeIssuer::new(None));
+        let st = state(&server, fake.clone());
+        let mut request = envelope_request("video");
+        request.tdf_payload = None;
+        let err = authorize_license(&st, &person(), &request, SESSION_ASSET, "rid")
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(err, LicenseError::BadRequest("tdfPayload is required"));
+        assert!(fake.seen_key.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn envelope_is_refused_without_a_ksm_key() {
+        let server = platform("DECISION_PERMIT").await;
+        let fake = Arc::new(FakeIssuer::new(Some(&format!("{UUID}/video"))));
+        let mut st = state(&server, fake.clone());
+        let license = LicenseAuthz {
+            pdp: PlatformPdp::new(
+                &server.uri(),
+                format!("{}/oauth/token", server.uri()),
+                "arks-media".into(),
+                "s".into(),
+            )
+            .unwrap(),
+            kas_urls: st.license.as_ref().unwrap().kas_urls.clone(),
+            lease_secs: 3600,
+            envelope_rsa: None,
+        };
+        st.license = Some(Arc::new(license));
+        let err = authorize_license(
+            &st,
+            &person(),
+            &envelope_request("video"),
+            SESSION_ASSET,
+            "rid",
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(err, LicenseError::Forbidden("manifest refused"));
+        assert!(fake.seen_key.lock().unwrap().is_none());
+        // Legacy profiles still issue without it.
+        let out =
+            authorize_license(&st, &person(), &payload(manifest()), SESSION_ASSET, "rid").await;
+        assert!(out.is_ok());
+    }
+
+    #[tokio::test]
+    async fn envelope_for_another_recording_is_refused() {
+        let server = platform("DECISION_PERMIT").await;
+        let fake = Arc::new(FakeIssuer::new(Some(&format!("{UUID}/video"))));
+        let st = state(&server, fake.clone());
+        let err = authorize_license(
+            &st,
+            &person(),
+            &envelope_request("video"),
+            "recording-2",
+            "rid",
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(err, LicenseError::Forbidden("manifest refused"));
+        assert!(fake.seen_key.lock().unwrap().is_none());
     }
 
     #[tokio::test]
@@ -1174,9 +1314,11 @@ mod license_pipeline_tests {
             request.asset_id = UUID.into();
             request.component = Some("video".into());
             request.tdf_payload = Some(base64::engine::general_purpose::STANDARD.encode(encrypted));
-            assert!(authorize_license(&st, &person(), &request, "rid")
-                .await
-                .is_err());
+            assert!(
+                authorize_license(&st, &person(), &request, SESSION_ASSET, "rid")
+                    .await
+                    .is_err()
+            );
             assert!(fake.seen_key.lock().unwrap().is_none());
         }
     }
@@ -1187,9 +1329,15 @@ mod license_pipeline_tests {
         let server = platform("DECISION_PERMIT").await;
         let fake = Arc::new(FakeIssuer::new(Some(format!("{UUID}/video").as_str())));
         let st = state(&server, fake.clone());
-        let out = authorize_license(&st, &person(), &payload_v2(UUID, Some("video")), "rid")
-            .await
-            .unwrap();
+        let out = authorize_license(
+            &st,
+            &person(),
+            &payload_v2(UUID, Some("video")),
+            SESSION_ASSET,
+            "rid",
+        )
+        .await
+        .unwrap();
         assert_eq!(out.ckc, b"fake-ckc");
         assert_eq!(fake.seen_key.lock().unwrap().unwrap(), video_key());
         assert_eq!(fake.seen_iv.lock().unwrap().unwrap(), iv());
@@ -1210,9 +1358,15 @@ mod license_pipeline_tests {
         let server = platform("DECISION_PERMIT").await;
         let fake = Arc::new(FakeIssuer::new(Some(format!("{UUID}/audio").as_str())));
         let st = state(&server, fake.clone());
-        let out = authorize_license(&st, &person(), &payload_v2(UUID, Some("audio")), "rid")
-            .await
-            .unwrap();
+        let out = authorize_license(
+            &st,
+            &person(),
+            &payload_v2(UUID, Some("audio")),
+            SESSION_ASSET,
+            "rid",
+        )
+        .await
+        .unwrap();
         assert_eq!(out.ckc, b"fake-ckc");
         assert_eq!(fake.seen_key.lock().unwrap().unwrap(), audio_key());
         assert_eq!(fake.seen_iv.lock().unwrap().unwrap(), iv());
@@ -1240,10 +1394,16 @@ mod license_pipeline_tests {
             Some(""),
             Some("video "),
         ] {
-            let err = authorize_license(&st, &person(), &payload_v2(UUID, component), "rid")
-                .await
-                .err()
-                .unwrap();
+            let err = authorize_license(
+                &st,
+                &person(),
+                &payload_v2(UUID, component),
+                SESSION_ASSET,
+                "rid",
+            )
+            .await
+            .err()
+            .unwrap();
             assert_eq!(
                 err,
                 LicenseError::Forbidden("manifest refused"),
@@ -1263,10 +1423,16 @@ mod license_pipeline_tests {
                 format!("{UUID}/{component}").as_str(),
             )));
             let st = state(&server, fake.clone());
-            let err = authorize_license(&st, &person(), &payload_v2(UUID, Some(component)), "rid")
-                .await
-                .err()
-                .unwrap();
+            let err = authorize_license(
+                &st,
+                &person(),
+                &payload_v2(UUID, Some(component)),
+                SESSION_ASSET,
+                "rid",
+            )
+            .await
+            .err()
+            .unwrap();
             assert_eq!(
                 err,
                 LicenseError::Forbidden("platform refused"),
@@ -1298,7 +1464,7 @@ mod license_pipeline_tests {
             m["encryptionInformation"]["method"]["iv"] = bad.clone();
             let mut p = payload_v2(UUID, Some("video"));
             p.tdf_manifest = Some(b64.encode(m.to_string()));
-            let err = authorize_license(&st, &person(), &p, "rid")
+            let err = authorize_license(&st, &person(), &p, SESSION_ASSET, "rid")
                 .await
                 .err()
                 .unwrap();
@@ -1316,11 +1482,16 @@ mod license_pipeline_tests {
         let with_id = format!("{UUID}/video");
         let upper = UUID.to_uppercase();
         for asset_id in ["a", with_id.as_str(), upper.as_str()] {
-            let err =
-                authorize_license(&st, &person(), &payload_v2(asset_id, Some("video")), "rid")
-                    .await
-                    .err()
-                    .unwrap();
+            let err = authorize_license(
+                &st,
+                &person(),
+                &payload_v2(asset_id, Some("video")),
+                SESSION_ASSET,
+                "rid",
+            )
+            .await
+            .err()
+            .unwrap();
             assert_eq!(
                 err,
                 LicenseError::Forbidden("manifest refused"),
@@ -1340,10 +1511,16 @@ mod license_pipeline_tests {
         for spc_asset_id in [None, Some(UUID), Some(audio.as_str()), Some("other")] {
             let fake = Arc::new(FakeIssuer::new(spc_asset_id));
             let st = state(&server, fake.clone());
-            let err = authorize_license(&st, &person(), &payload_v2(UUID, Some("video")), "rid")
-                .await
-                .err()
-                .unwrap();
+            let err = authorize_license(
+                &st,
+                &person(),
+                &payload_v2(UUID, Some("video")),
+                SESSION_ASSET,
+                "rid",
+            )
+            .await
+            .err()
+            .unwrap();
             assert_eq!(
                 err,
                 LicenseError::Forbidden("manifest refused"),
@@ -1367,7 +1544,7 @@ mod license_pipeline_tests {
             .swap(0, 1);
         let mut p = payload_v2(UUID, Some("video"));
         p.tdf_manifest = Some(base64::engine::general_purpose::STANDARD.encode(m.to_string()));
-        let err = authorize_license(&st, &person(), &p, "rid")
+        let err = authorize_license(&st, &person(), &p, SESSION_ASSET, "rid")
             .await
             .err()
             .unwrap();
@@ -1384,7 +1561,7 @@ mod license_pipeline_tests {
         for spc_asset_id in [Some("other"), None] {
             let fake = Arc::new(FakeIssuer::new(spc_asset_id));
             let st = state(&server, fake.clone());
-            let out = authorize_license(&st, &person(), &payload(manifest()), "rid")
+            let out = authorize_license(&st, &person(), &payload(manifest()), SESSION_ASSET, "rid")
                 .await
                 .unwrap_or_else(|e| panic!("{spc_asset_id:?}: {e:?}"));
             assert_eq!(out.ckc, b"fake-ckc", "{spc_asset_id:?}");
@@ -1399,7 +1576,9 @@ mod license_pipeline_tests {
         let st = state(&server, fake.clone());
         let mut p = payload(manifest());
         p.component = Some("audio".into());
-        authorize_license(&st, &person(), &p, "rid").await.unwrap();
+        authorize_license(&st, &person(), &p, SESSION_ASSET, "rid")
+            .await
+            .unwrap();
         assert_eq!(fake.seen_key.lock().unwrap().unwrap(), video_key());
         assert_eq!(
             *fake.seen_content_type.lock().unwrap(),
@@ -1539,6 +1718,27 @@ mod session_auth_tests {
         let (st, v) = send(app, "POST", "/start", Some(&token(sub)), body).await;
         assert_eq!(st, StatusCode::OK);
         v["sessionId"].as_str().unwrap().to_string()
+    }
+
+    /// The token is checked from the headers before the body is read: an
+    /// unauthenticated client cannot make the server buffer or parse a body.
+    #[tokio::test]
+    async fn key_request_refuses_a_missing_token_before_reading_the_body() {
+        let app = router(state_with_redis(&redis_url()))
+            .layer(axum::extract::DefaultBodyLimit::max(MAX_KEY_REQUEST_BODY));
+        for body in [
+            Body::from("not json"),
+            Body::from(vec![b'{'; MAX_KEY_REQUEST_BODY + 1]),
+        ] {
+            let req = Request::builder()
+                .method("POST")
+                .uri("/key")
+                .header("content-type", "application/json")
+                .body(body)
+                .unwrap();
+            let res = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        }
     }
 
     #[tokio::test]

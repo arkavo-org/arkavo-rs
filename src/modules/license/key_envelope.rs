@@ -8,6 +8,8 @@ use zeroize::Zeroizing;
 
 const PROFILE: &str = "urn:arkavo:fairplay:key-envelope:1";
 const MAX_PLAINTEXT: usize = 2_097_152;
+/// The largest accepted `0.payload`: nonce, ciphertext and GCM tag.
+pub const MAX_ENCRYPTED_PAYLOAD: usize = MAX_PLAINTEXT + 28;
 
 #[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -45,7 +47,7 @@ pub(super) fn check(
     manifest: &Value,
     policy: &Value,
     policy_b64: &str,
-    encrypted: Option<&[u8]>,
+    encrypted: &[u8],
     rsa: &RsaPrivateKey,
     kas_urls: &[String],
 ) -> Result<CheckedPolicy, LicenseError> {
@@ -64,9 +66,9 @@ pub(super) fn check(
     {
         return Err(FORBIDDEN_MANIFEST);
     }
-    let encrypted = encrypted
-        .filter(|p| (29..=MAX_PLAINTEXT + 28).contains(&p.len()))
-        .ok_or(FORBIDDEN_MANIFEST)?;
+    if !(29..=MAX_ENCRYPTED_PAYLOAD).contains(&encrypted.len()) {
+        return Err(FORBIDDEN_MANIFEST);
+    }
     let kaos = ei["keyAccess"].as_array().ok_or(FORBIDDEN_MANIFEST)?;
     let [kao] = kaos.as_slice() else {
         return Err(FORBIDDEN_MANIFEST);
@@ -91,7 +93,7 @@ pub(super) fn check(
     if integrity["segmentHashAlg"] != "GMAC"
         || integrity["rootSignature"]["alg"] != "HS256"
         || integrity["segmentSizeDefault"] != MAX_PLAINTEXT
-        || integrity["encryptedSegmentSizeDefault"] != MAX_PLAINTEXT + 28
+        || integrity["encryptedSegmentSizeDefault"] != MAX_ENCRYPTED_PAYLOAD
         || segment["segmentSize"] != encrypted.len() - 28
         || segment["encryptedSegmentSize"] != encrypted.len()
     {
@@ -116,7 +118,10 @@ pub(super) fn check(
     }
     let envelope: Envelope = serde_json::from_slice(&plaintext).map_err(|_| FORBIDDEN_MANIFEST)?;
     let (policy_uuid, fqns) = policy_subject(policy)?;
-    if uuid::Uuid::parse_str(&policy_uuid).is_err()
+    // Only the canonical lowercase hyphenated form: it becomes the SDK asset
+    // id `<uuid>/<component>`, which the viewer derives the same way.
+    let canonical = uuid::Uuid::parse_str(&policy_uuid).map(|u| u.hyphenated().to_string());
+    if canonical.as_deref() != Ok(policy_uuid.as_str())
         || envelope.profile != PROFILE
         || envelope.content_key_id != policy_uuid
         || envelope.asset_id.is_empty()
@@ -178,6 +183,7 @@ pub(super) fn check(
         policy_uuid,
         fqns,
         content_iv: [0; 16],
+        recording_id: Some(envelope.asset_id),
     })
 }
 
@@ -225,7 +231,11 @@ pub(super) mod tests {
         mac.update(data);
         STANDARD.encode(mac.finalize().into_bytes())
     }
+    /// The KSM-only envelope wrapping key the fixture DEK is wrapped to.
     fn key() -> RsaPrivateKey {
+        RsaPrivateKey::from_pkcs8_pem(&fixtures().envelope_key_pem).unwrap()
+    }
+    fn kas_key() -> RsaPrivateKey {
         RsaPrivateKey::from_pkcs8_pem(&fixtures().key_pem).unwrap()
     }
     fn seal(manifest: &mut Value, plaintext: &Value) -> Vec<u8> {
@@ -283,7 +293,8 @@ pub(super) mod tests {
         check_manifest_with_payload(
             &serde_json::to_vec(manifest).unwrap(),
             payload,
-            &key(),
+            &kas_key(),
+            Some(&key()),
             &["https://platform.arkavo.net".into()],
         )
     }
@@ -303,6 +314,7 @@ pub(super) mod tests {
             &manifest,
             Some(&encrypted),
             &key,
+            Some(&key),
             &["https://platform.arkavo.net".into()],
         )
         .unwrap();
@@ -342,7 +354,10 @@ pub(super) mod tests {
     #[test]
     fn rejects_missing_truncated_tampered_and_oversized_payload() {
         let (manifest, _, _, payload) = fixture();
-        assert!(verify(&manifest, None).is_err());
+        assert_eq!(
+            verify(&manifest, None).err(),
+            Some(LicenseError::BadRequest("tdfPayload is required"))
+        );
         assert!(verify(&manifest, Some(&payload[..payload.len() - 1])).is_err());
         for index in [0, 12, payload.len() - 1] {
             let mut tampered = payload.clone();
@@ -350,6 +365,59 @@ pub(super) mod tests {
             assert!(verify(&manifest, Some(&tampered)).is_err());
         }
         assert!(verify(&manifest, Some(&vec![0; MAX_PLAINTEXT + 29])).is_err());
+    }
+    #[test]
+    fn refused_without_a_ksm_envelope_key() {
+        let (manifest, _, _, payload) = fixture();
+        let err = check_manifest_with_payload(
+            &serde_json::to_vec(&manifest).unwrap(),
+            Some(&payload),
+            &kas_key(),
+            None,
+            &["https://platform.arkavo.net".into()],
+        )
+        .err();
+        assert_eq!(
+            err,
+            Some(LicenseError::Forbidden(
+                "key-envelope profile not configured"
+            ))
+        );
+    }
+    /// A DEK the platform KAS key can unwrap is one a viewer could rewrap
+    /// themselves; only the KSM-only key is accepted.
+    #[test]
+    fn refuses_a_dek_wrapped_to_the_platform_kas_key() {
+        let (mut manifest, _, _, payload) = fixture();
+        let wrapped = RsaPublicKey::from(&kas_key())
+            .encrypt(&mut OsRng, Oaep::new::<Sha1>(), dek())
+            .unwrap();
+        manifest["encryptionInformation"]["keyAccess"][0]["wrappedKey"] =
+            json!(STANDARD.encode(wrapped));
+        assert!(verify(&manifest, Some(&payload)).is_err());
+    }
+    #[test]
+    fn refuses_non_canonical_policy_uuids() {
+        let uuid = "3f1c9e2a-7b4d-4e8f-9a21-5c6d7e8f9a0b";
+        for variant in [
+            format!("urn:uuid:{uuid}"),
+            format!("{{{uuid}}}"),
+            uuid.to_uppercase(),
+            uuid.replace('-', ""),
+        ] {
+            let (mut manifest, mut policy, mut envelope, _) = fixture();
+            policy["uuid"] = json!(variant);
+            envelope["contentKeyId"] = json!(variant);
+            bind(&mut manifest, &policy);
+            let payload = seal(&mut manifest, &envelope);
+            assert!(verify(&manifest, Some(&payload)).is_err(), "{variant}");
+        }
+    }
+    #[test]
+    fn carries_the_authenticated_recording_id() {
+        let (manifest, _, _, payload) = fixture();
+        let policy = verify(&manifest, Some(&payload)).unwrap();
+        assert_eq!(policy.recording_id.as_deref(), Some("recording-1"));
     }
     #[test]
     fn rejects_invalid_standard_manifest_fields() {
