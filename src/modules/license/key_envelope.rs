@@ -414,18 +414,18 @@ pub(crate) mod tests {
     #[test]
     fn refuses_non_canonical_policy_uuids() {
         let uuid = "3f1c9e2a-7b4d-4e8f-9a21-5c6d7e8f9a0b";
-        for variant in [
-            format!("urn:uuid:{uuid}"),
-            format!("{{{uuid}}}"),
-            uuid.to_uppercase(),
-            uuid.replace('-', ""),
+        for (label, variant) in [
+            ("urn", format!("urn:uuid:{uuid}")),
+            ("braced", format!("{{{uuid}}}")),
+            ("uppercase", uuid.to_uppercase()),
+            ("simple", uuid.replace('-', "")),
         ] {
             let (mut manifest, mut policy, mut envelope, _) = fixture();
             policy["uuid"] = json!(variant);
             envelope["contentKeyId"] = json!(variant);
             bind(&mut manifest, &policy);
             let payload = seal(&mut manifest, &envelope);
-            assert!(verify(&manifest, Some(&payload)).is_err(), "{variant}");
+            assert!(verify(&manifest, Some(&payload)).is_err(), "{label}");
         }
     }
     #[test]
