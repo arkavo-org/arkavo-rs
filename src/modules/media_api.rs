@@ -185,15 +185,11 @@ fn select_terms(
     payload: &MediaKeyRequest,
     session_asset_id: &str,
 ) -> Result<LicenseTerms, LicenseError> {
-    // The key-envelope profile authenticates the recording it names; the
-    // session must have been started for that recording.
-    if policy
-        .recording_id
-        .as_deref()
-        .is_some_and(|r| r != session_asset_id)
-    {
+    // A key-envelope session is started for the policy uuid, which the
+    // envelope authenticates as its `contentKeyId` (arkavo-rs#89).
+    if policy.session_bound && session_asset_id != policy.policy_uuid {
         return Err(LicenseError::Forbidden(
-            "envelope names another recording than the session",
+            "session was started for another asset",
         ));
     }
     match &policy.keys {
@@ -301,14 +297,14 @@ pub async fn authorize_license(
     // RSA unwrap, AES-GCM over up to 2 MiB and JSON scans: off the async
     // workers, so a key request does not stall unrelated traffic.
     let rsa = rsa.clone();
-    let envelope_rsa = license.envelope_rsa.clone();
+    let envelope_keys = license.envelope_keys.clone();
     let kas_urls = license.kas_urls.clone();
     let policy = tokio::task::spawn_blocking(move || {
         crate::modules::license::tdf_policy::check_manifest_with_payload(
             &manifest,
             encrypted_payload.as_deref(),
             &rsa,
-            envelope_rsa.as_deref(),
+            envelope_keys.as_deref(),
             &kas_urls,
         )
     })
@@ -512,6 +508,50 @@ pub async fn fairplay_certificate(
             (axum::http::header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         cert_data.as_ref().clone(),
+    )
+        .into_response())
+}
+
+/// The current key-envelope wrapping key, for producers.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvelopeKeyResponse {
+    /// Write this as the key access object's `kid`.
+    pub kid: String,
+    /// RSA-OAEP with SHA-1, as OpenTDF wraps keys.
+    pub alg: String,
+    /// SubjectPublicKeyInfo PEM.
+    pub public_key: String,
+}
+
+/// GET /media/v1/envelope-key
+/// The public half of the current KSM-only envelope key and its `kid`.
+/// Public, like the FairPlay certificate: it only lets a producer wrap a
+/// DEK that arks alone can unwrap (arkavo-rs#89).
+pub async fn envelope_key(
+    State(state): State<Arc<MediaApiState>>,
+) -> Result<Response, ErrorResponse> {
+    let keys = state
+        .license
+        .as_ref()
+        .and_then(|l| l.envelope_keys.as_ref())
+        .ok_or(LicenseError::Unavailable(
+            "key-envelope profile not configured",
+        ))?;
+    let public_key = keys.current_public_pem().map_err(|e| {
+        error!("envelope key: {e}");
+        ErrorResponse::from(LicenseError::Unavailable("envelope key unavailable"))
+    })?;
+    let body = EnvelopeKeyResponse {
+        kid: keys.current_kid().to_string(),
+        alg: "RSA-OAEP".to_string(),
+        public_key,
+    };
+    Ok((
+        StatusCode::OK,
+        // Short: after a rotation producers pick up the new key quickly.
+        [(axum::http::header::CACHE_CONTROL, "public, max-age=300")],
+        Json(body),
     )
         .into_response())
 }
@@ -850,13 +890,14 @@ mod license_pipeline_tests {
     use crate::modules::license::issuer::LicenseContentType;
     use crate::modules::license::pdp::PlatformPdp;
     use crate::modules::license::person_token::{Person, PersonTokenVerifier};
-    use rsa::pkcs8::DecodePrivateKey;
+    use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey};
     use serde_json::json;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     /// The owned session's asset id: the envelope fixture's recording.
-    const SESSION_ASSET: &str = "recording-1";
+    /// The owned session's asset id: the policy uuid, as clients send it.
+    const SESSION_ASSET: &str = UUID;
 
     const UUID: &str = "3f1c9e2a-7b4d-4e8f-9a21-5c6d7e8f9a0b";
 
@@ -945,9 +986,13 @@ mod license_pipeline_tests {
             )
             .unwrap()],
             lease_secs: 3600,
-            envelope_rsa: Some(Arc::new(
-                rsa::RsaPrivateKey::from_pkcs8_pem(
-                    &crate::modules::license::fixtures::fixtures().envelope_key_pem,
+            envelope_keys: Some(Arc::new(
+                crate::modules::license::key_envelope::EnvelopeKeys::new(
+                    rsa::RsaPrivateKey::from_pkcs8_pem(
+                        &crate::modules::license::fixtures::fixtures().envelope_key_pem,
+                    )
+                    .unwrap(),
+                    vec![],
                 )
                 .unwrap(),
             )),
@@ -1265,7 +1310,7 @@ mod license_pipeline_tests {
             .unwrap(),
             kas_urls: st.license.as_ref().unwrap().kas_urls.clone(),
             lease_secs: 3600,
-            envelope_rsa: None,
+            envelope_keys: None,
         };
         st.license = Some(Arc::new(license));
         let err = authorize_license(
@@ -1287,7 +1332,42 @@ mod license_pipeline_tests {
     }
 
     #[tokio::test]
-    async fn envelope_for_another_recording_is_refused() {
+    async fn envelope_key_publishes_the_current_public_key_and_kid() {
+        let server = platform("DECISION_PERMIT").await;
+        let st = Arc::new(state(&server, Arc::new(FakeIssuer::new(None))));
+        let res = envelope_key(State(st.clone())).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: EnvelopeKeyResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body.alg, "RSA-OAEP");
+        assert_eq!(
+            body.kid,
+            crate::modules::license::fixtures::fixtures().envelope_kid
+        );
+        let public = rsa::RsaPublicKey::from_public_key_pem(&body.public_key).unwrap();
+        let expected = rsa::RsaPublicKey::from(
+            &rsa::RsaPrivateKey::from_pkcs8_pem(
+                &crate::modules::license::fixtures::fixtures().envelope_key_pem,
+            )
+            .unwrap(),
+        );
+        assert_eq!(public, expected);
+        assert!(!body.public_key.contains("PRIVATE"));
+    }
+
+    #[tokio::test]
+    async fn envelope_key_is_not_configured_without_a_key() {
+        let server = platform("DECISION_PERMIT").await;
+        let mut st = state(&server, Arc::new(FakeIssuer::new(None)));
+        st.license = None;
+        let err = envelope_key(State(Arc::new(st))).await.err().unwrap();
+        assert_eq!(err.error, "service_unavailable");
+    }
+
+    #[tokio::test]
+    async fn envelope_on_a_session_for_another_asset_is_refused() {
         let server = platform("DECISION_PERMIT").await;
         let fake = Arc::new(FakeIssuer::new(Some(&format!("{UUID}/video"))));
         let st = state(&server, fake.clone());
@@ -1295,7 +1375,7 @@ mod license_pipeline_tests {
             &st,
             &person(),
             &envelope_request("video"),
-            "recording-2",
+            "another-asset",
             "rid",
         )
         .await

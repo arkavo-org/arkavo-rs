@@ -10,10 +10,11 @@ use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use hmac::{Hmac, Mac};
-use rsa::RsaPrivateKey;
+use rsa::pkcs8::EncodePublicKey;
+use rsa::{RsaPrivateKey, RsaPublicKey};
 use serde::Deserialize;
 use serde_json::Value;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 use zeroize::Zeroizing;
 
@@ -45,6 +46,71 @@ struct Envelope {
     files: Vec<MediaFile>,
 }
 
+/// A wrapping key's `kid`: lowercase hex SHA-256 of its public key's
+/// SubjectPublicKeyInfo DER. The packager derives the same value from the
+/// public PEM alone, so arks and the packager never share a configured name.
+pub fn kid(public: &RsaPublicKey) -> Result<String, String> {
+    let der = public
+        .to_public_key_der()
+        .map_err(|e| format!("envelope public key does not encode: {e}"))?;
+    Ok(hex::encode(Sha256::digest(der.as_bytes())))
+}
+
+/// The KSM-only envelope wrapping keys: the current one, which the packager
+/// wraps new packages to, then any retired ones still accepted for unwrap.
+pub struct EnvelopeKeys {
+    /// `(kid, key)`; the current key first.
+    keys: Vec<(String, RsaPrivateKey)>,
+}
+
+impl EnvelopeKeys {
+    pub fn new(current: RsaPrivateKey, retired: Vec<RsaPrivateKey>) -> Result<Self, String> {
+        let mut keys: Vec<(String, RsaPrivateKey)> = Vec::with_capacity(1 + retired.len());
+        for key in std::iter::once(current).chain(retired) {
+            let id = kid(&RsaPublicKey::from(&key))?;
+            if keys.iter().any(|(k, _)| *k == id) {
+                return Err(format!("envelope key {id} is configured twice"));
+            }
+            keys.push((id, key));
+        }
+        Ok(EnvelopeKeys { keys })
+    }
+
+    pub fn current_kid(&self) -> &str {
+        &self.keys[0].0
+    }
+
+    /// The current key's public half, SPKI PEM, for producers.
+    pub fn current_public_pem(&self) -> Result<String, String> {
+        RsaPublicKey::from(&self.keys[0].1)
+            .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+            .map_err(|e| format!("envelope public key does not encode: {e}"))
+    }
+
+    pub fn kids(&self) -> impl Iterator<Item = &str> {
+        self.keys.iter().map(|(k, _)| k.as_str())
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &RsaPrivateKey> {
+        self.keys.iter().map(|(_, key)| key)
+    }
+
+    /// A `kid` must name a loaded key. A key access without one (packages
+    /// made before `kid` support) unwraps with the current key only.
+    fn select(&self, kao: &Value) -> Result<&RsaPrivateKey, LicenseError> {
+        match kao.get("kid") {
+            None => Ok(&self.keys[0].1),
+            Some(Value::String(id)) => self
+                .keys
+                .iter()
+                .find(|(k, _)| k == id)
+                .map(|(_, key)| key)
+                .ok_or(LicenseError::Forbidden("unknown envelope kid")),
+            Some(_) => Err(FORBIDDEN_MANIFEST),
+        }
+    }
+}
+
 fn bytes(value: &Value) -> Result<Vec<u8>, LicenseError> {
     let encoded = value.as_str().ok_or(FORBIDDEN_MANIFEST)?;
     let decoded = STANDARD.decode(encoded).map_err(|_| FORBIDDEN_MANIFEST)?;
@@ -59,14 +125,16 @@ pub(super) fn check(
     policy: &Value,
     policy_b64: &str,
     encrypted: &[u8],
-    rsa: &RsaPrivateKey,
+    envelope_keys: &EnvelopeKeys,
     kas_urls: &[String],
 ) -> Result<CheckedPolicy, LicenseError> {
     let ei = &manifest["encryptionInformation"];
     if policy["arkavo:fpsProfile"] != PROFILE
         || manifest["schemaVersion"] != "4.3.0"
         || manifest["payload"]["type"] != "reference"
-        || manifest["payload"]["url"] != "0.payload"
+        || !manifest["payload"]["url"]
+            .as_str()
+            .is_some_and(payload_entry_name)
         || manifest["payload"]["protocol"] != "zip"
         || manifest["payload"]["isEncrypted"] != true
         || manifest["payload"]["mimeType"] != "application/json"
@@ -91,6 +159,7 @@ pub(super) fn check(
     {
         return Err(FORBIDDEN_MANIFEST);
     }
+    let rsa = envelope_keys.select(kao)?;
     let dek = Zeroizing::new(unwrap_key(kao, rsa, kas_urls)?);
     if dek.len() != 32 {
         return Err(FORBIDDEN_MANIFEST);
@@ -193,8 +262,21 @@ pub(super) fn check(
         keys: PolicyKeys::Components(components),
         policy_uuid,
         fqns,
-        recording_id: Some(envelope.asset_id),
+        session_bound: true,
     })
+}
+
+/// `payload.url` locates the payload's ZIP entry; `0.payload` is only the
+/// usual name (OpenTDF `payload.md`). arks never opens the ZIP, so any
+/// root-level entry is accepted that cannot be the manifest or HLS media.
+fn payload_entry_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\'])
+        && name != "manifest.json"
+        && !safe_name(name)
 }
 
 fn safe_name(name: &str) -> bool {
@@ -304,12 +386,28 @@ pub(crate) mod tests {
         let payload = seal(&mut manifest, &envelope);
         (manifest, policy, envelope, payload)
     }
+    fn envelope_keys() -> EnvelopeKeys {
+        EnvelopeKeys::new(key(), vec![]).unwrap()
+    }
+    fn verify_with(
+        manifest: &Value,
+        payload: Option<&[u8]>,
+        keys: &EnvelopeKeys,
+    ) -> Result<CheckedPolicy, LicenseError> {
+        check_manifest_with_payload(
+            &serde_json::to_vec(manifest).unwrap(),
+            payload,
+            &kas_key(),
+            Some(keys),
+            &["https://platform.arkavo.net".into()],
+        )
+    }
     fn verify(manifest: &Value, payload: Option<&[u8]>) -> Result<CheckedPolicy, LicenseError> {
         check_manifest_with_payload(
             &serde_json::to_vec(manifest).unwrap(),
             payload,
             &kas_key(),
-            Some(&key()),
+            Some(&envelope_keys()),
             &["https://platform.arkavo.net".into()],
         )
     }
@@ -329,7 +427,7 @@ pub(crate) mod tests {
             &manifest,
             Some(&encrypted),
             &key,
-            Some(&key),
+            Some(&EnvelopeKeys::new(key.clone(), vec![]).unwrap()),
             &["https://platform.arkavo.net".into()],
         )
         .unwrap();
@@ -381,6 +479,59 @@ pub(crate) mod tests {
         }
         assert!(verify(&manifest, Some(&vec![0; MAX_PLAINTEXT + 29])).is_err());
     }
+    fn retired_key() -> RsaPrivateKey {
+        RsaPrivateKey::from_pkcs8_pem(&fixtures().envelope_retired_key_pem).unwrap()
+    }
+    fn with_kid(manifest: &Value, kid: Value) -> Value {
+        let mut m = manifest.clone();
+        m["encryptionInformation"]["keyAccess"][0]["kid"] = kid;
+        m
+    }
+    #[test]
+    fn kid_is_the_public_key_fingerprint() {
+        let keys = envelope_keys();
+        // The packager's openssl one-liner derives the same kid.
+        assert_eq!(keys.current_kid(), fixtures().envelope_kid);
+        assert_eq!(keys.current_kid().len(), 64);
+    }
+    #[test]
+    fn kid_selects_the_current_or_a_retired_key() {
+        let (manifest, _, _, payload) = fixture();
+        let id = json!(kid(&RsaPublicKey::from(&key())).unwrap());
+        // The fixture is wrapped to key(): current here...
+        assert!(verify(&with_kid(&manifest, id.clone()), Some(&payload)).is_ok());
+        // ...and retired after a rotation to another current key.
+        let rotated = EnvelopeKeys::new(retired_key(), vec![key()]).unwrap();
+        assert!(verify_with(&with_kid(&manifest, id), Some(&payload), &rotated).is_ok());
+    }
+    #[test]
+    fn kid_less_key_access_uses_only_the_current_key() {
+        let (manifest, _, _, payload) = fixture();
+        assert!(verify(&manifest, Some(&payload)).is_ok());
+        let rotated = EnvelopeKeys::new(retired_key(), vec![key()]).unwrap();
+        assert!(verify_with(&manifest, Some(&payload), &rotated).is_err());
+    }
+    #[test]
+    fn unknown_or_malformed_kid_is_refused() {
+        let (manifest, _, _, payload) = fixture();
+        let other = json!(kid(&RsaPublicKey::from(&retired_key())).unwrap());
+        for (label, value) in [
+            ("unloaded", other),
+            ("empty", json!("")),
+            ("null", Value::Null),
+            ("number", json!(1)),
+        ] {
+            assert!(
+                verify(&with_kid(&manifest, value), Some(&payload)).is_err(),
+                "{label}"
+            );
+        }
+    }
+    #[test]
+    fn a_key_configured_twice_is_refused() {
+        assert!(EnvelopeKeys::new(key(), vec![key()]).is_err());
+        assert!(EnvelopeKeys::new(key(), vec![retired_key()]).is_ok());
+    }
     #[test]
     fn refused_without_a_ksm_envelope_key() {
         let (manifest, _, _, payload) = fixture();
@@ -429,17 +580,43 @@ pub(crate) mod tests {
         }
     }
     #[test]
-    fn carries_the_authenticated_recording_id() {
+    fn payload_url_is_any_root_level_entry() {
+        let (manifest, _, _, payload) = fixture();
+        for good in ["0.payload", "payload.bin", "1.payload"] {
+            let mut m = manifest.clone();
+            m["payload"]["url"] = json!(good);
+            assert!(verify(&m, Some(&payload)).is_ok(), "{good}");
+        }
+        for (label, bad) in [
+            ("empty", json!("")),
+            ("dot", json!(".")),
+            ("dotdot", json!("..")),
+            ("nested", json!("a/0.payload")),
+            ("backslash", json!("a\\0.payload")),
+            ("manifest", json!("manifest.json")),
+            ("hls", json!("master.m3u8")),
+            ("segment", json!("video-segment0.m4s")),
+            ("long", json!("a".repeat(256))),
+            ("number", json!(0)),
+        ] {
+            let mut m = manifest.clone();
+            m["payload"]["url"] = bad;
+            assert!(verify(&m, Some(&payload)).is_err(), "{label}");
+        }
+    }
+    #[test]
+    fn binds_the_session_to_the_policy() {
         let (manifest, _, _, payload) = fixture();
         let policy = verify(&manifest, Some(&payload)).unwrap();
-        assert_eq!(policy.recording_id.as_deref(), Some("recording-1"));
+        assert!(policy.session_bound);
+        assert_eq!(policy.policy_uuid, "3f1c9e2a-7b4d-4e8f-9a21-5c6d7e8f9a0b");
     }
     #[test]
     fn rejects_invalid_standard_manifest_fields() {
         let (manifest, _, _, payload) = fixture();
         for (pointer, value) in [
             ("/schemaVersion", json!("4.2.2")),
-            ("/payload/url", json!("different")),
+            ("/payload/url", json!("a/0.payload")),
             (
                 "/encryptionInformation/method/algorithm",
                 json!("AES-128-CBC"),
