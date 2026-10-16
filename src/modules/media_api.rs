@@ -26,7 +26,7 @@ use uuid::Uuid;
 // Constants for input validation
 const MAX_MANIFEST_SIZE: usize = 2 * 1024 * 1024;
 const MAX_SPC_DATA_SIZE: usize = 64 * 1024; // 64KB max for SPC data
-use crate::modules::license::tdf_policy::MAX_ENCRYPTED_PAYLOAD;
+use crate::modules::license::key_envelope::MAX_ENCRYPTED_PAYLOAD;
 /// The key-request body limit: room for a base64 manifest and a base64
 /// key-envelope payload. Only read once the person token has verified.
 pub const MAX_KEY_REQUEST_BODY: usize = 6 * 1024 * 1024;
@@ -197,12 +197,12 @@ fn select_terms(
         ));
     }
     match &policy.keys {
-        PolicyKeys::Single(dek) => {
+        PolicyKeys::Single { dek, content_iv } => {
             let mut key = [0u8; 16];
             key.copy_from_slice(&dek[..16]);
             Ok(LicenseTerms {
                 key,
-                iv: policy.content_iv,
+                iv: *content_iv,
                 content_type: LicenseContentType::Uhd,
                 asset_id: policy.policy_uuid.clone(),
                 exact_spc_asset_id: false,
@@ -222,7 +222,7 @@ fn select_terms(
                 .ok_or(LicenseError::Forbidden("unknown component"))?;
             Ok(LicenseTerms {
                 key: component.key,
-                iv: component.content_iv.unwrap_or(policy.content_iv),
+                iv: component.content_iv,
                 content_type: match component.kind {
                     ComponentKind::Video => LicenseContentType::Uhd,
                     ComponentKind::Audio => LicenseContentType::Audio,
@@ -1198,7 +1198,7 @@ mod license_pipeline_tests {
     #[tokio::test]
     async fn envelope_issues_only_ckc_for_the_requested_track() {
         let server = platform("DECISION_PERMIT").await;
-        let (manifest, encrypted) = crate::modules::license::tdf_policy::envelope_test_fixture();
+        let (manifest, encrypted) = envelope_fixture();
         for (component, key, iv, kind) in [
             ("video", [1; 16], [3; 16], LicenseContentType::Uhd),
             ("audio", [2; 16], [4; 16], LicenseContentType::Audio),
@@ -1220,8 +1220,14 @@ mod license_pipeline_tests {
         }
     }
 
+    /// The key-envelope manifest and its sealed `0.payload`.
+    fn envelope_fixture() -> (serde_json::Value, Vec<u8>) {
+        let (manifest, _, _, payload) = crate::modules::license::key_envelope::tests::fixture();
+        (manifest, payload)
+    }
+
     fn envelope_request(component: &str) -> MediaKeyRequest {
-        let (manifest, encrypted) = crate::modules::license::tdf_policy::envelope_test_fixture();
+        let (manifest, encrypted) = envelope_fixture();
         let mut request = payload(&manifest.to_string());
         request.asset_id = UUID.into();
         request.component = Some(component.into());
@@ -1305,8 +1311,7 @@ mod license_pipeline_tests {
             let server = platform(decision).await;
             let fake = Arc::new(FakeIssuer::new(None));
             let st = state(&server, fake.clone());
-            let (manifest, mut encrypted) =
-                crate::modules::license::tdf_policy::envelope_test_fixture();
+            let (manifest, mut encrypted) = envelope_fixture();
             if decision == "DECISION_PERMIT" {
                 encrypted[12] ^= 1;
             }

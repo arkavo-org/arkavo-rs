@@ -8,7 +8,9 @@ The profile `urn:arkavo:fairplay:key-envelope:1` separates standard OpenTDF encr
 
 The playback session must be started (`POST /media/v1/session/start`) with `assetId` equal to the envelope's authenticated `assetId`, the recording identifier. A key request on a session for any other asset is refused.
 
-The KSM verifies the manifest and policy, unwraps a single 32-byte DEK with its dedicated envelope key, verifies its policy HMAC, validates segment and root integrity, decrypts the bounded envelope, and checks its track keys, IVs and inventory against the bound policy. It then obtains the platform decision for the viewer. A permit issues the requested track's key and IV through the existing leased CKC path. The SPC asset identifier must equal `<policy uuid>/<component>`. Refusal occurs before the issuer for malformed envelopes, unknown components, asset mismatches, or denied policy. A mismatched SPC causes the generated CKC to be discarded.
+The KSM verifies the manifest and policy, unwraps a single 32-byte DEK with its dedicated envelope key, verifies its policy HMAC, validates segment and root integrity, decrypts the bounded envelope, and checks its track keys, IVs and inventory against the bound policy. It then obtains the platform decision for the viewer. A permit issues the requested track's key and IV through the existing leased CKC path. The SPC asset identifier must equal `<policy uuid>/<component>`.
+
+Malformed envelopes, unknown components, a request `assetId` other than the policy UUID, a session for another recording, and a denied policy are all refused before the issuer is called. The SPC's asset identifier is different: the FairPlay SDK reads it in the same call that produces the CKC, so a mismatch is detected only after the issuer has run. That CKC is discarded and never returned, and the request gets the generic 403.
 
 ## Wire profile
 

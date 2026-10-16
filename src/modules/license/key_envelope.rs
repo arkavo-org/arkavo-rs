@@ -1,8 +1,19 @@
 //! Arkavo FairPlay key-envelope profile over a single standard OpenTDF segment.
 //! The consumer receives a CKC only. Neither the envelope nor its keys are returned.
-use super::*;
+use super::strict_json::has_unique_keys;
+use super::tdf_policy::{
+    component_shape, policy_subject, unwrap_key, verify_policy_binding, CheckedComponent,
+    CheckedPolicy, PolicyKeys, COMPONENTS_KEY, FORBIDDEN_MANIFEST, KEY_BINDING_PREFIX,
+};
+use super::LicenseError;
 use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use hmac::{Hmac, Mac};
+use rsa::RsaPrivateKey;
 use serde::Deserialize;
+use serde_json::Value;
+use sha2::Sha256;
 use std::collections::{BTreeMap, HashSet};
 use zeroize::Zeroizing;
 
@@ -175,14 +186,13 @@ pub(super) fn check(
             id: track.id,
             kind,
             key,
-            content_iv: Some(iv),
+            content_iv: iv,
         });
     }
     Ok(CheckedPolicy {
         keys: PolicyKeys::Components(components),
         policy_uuid,
         fqns,
-        content_iv: [0; 16],
         recording_id: Some(envelope.asset_id),
     })
 }
@@ -208,11 +218,15 @@ fn safe_name(name: &str) -> bool {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::modules::license::fixtures::fixtures;
+    use crate::modules::license::tdf_policy::check_manifest_with_payload;
+    use rand_core::OsRng;
+    use rsa::Oaep;
     use rsa::{pkcs1::DecodeRsaPrivateKey, pkcs8::DecodePrivateKey, RsaPublicKey};
     use serde_json::json;
+    use sha1::Sha1;
 
     use rand_core::RngCore;
     use std::sync::OnceLock;
@@ -264,7 +278,8 @@ pub(super) mod tests {
             json!(hmac(dek(), b64.as_bytes()));
         manifest["encryptionInformation"]["policy"] = json!(b64);
     }
-    pub(super) fn fixture() -> (Value, Value, Value, Vec<u8>) {
+    /// Manifest, policy, envelope and sealed `0.payload`.
+    pub(crate) fn fixture() -> (Value, Value, Value, Vec<u8>) {
         let uuid = "3f1c9e2a-7b4d-4e8f-9a21-5c6d7e8f9a0b";
         let files = json!([{"name":"master.m3u8","sha256":STANDARD.encode([0x11;32])}]);
         let tracks = json!([
@@ -332,7 +347,7 @@ pub(super) mod tests {
                 STANDARD.decode(expected.key).unwrap()
             );
             assert_eq!(
-                actual.content_iv.unwrap().as_slice(),
+                actual.content_iv.as_slice(),
                 STANDARD.decode(expected.iv).unwrap()
             );
         }
@@ -348,8 +363,8 @@ pub(super) mod tests {
         assert_eq!(tracks.len(), 2);
         assert_eq!(tracks[0].key, [1; 16]);
         assert_eq!(tracks[1].key, [2; 16]);
-        assert_eq!(tracks[0].content_iv, Some([3; 16]));
-        assert_eq!(tracks[1].content_iv, Some([4; 16]));
+        assert_eq!(tracks[0].content_iv, [3; 16]);
+        assert_eq!(tracks[1].content_iv, [4; 16]);
     }
     #[test]
     fn rejects_missing_truncated_tampered_and_oversized_payload() {
@@ -507,10 +522,4 @@ pub(super) mod tests {
         bind(&mut manifest, &policy);
         assert!(verify(&manifest, Some(&payload)).is_err());
     }
-}
-
-#[cfg(test)]
-pub(super) fn test_fixture() -> (Value, Vec<u8>) {
-    let (m, _, _, p) = tests::fixture();
-    (m, p)
 }
