@@ -64,9 +64,9 @@ pub struct CheckedPolicy {
     pub keys: PolicyKeys,
     pub policy_uuid: String,
     pub fqns: Vec<String>,
-    /// Key-envelope profile only: the authenticated recording identifier,
-    /// which must equal the playback session's asset id.
-    pub recording_id: Option<String>,
+    /// Key-envelope profile: the playback session must have been started
+    /// for this policy uuid (the envelope's authenticated `contentKeyId`).
+    pub session_bound: bool,
 }
 
 /// scheme://host[:non-default-port][/path], lower-cased by `url`, with a
@@ -96,14 +96,14 @@ pub fn check_manifest(
 /// The encrypted payload is transported separately from the unchanged manifest.
 /// Legacy manifests cannot silently consume an envelope payload.
 ///
-/// Key-envelope manifests unwrap only with `envelope_rsa`, the KSM-only
-/// wrapping key the platform KAS does not hold; without it they are refused,
-/// so a viewer's raw platform rewrap can never yield the track keys.
+/// Key-envelope manifests unwrap only with `envelope_keys`, the KSM-only
+/// wrapping keys the platform KAS does not hold; without them they are
+/// refused, so a viewer's raw platform rewrap can never yield the track keys.
 pub fn check_manifest_with_payload(
     manifest_json: &[u8],
     payload: Option<&[u8]>,
     rsa: &RsaPrivateKey,
-    envelope_rsa: Option<&RsaPrivateKey>,
+    envelope_keys: Option<&super::key_envelope::EnvelopeKeys>,
     kas_urls: &[String],
 ) -> Result<CheckedPolicy, LicenseError> {
     let m: Value = serde_json::from_slice(manifest_json)
@@ -136,7 +136,7 @@ pub fn check_manifest_with_payload(
         return Err(LicenseError::Forbidden("duplicate JSON key"));
     }
     if policy.get("arkavo:fpsProfile").is_some() {
-        let envelope_rsa = envelope_rsa.ok_or(LicenseError::Forbidden(
+        let envelope_keys = envelope_keys.ok_or(LicenseError::Forbidden(
             "key-envelope profile not configured",
         ))?;
         // A missing payload is a malformed request, not a refusal.
@@ -146,7 +146,7 @@ pub fn check_manifest_with_payload(
             &policy,
             policy_b64,
             payload,
-            envelope_rsa,
+            envelope_keys,
             kas_urls,
         );
     }
@@ -181,7 +181,7 @@ pub fn check_manifest_with_payload(
         keys,
         policy_uuid,
         fqns,
-        recording_id: None,
+        session_bound: false,
     })
 }
 

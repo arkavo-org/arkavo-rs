@@ -3,7 +3,8 @@
 # verifier is checked against an independent producer of the binding and
 # the RSA-OAEP-SHA1 wrap. TEST KEY ONLY — never a real KAS key.
 # Usage: gen_fixtures.sh <output-dir>   (optional: OPENSSL=/path/to/openssl)
-# Writes test_kas_rsa_private.pem, test_envelope_rsa_private.pem, manifest_allowed.json, manifest_v2.json,
+# Writes test_kas_rsa_private.pem, test_envelope_rsa_private.pem,
+# test_envelope_rsa_retired_private.pem, test_envelope_kid.txt, manifest_allowed.json, manifest_v2.json,
 # binding_hex.txt and binding_raw_json.txt into <output-dir>. Nothing generated is committed.
 set -euo pipefail
 OUT="${1:?usage: gen_fixtures.sh <output-dir>}"
@@ -24,6 +25,12 @@ IV_B64=8PHy8/T19vf4+fr7/P3+/w==
 "$OPENSSL" genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$OUT/test_kas_rsa_private.pem" 2>/dev/null
 # The KSM-only key-envelope wrapping key; distinct from the KAS key above.
 "$OPENSSL" genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$OUT/test_envelope_rsa_private.pem" 2>/dev/null
+# A second envelope key: the other side of a rotation.
+"$OPENSSL" genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$OUT/test_envelope_rsa_retired_private.pem" 2>/dev/null
+# The envelope key's kid as the packager derives it: the first 32 hex of the
+# SHA-256 of the SPKI DER.
+"$OPENSSL" pkey -in "$OUT/test_envelope_rsa_private.pem" -pubout -outform DER \
+    | "$OPENSSL" dgst -sha256 -r | cut -c1-32 > "$OUT/test_envelope_kid.txt"
 "$OPENSSL" pkey -in "$OUT/test_kas_rsa_private.pem" -pubout -out "$WORK/pub.pem"
 
 # hex -> binary with printf \x escapes (no xxd dependency)

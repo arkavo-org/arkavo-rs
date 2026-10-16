@@ -859,7 +859,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     modules::license::config::check_envelope_key(
         license_authz
             .as_ref()
-            .and_then(|l| l.envelope_rsa.as_deref()),
+            .and_then(|l| l.envelope_keys.as_deref()),
         rewrap_state.kas_rsa_private_key.as_ref(),
     )
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
@@ -1079,6 +1079,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/media/v1/certificate",
             get(media_api::fairplay_certificate),
         )
+        .route("/media/v1/envelope-key", get(media_api::envelope_key))
         .route("/media/v1/session/start", post(media_api::session_start))
         .route(
             "/media/v1/session/:session_id/heartbeat",

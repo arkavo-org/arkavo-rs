@@ -9,6 +9,10 @@ pub struct Fixtures {
     pub key_pem: String,
     /// The KSM-only key-envelope wrapping key, distinct from `key_pem`.
     pub envelope_key_pem: String,
+    /// A second envelope key, for rotation tests.
+    pub envelope_retired_key_pem: String,
+    /// `envelope_key_pem`'s kid, computed by openssl.
+    pub envelope_kid: String,
     pub manifest_allowed: String,
     /// Profile v2: the shared test vectors' two keys and policy.
     pub manifest_v2: String,
@@ -42,6 +46,8 @@ fn generate() -> Fixtures {
     let f = Fixtures {
         key_pem: read("test_kas_rsa_private.pem"),
         envelope_key_pem: read("test_envelope_rsa_private.pem"),
+        envelope_retired_key_pem: read("test_envelope_rsa_retired_private.pem"),
+        envelope_kid: read("test_envelope_kid.txt").trim().to_string(),
         manifest_allowed: read("manifest_allowed.json"),
         manifest_v2: read("manifest_v2.json"),
         binding_hex: read("binding_hex.txt"),

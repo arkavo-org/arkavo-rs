@@ -241,6 +241,7 @@ export MEDIA_PLATFORM_AUDIENCE=https://platform.arkavo.net  # Viewer CWT must ca
 export MEDIA_KAS_URLS=https://platform.arkavo.net      # Accepted TDF key-access URLs (comma list, normalised)
 export MEDIA_FPS_LEASE_SECONDS=3600                    # CKC lease; must be > 0; streaming licences only
 export MEDIA_ENVELOPE_RSA_KEY_PATH=/path/to/ksm_envelope_pkcs8.pem  # KSM-only key for the key-envelope profile; unset -> envelope manifests 403; must differ from KAS_RSA_KEY_PATH (docs/fairplay-key-envelope.md)
+export MEDIA_ENVELOPE_RSA_RETIRED_KEY_PATHS=/path/old1.pem,/path/old2.pem  # Optional; retired envelope keys still accepted by KAO kid (first 32 hex of the SHA-256 of the SPKI DER); see "Key rotation" in docs/fairplay-key-envelope.md
 # FairPlay licensing also requires OPENTDF_PLATFORM_URL (see above)
 # With KAS_RSA_KEY_PATH loaded, licensing also requires KAS_PROXY_MODE=rest|both (startup refuses otherwise)
 
@@ -380,15 +381,16 @@ The server implements a TDF3-based DRM system for HLS/DASH streaming media. Each
 - `POST /media/v1/key-request` - Request wrapped DEK for media segment (optimized fast path)
 - `POST /media/v1/session/:session_id/heartbeat` - Update session activity
 - `DELETE /media/v1/session/:session_id` - Terminate playback session
-- `GET /media/v1/certificate` - FairPlay certificate (the only unauthenticated `/media/v1` route)
+- `GET /media/v1/certificate` - FairPlay certificate (unauthenticated)
+- `GET /media/v1/envelope-key` - Current key-envelope wrapping key `{kid, alg, publicKey}` for producers (unauthenticated; 503 when the profile is off)
 
 **`/media/v1` request contract:**
-- All `/media/v1/*` routes except `GET /media/v1/certificate` require `Authorization: Bearer <passkey CWT>`. The token `aud` must contain both `arkavo` and `MEDIA_PLATFORM_AUDIENCE`; `sub` must be person-shaped and the token must carry no agent markers.
+- All `/media/v1/*` routes except `GET /media/v1/certificate` and `GET /media/v1/envelope-key` require `Authorization: Bearer <passkey CWT>`. The token `aud` must contain both `arkavo` and `MEDIA_PLATFORM_AUDIENCE`; `sub` must be person-shaped and the token must carry no agent markers.
 - Sessions are keyed by the token `sub`; the body `userId` is ignored. Heartbeat and delete require the same `sub`.
 - FairPlay key requests need `spcData` and the full base64 `tdfManifest`; `tdfWrappedKey` is gone. Two package profiles, told apart by the policy (arkavo-ios ADR-0055); full contract in `docs/fairplay.md`. **Profile v1** (no `arkavo:components`): exactly one wrapped key-access object for a KAS in `MEDIA_KAS_URLS`; clients MUST use `skd://<policy uuid>` as the SPC asset id, the server passes the bare policy uuid to the SDK and a mismatch with the SPC's asset id is only logged as a warning; the CKC carries the first 16 bytes of the DEK as `uhd`; `component` is ignored. **Profile v2** (policy with `arkavo:components`): one wrapped 16-byte key per component (`video`, then optionally `audio`), each with its own policy binding and a `keyBinding` over the component id, no shared keys; the request needs `component` and `assetId` = the policy uuid; the SPC asset id MUST be `<policy uuid>/<id>` (a mismatch drops the CKC); `video` is issued as `uhd`, `audio` as `audio`, both with HDCP Type 1; every refusal is the generic 403 "manifest refused". Both: policy with a uuid and at least one `dataAttributes` entry; `encryptionInformation.method.iv` is the 16-byte content IV in base64, carried in the CKC. The binding is `base64(HMAC-SHA256(key, <base64 policy string>))` (hex form refused); the key is wrapped with RSA-OAEP SHA-1. The platform `GetDecision` must permit; the CKC carries a `MEDIA_FPS_LEASE_SECONDS` lease and is streaming-only.
 - Session start must send `protocol: "fairplay"`; it defaults to tdf3, and a key request on such a session returns 400.
 - TDF3 media key requests are disabled (403).
-- Key-envelope profile (policy with `arkavo:fpsProfile`, see `docs/fairplay-key-envelope.md`): also needs base64 `tdfPayload`; refused unless `MEDIA_ENVELOPE_RSA_KEY_PATH` is set; the session `assetId` must equal the envelope's recording id. The body is read only after the token verifies (6 MiB limit).
+- Key-envelope profile (policy with `arkavo:fpsProfile`, see `docs/fairplay-key-envelope.md`): also needs base64 `tdfPayload`; refused unless `MEDIA_ENVELOPE_RSA_KEY_PATH` is set; the session `assetId` must be the policy uuid; producers wrap to `GET /media/v1/envelope-key` and write its `kid`. The body is read only after the token verifies (6 MiB limit).
 - Errors: 401 missing, invalid or expired token, or no platform audience (sign in again); 400 `invalid_request` (missing `tdfManifest` or `spcData`, missing `tdfPayload` for an envelope manifest, bad base64, oversized `spcData`, manifest not JSON, missing or malformed `method.iv`, or session protocol not fairplay); 403 not a person, session not owned, a parseable manifest that fails the checks, or a profile v2 request with a missing or unknown `component`, an `assetId` other than the policy uuid, or an SPC asset id other than `<policy uuid>/<id>` (all the generic "manifest refused"), or a platform deny or refusal (generic "platform refused"); 429 `concurrency_limit` on session start; 404 `session_not_found` on heartbeat for a session that no longer exists; 503 platform, identity or credential unavailable.
 
 ### Session Management
