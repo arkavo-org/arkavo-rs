@@ -27,9 +27,10 @@ IV_B64=8PHy8/T19vf4+fr7/P3+/w==
 "$OPENSSL" genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$OUT/test_envelope_rsa_private.pem" 2>/dev/null
 # A second envelope key: the other side of a rotation.
 "$OPENSSL" genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$OUT/test_envelope_rsa_retired_private.pem" 2>/dev/null
-# The envelope key's kid as the packager derives it: SHA-256 of the SPKI DER.
+# The envelope key's kid as the packager derives it: the first 32 hex of the
+# SHA-256 of the SPKI DER.
 "$OPENSSL" pkey -in "$OUT/test_envelope_rsa_private.pem" -pubout -outform DER \
-    | "$OPENSSL" dgst -sha256 -r | cut -d' ' -f1 > "$OUT/test_envelope_kid.txt"
+    | "$OPENSSL" dgst -sha256 -r | cut -c1-32 > "$OUT/test_envelope_kid.txt"
 "$OPENSSL" pkey -in "$OUT/test_kas_rsa_private.pem" -pubout -out "$WORK/pub.pem"
 
 # hex -> binary with printf \x escapes (no xxd dependency)

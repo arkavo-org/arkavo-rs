@@ -45,7 +45,7 @@ Producers fetch the current envelope key from arks:
 ```http
 GET /media/v1/envelope-key
 
-{"kid":"<64 hex>","alg":"RSA-OAEP","publicKey":"-----BEGIN PUBLIC KEY-----\n..."}
+{"kid":"<32 hex>","alg":"RSA-OAEP","publicKey":"-----BEGIN PUBLIC KEY-----\n..."}
 ```
 
 The route is unauthenticated, like `/media/v1/certificate`: the key only lets a producer wrap a DEK that arks alone can unwrap. Wrap the 32-byte DEK with RSA-OAEP (SHA-1, as OpenTDF wraps keys) and write `kid` into the KAO. It returns 503 when the profile is not configured, and it is cacheable for 5 minutes, so producers pick up a rotation quickly.
@@ -54,10 +54,10 @@ The route is unauthenticated, like `/media/v1/certificate`: the key only lets a 
 
 The envelope key works like a KAS key that only ever answers with a CKC, so it must exist as long as packages wrapped to it must play. Rotation is by `kid`:
 
-- A key's `kid` is the lowercase hex SHA-256 of its public key's SubjectPublicKeyInfo DER. The packager computes it from the public PEM alone:
+- A key's `kid` is the first 32 lowercase hex characters (128 bits) of the SHA-256 of its public key's SubjectPublicKeyInfo DER. That fits the platform KAS registry's 36-character `key_id`, should the key ever be registered there as public-key-only. The packager can compute it from the public PEM alone:
 
   ```sh
-  openssl pkey -pubin -in ksm_envelope_public.pem -outform DER | openssl dgst -sha256 -r | cut -d' ' -f1
+  openssl pkey -pubin -in ksm_envelope_public.pem -outform DER | openssl dgst -sha256 -r | cut -c1-32
   ```
 
   arks logs the current `kid` at startup and publishes it at `GET /media/v1/envelope-key`.

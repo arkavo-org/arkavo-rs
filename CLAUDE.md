@@ -241,7 +241,7 @@ export MEDIA_PLATFORM_AUDIENCE=https://platform.arkavo.net  # Viewer CWT must ca
 export MEDIA_KAS_URLS=https://platform.arkavo.net      # Accepted TDF key-access URLs (comma list, normalised)
 export MEDIA_FPS_LEASE_SECONDS=3600                    # CKC lease; must be > 0; streaming licences only
 export MEDIA_ENVELOPE_RSA_KEY_PATH=/path/to/ksm_envelope_pkcs8.pem  # KSM-only key for the key-envelope profile; unset -> envelope manifests 403; must differ from KAS_RSA_KEY_PATH (docs/fairplay-key-envelope.md)
-export MEDIA_ENVELOPE_RSA_RETIRED_KEY_PATHS=/path/old1.pem,/path/old2.pem  # Optional; retired envelope keys still accepted by KAO kid (SHA-256 of the SPKI DER, hex); see "Key rotation" in docs/fairplay-key-envelope.md
+export MEDIA_ENVELOPE_RSA_RETIRED_KEY_PATHS=/path/old1.pem,/path/old2.pem  # Optional; retired envelope keys still accepted by KAO kid (first 32 hex of the SHA-256 of the SPKI DER); see "Key rotation" in docs/fairplay-key-envelope.md
 # FairPlay licensing also requires OPENTDF_PLATFORM_URL (see above)
 # With KAS_RSA_KEY_PATH loaded, licensing also requires KAS_PROXY_MODE=rest|both (startup refuses otherwise)
 

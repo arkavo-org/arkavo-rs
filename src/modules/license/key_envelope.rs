@@ -46,14 +46,15 @@ struct Envelope {
     files: Vec<MediaFile>,
 }
 
-/// A wrapping key's `kid`: lowercase hex SHA-256 of its public key's
-/// SubjectPublicKeyInfo DER. The packager derives the same value from the
+/// A wrapping key's `kid`: the first 16 bytes (32 lowercase hex) of the
+/// SHA-256 of its public key's SubjectPublicKeyInfo DER. 32 characters fit
+/// the platform KAS registry's 36-character `key_id`. The packager derives the same value from the
 /// public PEM alone, so arks and the packager never share a configured name.
 pub fn kid(public: &RsaPublicKey) -> Result<String, String> {
     let der = public
         .to_public_key_der()
         .map_err(|e| format!("envelope public key does not encode: {e}"))?;
-    Ok(hex::encode(Sha256::digest(der.as_bytes())))
+    Ok(hex::encode(&Sha256::digest(der.as_bytes())[..16]))
 }
 
 /// The KSM-only envelope wrapping keys: the current one, which the packager
@@ -492,7 +493,7 @@ pub(crate) mod tests {
         let keys = envelope_keys();
         // The packager's openssl one-liner derives the same kid.
         assert_eq!(keys.current_kid(), fixtures().envelope_kid);
-        assert_eq!(keys.current_kid().len(), 64);
+        assert_eq!(keys.current_kid().len(), 32);
     }
     #[test]
     fn kid_selects_the_current_or_a_retired_key() {
