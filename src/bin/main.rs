@@ -856,6 +856,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         proxy_mode.forwards_rest(),
     )
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    modules::license::config::check_envelope_key(
+        license_authz
+            .as_ref()
+            .and_then(|l| l.envelope_rsa.as_deref()),
+        rewrap_state.kas_rsa_private_key.as_ref(),
+    )
+    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     #[cfg(feature = "fairplay")]
     let license_issuer: Option<Arc<dyn modules::license::issuer::LicenseIssuer>> =
         Some(fairplay_handler.clone());
@@ -1060,7 +1067,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Media DRM router
     let media_router = Router::new()
-        .route("/media/v1/key-request", post(media_api::media_key_request))
+        .route(
+            "/media/v1/key-request",
+            post(media_api::media_key_request)
+                // Read only after the person token verifies (`VerifiedPerson`).
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    media_api::MAX_KEY_REQUEST_BODY,
+                )),
+        )
         .route(
             "/media/v1/certificate",
             get(media_api::fairplay_certificate),

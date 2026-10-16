@@ -5,6 +5,7 @@ pub mod config;
 #[cfg(test)]
 pub mod fixtures;
 pub mod issuer;
+pub mod key_envelope;
 pub mod pdp;
 pub mod person_token;
 pub mod strict_json;

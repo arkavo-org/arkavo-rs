@@ -7,6 +7,8 @@ use std::sync::OnceLock;
 
 pub struct Fixtures {
     pub key_pem: String,
+    /// The KSM-only key-envelope wrapping key, distinct from `key_pem`.
+    pub envelope_key_pem: String,
     pub manifest_allowed: String,
     /// Profile v2: the shared test vectors' two keys and policy.
     pub manifest_v2: String,
@@ -39,6 +41,7 @@ fn generate() -> Fixtures {
         |n: &str| std::fs::read_to_string(dir.join(n)).unwrap_or_else(|e| panic!("{n}: {e}"));
     let f = Fixtures {
         key_pem: read("test_kas_rsa_private.pem"),
+        envelope_key_pem: read("test_envelope_rsa_private.pem"),
         manifest_allowed: read("manifest_allowed.json"),
         manifest_v2: read("manifest_v2.json"),
         binding_hex: read("binding_hex.txt"),

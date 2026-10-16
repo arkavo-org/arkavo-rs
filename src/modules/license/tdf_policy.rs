@@ -20,7 +20,7 @@ use sha2::Sha256;
 /// The policy member that makes a manifest profile v2 (ADR-0055 §3).
 pub const COMPONENTS_KEY: &str = "arkavo:components";
 /// `keyBinding` = HMAC-SHA256(key, this prefix + id) (ADR-0055 §3).
-const KEY_BINDING_PREFIX: &str = "arkavo:fps:component:v1:";
+pub(super) const KEY_BINDING_PREFIX: &str = "arkavo:fps:component:v1:";
 
 /// A profile v2 component kind. Version 2 lists `video`, then optionally
 /// `audio`, each with its kind as its id.
@@ -46,12 +46,16 @@ pub struct CheckedComponent {
     pub kind: ComponentKind,
     /// Never log it.
     pub key: [u8; 16],
+    /// The IV the CKC carries for this component: the recording's
+    /// `method.iv` under v2, the track's own IV under the key envelope.
+    pub content_iv: [u8; 16],
 }
 
 /// The checked content keys. Never log them.
 pub enum PolicyKeys {
-    /// Profile v1: the whole DEK, 16 or 32 bytes.
-    Single(Vec<u8>),
+    /// Profile v1: the whole DEK, 16 or 32 bytes, and the recording's
+    /// content IV from `encryptionInformation.method.iv` (ADR-0050).
+    Single { dek: Vec<u8>, content_iv: [u8; 16] },
     /// Profile v2: one key per component, in the policy's order.
     Components(Vec<CheckedComponent>),
 }
@@ -60,9 +64,9 @@ pub struct CheckedPolicy {
     pub keys: PolicyKeys,
     pub policy_uuid: String,
     pub fqns: Vec<String>,
-    /// Recording's content IV from `encryptionInformation.method.iv`; the
-    /// FairPlay CKC carries it (ADR-0050).
-    pub content_iv: [u8; 16],
+    /// Key-envelope profile only: the authenticated recording identifier,
+    /// which must equal the playback session's asset id.
+    pub recording_id: Option<String>,
 }
 
 /// scheme://host[:non-default-port][/path], lower-cased by `url`, with a
@@ -78,11 +82,28 @@ pub fn normalize_kas_url(raw: &str) -> Option<String> {
     Some(format!("{}://{}{}{}", u.scheme(), host, port, path))
 }
 
-const FORBIDDEN_MANIFEST: LicenseError = LicenseError::Forbidden("manifest refused");
+pub(super) const FORBIDDEN_MANIFEST: LicenseError = LicenseError::Forbidden("manifest refused");
 
+#[cfg(test)]
 pub fn check_manifest(
     manifest_json: &[u8],
     rsa: &RsaPrivateKey,
+    kas_urls: &[String],
+) -> Result<CheckedPolicy, LicenseError> {
+    check_manifest_with_payload(manifest_json, None, rsa, None, kas_urls)
+}
+
+/// The encrypted payload is transported separately from the unchanged manifest.
+/// Legacy manifests cannot silently consume an envelope payload.
+///
+/// Key-envelope manifests unwrap only with `envelope_rsa`, the KSM-only
+/// wrapping key the platform KAS does not hold; without it they are refused,
+/// so a viewer's raw platform rewrap can never yield the track keys.
+pub fn check_manifest_with_payload(
+    manifest_json: &[u8],
+    payload: Option<&[u8]>,
+    rsa: &RsaPrivateKey,
+    envelope_rsa: Option<&RsaPrivateKey>,
     kas_urls: &[String],
 ) -> Result<CheckedPolicy, LicenseError> {
     let m: Value = serde_json::from_slice(manifest_json)
@@ -114,6 +135,24 @@ pub fn check_manifest(
     if !has_unique_keys(&policy_bytes) {
         return Err(LicenseError::Forbidden("duplicate JSON key"));
     }
+    if policy.get("arkavo:fpsProfile").is_some() {
+        let envelope_rsa = envelope_rsa.ok_or(LicenseError::Forbidden(
+            "key-envelope profile not configured",
+        ))?;
+        // A missing payload is a malformed request, not a refusal.
+        let payload = payload.ok_or(LicenseError::BadRequest("tdfPayload is required"))?;
+        return super::key_envelope::check(
+            &m,
+            &policy,
+            policy_b64,
+            payload,
+            envelope_rsa,
+            kas_urls,
+        );
+    }
+    if payload.is_some() {
+        return Err(FORBIDDEN_MANIFEST);
+    }
     let components = policy.get(COMPONENTS_KEY);
     // The IV is not secret. A broken v1 package is a 400, so the viewer does
     // not tell the person they lack access; a v2 manifest is one of the
@@ -129,17 +168,20 @@ pub fn check_manifest(
             LicenseError::BadRequest("content iv must be 16 bytes")
         })?;
     let keys = match components {
-        None => PolicyKeys::Single(check_single_key(kaos, policy_b64, rsa, kas_urls)?),
-        Some(list) => {
-            PolicyKeys::Components(check_components(list, kaos, policy_b64, rsa, kas_urls)?)
-        }
+        None => PolicyKeys::Single {
+            dek: check_single_key(kaos, policy_b64, rsa, kas_urls)?,
+            content_iv,
+        },
+        Some(list) => PolicyKeys::Components(check_components(
+            list, kaos, policy_b64, rsa, kas_urls, content_iv,
+        )?),
     };
     let (policy_uuid, fqns) = policy_subject(&policy)?;
     Ok(CheckedPolicy {
         keys,
         policy_uuid,
         fqns,
-        content_iv,
+        recording_id: None,
     })
 }
 
@@ -173,6 +215,7 @@ fn check_components(
     policy_b64: &str,
     rsa: &RsaPrivateKey,
     kas_urls: &[String],
+    content_iv: [u8; 16],
 ) -> Result<Vec<CheckedComponent>, LicenseError> {
     let shape = component_shape(list)?;
     if kaos.len() != shape.len() {
@@ -203,6 +246,7 @@ fn check_components(
             id: kind.as_str().to_string(),
             kind,
             key,
+            content_iv,
         });
     }
     Ok(checked)
@@ -211,7 +255,7 @@ fn check_components(
 /// Version 2's list (ADR-0055 §3): `video` first, then optionally `audio`,
 /// each exactly `{id, kind, keyBinding}` with its kind as its id and a
 /// 32-byte `keyBinding` in standard base64. Returns each kind and binding.
-fn component_shape(list: &Value) -> Result<Vec<(ComponentKind, Vec<u8>)>, LicenseError> {
+pub(super) fn component_shape(list: &Value) -> Result<Vec<(ComponentKind, Vec<u8>)>, LicenseError> {
     const VERSION_2: [ComponentKind; 2] = [ComponentKind::Video, ComponentKind::Audio];
     let entries = list
         .as_array()
@@ -245,7 +289,7 @@ fn component_shape(list: &Value) -> Result<Vec<(ComponentKind, Vec<u8>)>, Licens
 }
 
 /// A `wrapped` key access for an accepted KAS, unwrapped with RSA-OAEP-SHA1.
-fn unwrap_key(
+pub(super) fn unwrap_key(
     kao: &Value,
     rsa: &RsaPrivateKey,
     kas_urls: &[String],
@@ -271,7 +315,11 @@ fn unwrap_key(
 
 /// The key access's binding, as a string or `{hash}`, must be
 /// `base64(HMAC-SHA256(key, base64 policy string))`.
-fn verify_policy_binding(kao: &Value, key: &[u8], policy_b64: &str) -> Result<(), LicenseError> {
+pub(super) fn verify_policy_binding(
+    kao: &Value,
+    key: &[u8],
+    policy_b64: &str,
+) -> Result<(), LicenseError> {
     let binding = match kao.get("policyBinding") {
         Some(Value::String(s)) => s.as_str(),
         Some(Value::Object(o)) => o
@@ -290,7 +338,7 @@ fn verify_policy_binding(kao: &Value, key: &[u8], policy_b64: &str) -> Result<()
 }
 
 /// The policy uuid and its data attribute FQNs: at least one, all well formed.
-fn policy_subject(policy: &Value) -> Result<(String, Vec<String>), LicenseError> {
+pub(super) fn policy_subject(policy: &Value) -> Result<(String, Vec<String>), LicenseError> {
     let policy_uuid = policy
         .get("uuid")
         .and_then(Value::as_str)
@@ -350,17 +398,14 @@ mod tests {
             p.fqns,
             vec!["https://patreon.arkavo.com/attr/campaign-tier/value/11111111_gold"]
         );
-        let PolicyKeys::Single(dek) = &p.keys else {
+        let PolicyKeys::Single { dek, content_iv } = &p.keys else {
             panic!("a policy without components is profile v1");
         };
         assert_eq!(
             hex::encode(dek),
             "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
         );
-        assert_eq!(
-            hex::encode(p.content_iv),
-            "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
-        );
+        assert_eq!(hex::encode(content_iv), "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
     }
 
     #[test]
@@ -595,7 +640,7 @@ mod tests {
     fn components(p: CheckedPolicy) -> Vec<CheckedComponent> {
         match p.keys {
             PolicyKeys::Components(c) => c,
-            PolicyKeys::Single(_) => panic!("a policy with components is profile v2"),
+            PolicyKeys::Single { .. } => panic!("a policy with components is profile v2"),
         }
     }
 
@@ -655,12 +700,14 @@ mod tests {
             p.fqns,
             vec!["https://patreon.arkavo.com/attr/campaign-tier/value/13167240_24457368"]
         );
-        assert_eq!(
-            hex::encode(p.content_iv),
-            "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
-        );
         let c = components(p);
         assert_eq!(c.len(), 2);
+        for component in &c {
+            assert_eq!(
+                hex::encode(component.content_iv),
+                "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+            );
+        }
         assert_eq!(
             (c[0].id.as_str(), c[0].kind, c[0].key),
             ("video", ComponentKind::Video, video_key())
