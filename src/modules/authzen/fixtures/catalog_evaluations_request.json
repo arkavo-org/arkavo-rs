@@ -9,7 +9,12 @@
       "email_verified": true,
       "arkavo_account_id": "arkavo:550e8400-e29b-41d4-a716-446655440000",
       "arkavo_roles": ["user"],
-      "arkavo_entitlements": ["tdf:decrypt"],
+      "arkavo_entitlements": [
+        "tdf:decrypt",
+        "https://patreon.arkavo.com/attr/campaign/value/87654321",
+        "https://patreon.arkavo.com/attr/campaign-tier/value/87654321_supporter",
+        "https://patreon.arkavo.com/attr/arkavo-creator/value/publish"
+      ],
       "arkavo_patreon": {
         "role": "consumer",
         "patreon_user_id": "12345678",

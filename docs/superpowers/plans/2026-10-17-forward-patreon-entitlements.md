@@ -53,3 +53,5 @@
 ## Rollout
 
 Deploy and verify live **before** the platform cutover (hard cutover, no shadow period). The platform's current `patreon` mode never reads `arkavo_entitlements`, so this is inert until then. If the platform cuts over first, patrons' and the creator's catalog rows show Locked. Owner follow-up: add the forwarded `arkavo_entitlements` subject property to draft-arkavo-authzen-cwt-00.
+
+On the AuthZEN route arks forwards the PEP's own service CWT upstream (`facade.rs`), so the platform sees the catalog node's client ID, not arks's. The platform's `claims_chain_peps` must hold that ID (measured on a catalog decision, platform plan Task 1).

@@ -3,6 +3,7 @@
 use crate::modules::authzen::cwt_subject::{
     allowlist_environment, device_to_value, devices_bind, devices_from_context, sanitize_patreon,
     sanitize_patreon_entitlements, tool_value_slug, DeviceError, DEVICECHECK_AUD,
+    MAX_FORWARDED_ENTITLEMENTS,
 };
 use serde_json::{json, Map, Value};
 
@@ -258,11 +259,17 @@ fn pe_claims(subject: &Value) -> Result<Value, TranslateError> {
             }
             m.insert("arkavo_patreon".into(), patreon);
         }
-        if let Some(ents) = props
-            .get("arkavo_entitlements")
-            .and_then(sanitize_patreon_entitlements)
-        {
-            m.insert("arkavo_entitlements".into(), ents);
+        if let Some(raw) = props.get("arkavo_entitlements") {
+            match sanitize_patreon_entitlements(raw) {
+                Ok(Some(ents)) => {
+                    m.insert("arkavo_entitlements".into(), ents);
+                }
+                Ok(None) => {}
+                Err(count) => log::warn!(
+                    "dropping forwarded arkavo_entitlements for subject {id}: {count} Patreon \
+                     entitlements exceeds cap {MAX_FORWARDED_ENTITLEMENTS}"
+                ),
+            }
         }
     }
     Ok(Value::Object(m))
@@ -849,6 +856,7 @@ mod tests {
                 "https://patreon.arkavo.com/attr/campaign/value/13167240",
                 "https://patreon.arkavo.com/attr/campaign-tier/value/13167240_supporter",
                 "https://patreon.arkavo.com/attr/campaign-tier/value/13167240_tier-555",
+                "https://patreon.arkavo.com/attr/campaign-tier/value/7237273_Supporter",
                 "tdf:decrypt",
                 "https://arkavo.ai/attr/tdf/value/decrypt",
                 "https://patreon.arkavo.com/attr/arkavo-creator/value/publish",
@@ -871,6 +879,7 @@ mod tests {
                 "https://patreon.arkavo.com/attr/campaign/value/13167240",
                 "https://patreon.arkavo.com/attr/campaign-tier/value/13167240_supporter",
                 "https://patreon.arkavo.com/attr/campaign-tier/value/13167240_tier-555",
+                "https://patreon.arkavo.com/attr/campaign-tier/value/7237273_supporter",
                 "https://patreon.arkavo.com/attr/campaign/value/7237273"
             ])
         );
@@ -906,6 +915,20 @@ mod tests {
         assert_eq!(at_cap["arkavo_entitlements"].as_array().unwrap().len(), 256);
         let over = pe_claims(&pe_with_entitlements(fqns(257), "consumer")).unwrap();
         assert!(over.get("arkavo_entitlements").is_none());
+
+        // The cap counts de-duplicated survivors: a duplicate and non-Patreon
+        // entries on top of 256 distinct valid ones do not push it over.
+        let mut padded = fqns(256).as_array().unwrap().clone();
+        padded.push(json!("https://patreon.arkavo.com/attr/campaign/value/0"));
+        padded.push(json!("tdf:decrypt"));
+        padded.push(json!(
+            "https://patreon.arkavo.com/attr/arkavo-creator/value/publish"
+        ));
+        let deduped = pe_claims(&pe_with_entitlements(Value::Array(padded), "consumer")).unwrap();
+        assert_eq!(
+            deduped["arkavo_entitlements"].as_array().unwrap().len(),
+            256
+        );
     }
 
     #[test]

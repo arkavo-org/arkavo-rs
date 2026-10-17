@@ -13,6 +13,10 @@
               "iss": "https://identity.arkavo.net",
               "email": "alice@example.com",
               "patreon_user_id": "12345678",
+              "arkavo_entitlements": [
+                "https://patreon.arkavo.com/attr/campaign/value/87654321",
+                "https://patreon.arkavo.com/attr/campaign-tier/value/87654321_supporter"
+              ],
               "arkavo_patreon": {
                 "role": "consumer",
                 "patreon_user_id": "12345678",

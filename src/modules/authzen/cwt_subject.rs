@@ -177,10 +177,13 @@ fn is_patreon_entitlement(fqn: &str) -> bool {
 
 /// Filter PEP-supplied `arkavo_entitlements` down to the Patreon definitions the
 /// platform's composite `patreon` source owns. Lowercases, de-duplicates (input
-/// order), and returns `None` when nothing survives or more than
-/// `MAX_FORWARDED_ENTITLEMENTS` do (never truncates).
-pub fn sanitize_patreon_entitlements(v: &Value) -> Option<Value> {
-    let arr = v.as_array()?;
+/// order), and returns `Ok(None)` when the input is not an array or nothing
+/// survives. More than `MAX_FORWARDED_ENTITLEMENTS` survivors is `Err(count)`
+/// (never truncates); the caller owns logging so one subject yields one line.
+pub fn sanitize_patreon_entitlements(v: &Value) -> Result<Option<Value>, usize> {
+    let Some(arr) = v.as_array() else {
+        return Ok(None);
+    };
     let mut seen = std::collections::HashSet::new();
     let mut out: Vec<String> = Vec::new();
     for fqn in arr.iter().filter_map(Value::as_str) {
@@ -190,17 +193,14 @@ pub fn sanitize_patreon_entitlements(v: &Value) -> Option<Value> {
         }
     }
     if out.is_empty() {
-        return None;
+        return Ok(None);
     }
     if out.len() > MAX_FORWARDED_ENTITLEMENTS {
-        log::warn!(
-            "dropping forwarded arkavo_entitlements: {} Patreon entitlements exceeds cap {}",
-            out.len(),
-            MAX_FORWARDED_ENTITLEMENTS
-        );
-        return None;
+        return Err(out.len());
     }
-    Some(Value::Array(out.into_iter().map(Value::String).collect()))
+    Ok(Some(Value::Array(
+        out.into_iter().map(Value::String).collect(),
+    )))
 }
 
 /// AuthZEN subject (`type=identity`, `id` as minted).
