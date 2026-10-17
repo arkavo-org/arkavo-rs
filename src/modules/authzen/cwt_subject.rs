@@ -142,6 +142,67 @@ pub fn sanitize_patreon(p: &Value) -> Value {
     Value::Object(out)
 }
 
+/// Upper bound on forwarded Patreon entitlements. Over it nothing is forwarded.
+pub const MAX_FORWARDED_ENTITLEMENTS: usize = 256;
+
+const PATREON_ATTR_PREFIX: &str = "https://patreon.arkavo.com/attr/";
+
+fn is_digits(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn is_slug(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// True for exactly `campaign/value/<digits>` and
+/// `campaign-tier/value/<digits>_<[a-z0-9-]+>` under the Patreon attr namespace.
+/// Expects an already ASCII-lowercased FQN.
+fn is_patreon_entitlement(fqn: &str) -> bool {
+    let Some(rest) = fqn.strip_prefix(PATREON_ATTR_PREFIX) else {
+        return false;
+    };
+    if let Some(id) = rest.strip_prefix("campaign/value/") {
+        return is_digits(id);
+    }
+    if let Some(v) = rest.strip_prefix("campaign-tier/value/") {
+        return v
+            .split_once('_')
+            .is_some_and(|(id, slug)| is_digits(id) && is_slug(slug));
+    }
+    false
+}
+
+/// Filter PEP-supplied `arkavo_entitlements` down to the Patreon definitions the
+/// platform's composite `patreon` source owns. Lowercases, de-duplicates (input
+/// order), and returns `None` when nothing survives or more than
+/// `MAX_FORWARDED_ENTITLEMENTS` do (never truncates).
+pub fn sanitize_patreon_entitlements(v: &Value) -> Option<Value> {
+    let arr = v.as_array()?;
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for fqn in arr.iter().filter_map(Value::as_str) {
+        let fqn = fqn.to_ascii_lowercase();
+        if is_patreon_entitlement(&fqn) && seen.insert(fqn.clone()) {
+            out.push(fqn);
+        }
+    }
+    if out.is_empty() {
+        return None;
+    }
+    if out.len() > MAX_FORWARDED_ENTITLEMENTS {
+        log::warn!(
+            "dropping forwarded arkavo_entitlements: {} Patreon entitlements exceeds cap {}",
+            out.len(),
+            MAX_FORWARDED_ENTITLEMENTS
+        );
+        return None;
+    }
+    Some(Value::Array(out.into_iter().map(Value::String).collect()))
+}
+
 /// AuthZEN subject (`type=identity`, `id` as minted).
 pub fn subject(claims: &DecodedClaims) -> Value {
     let mut properties = Map::new();

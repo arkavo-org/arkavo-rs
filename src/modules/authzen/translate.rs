@@ -2,7 +2,7 @@
 
 use crate::modules::authzen::cwt_subject::{
     allowlist_environment, device_to_value, devices_bind, devices_from_context, sanitize_patreon,
-    tool_value_slug, DeviceError, DEVICECHECK_AUD,
+    sanitize_patreon_entitlements, tool_value_slug, DeviceError, DEVICECHECK_AUD,
 };
 use serde_json::{json, Map, Value};
 
@@ -229,11 +229,13 @@ fn pe_claims(subject: &Value) -> Result<Value, TranslateError> {
         .ok_or(TranslateError::Malformed("subject.id"))?;
     // NOTE: this forwards a deliberately narrow subset of subject.properties.
     // `cwt_subject::subject()` emits email_verified, idp, arkavo_account_id,
-    // arkavo_roles and arkavo_entitlements, and this drops all five (see the
-    // explicit assertion in chain_pe_then_devices_then_env_mismatched_prefix_bind).
-    // If any OpenTDF subject mapping keys on those claims it can never match,
-    // so the two halves need to agree — resolve against draft-arkavo-authzen-cwt-00
-    // before this ships.
+    // arkavo_roles and arkavo_entitlements. arkavo_entitlements is forwarded,
+    // filtered to the Patreon definitions the platform's composite `patreon`
+    // source owns (pep_assertable); email_verified, idp, arkavo_account_id and
+    // arkavo_roles are still dropped (see the explicit assertion in
+    // chain_pe_then_devices_then_env_mismatched_prefix_bind). If any OpenTDF
+    // subject mapping keys on a dropped claim it can never match, so the two
+    // halves need to agree (draft-arkavo-authzen-cwt-00).
     let mut m = Map::new();
     m.insert("sub".into(), json!(id));
     if let Some(props) = subject.get("properties").and_then(Value::as_object) {
@@ -255,6 +257,12 @@ fn pe_claims(subject: &Value) -> Result<Value, TranslateError> {
                 m.insert("patreon_user_id".into(), uid.clone());
             }
             m.insert("arkavo_patreon".into(), patreon);
+        }
+        if let Some(ents) = props
+            .get("arkavo_entitlements")
+            .and_then(sanitize_patreon_entitlements)
+        {
+            m.insert("arkavo_entitlements".into(), ents);
         }
     }
     Ok(Value::Object(m))
@@ -825,6 +833,94 @@ mod tests {
             &fulfillable_from_context(req.get("context")),
         );
         assert_eq!(body, expected);
+    }
+
+    fn pe_with_entitlements(ents: Value, role: &str) -> Value {
+        let mut s = pe_subject();
+        s["properties"]["arkavo_entitlements"] = ents;
+        s["properties"]["arkavo_patreon"]["role"] = json!(role);
+        s
+    }
+
+    #[test]
+    fn pe_claims_forwards_patreon_entitlements_only() {
+        let subject = pe_with_entitlements(
+            json!([
+                "https://patreon.arkavo.com/attr/campaign/value/13167240",
+                "https://patreon.arkavo.com/attr/campaign-tier/value/13167240_supporter",
+                "https://patreon.arkavo.com/attr/campaign-tier/value/13167240_tier-555",
+                "tdf:decrypt",
+                "https://arkavo.ai/attr/tdf/value/decrypt",
+                "https://patreon.arkavo.com/attr/arkavo-creator/value/publish",
+                42,
+                "HTTPS://PATREON.ARKAVO.COM/attr/campaign/value/7237273",
+                "https://patreon.arkavo.com/attr/campaign/value/abc",
+                "https://patreon.arkavo.com/attr/campaign-tier/value/7237273",
+                "https://patreon.arkavo.com.evil/attr/campaign/value/1",
+                "https://patreon.arkavo.com/attrs/campaign/value/1",
+                "https://patreon.arkavo.com/attr/campaign/value/1/2",
+                "http://patreon.arkavo.com/attr/campaign/value/1",
+                "https://patreon.arkavo.com/attr/campaign/value/13167240"
+            ]),
+            "consumer",
+        );
+        let claims = pe_claims(&subject).unwrap();
+        assert_eq!(
+            claims["arkavo_entitlements"],
+            json!([
+                "https://patreon.arkavo.com/attr/campaign/value/13167240",
+                "https://patreon.arkavo.com/attr/campaign-tier/value/13167240_supporter",
+                "https://patreon.arkavo.com/attr/campaign-tier/value/13167240_tier-555",
+                "https://patreon.arkavo.com/attr/campaign/value/7237273"
+            ])
+        );
+    }
+
+    #[test]
+    fn pe_claims_omits_entitlements_when_none_allowed() {
+        let claims = pe_claims(&pe_subject()).unwrap();
+        assert!(claims.get("arkavo_entitlements").is_none());
+
+        let subject = pe_with_entitlements(
+            json!("https://patreon.arkavo.com/attr/campaign/value/1"),
+            "consumer",
+        );
+        let claims = pe_claims(&subject).unwrap();
+        assert!(claims.get("arkavo_entitlements").is_none());
+    }
+
+    #[test]
+    fn pe_claims_entitlement_cap() {
+        let fqns = |n: usize| -> Value {
+            Value::Array(
+                (0..n)
+                    .map(|i| {
+                        json!(format!(
+                            "https://patreon.arkavo.com/attr/campaign/value/{i}"
+                        ))
+                    })
+                    .collect(),
+            )
+        };
+        let at_cap = pe_claims(&pe_with_entitlements(fqns(256), "consumer")).unwrap();
+        assert_eq!(at_cap["arkavo_entitlements"].as_array().unwrap().len(), 256);
+        let over = pe_claims(&pe_with_entitlements(fqns(257), "consumer")).unwrap();
+        assert!(over.get("arkavo_entitlements").is_none());
+    }
+
+    #[test]
+    fn pe_claims_entitlements_are_role_blind() {
+        let ents = json!([
+            "https://patreon.arkavo.com/attr/campaign/value/13167240",
+            "https://patreon.arkavo.com/attr/campaign-tier/value/13167240_supporter"
+        ]);
+        let consumer = pe_claims(&pe_with_entitlements(ents.clone(), "consumer")).unwrap();
+        let creator = pe_claims(&pe_with_entitlements(ents, "creator")).unwrap();
+        assert!(consumer.get("arkavo_entitlements").is_some());
+        assert_eq!(
+            consumer["arkavo_entitlements"],
+            creator["arkavo_entitlements"]
+        );
     }
 
     /// `context`/`subject` are PEP-supplied and unsigned. The patreon redaction
