@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, serde_json, the `log` crate (as `cose_keys.rs` uses).
 
-**Spec:** opentdf-platform fork `docs/superpowers/specs/2026-10-17-composable-entitlement-resolution-design.md` (§4, §5.3, §8), on branch `docs/composable-entitlement-resolution`. Companion plan in the same place: `docs/superpowers/plans/2026-10-17-composable-entitlement-resolution.md`. This plan ships first; it changes no decision until the platform runs the composite.
+**Spec:** opentdf-platform fork `docs/superpowers/specs/2026-10-17-composable-entitlement-resolution-design.md` (§4, §5.3, §8), on branch `docs/composable-entitlement-resolution`. Companion plan in the same place: `docs/superpowers/plans/2026-10-17-composable-entitlement-resolution.md`. This plan ships first. It changes no decision until the platform cuts over to the composite, but after that cutover every patron's catalog rows depend on it too: the platform no longer derives Patreon grants from `arkavo_patreon` memberships.
 
 ## Global Constraints
 
@@ -52,4 +52,4 @@
 
 ## Rollout
 
-Deploy before the platform's shadow step: the platform's `patreon` mode never reads `arkavo_entitlements`, so this is inert until the composite serves. Owner follow-up: add the forwarded `arkavo_entitlements` subject property to draft-arkavo-authzen-cwt-00.
+Deploy and verify live **before** the platform cutover (hard cutover, no shadow period). The platform's current `patreon` mode never reads `arkavo_entitlements`, so this is inert until then. If the platform cuts over first, patrons' and the creator's catalog rows show Locked. Owner follow-up: add the forwarded `arkavo_entitlements` subject property to draft-arkavo-authzen-cwt-00.
