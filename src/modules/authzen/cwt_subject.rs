@@ -48,12 +48,20 @@ pub struct DecodedClaims {
     pub agent_marker: bool,
 }
 
+/// Device classes authnz-rs mints in `arkavo_npe.class` (`DeviceClass` in
+/// `src/device_check.rs`). Any other value is dropped, so the platform reads
+/// the device as `unverified`.
+pub const DEVICE_CLASSES: [&str; 3] = ["attested", "managed", "unverified"];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceObject {
     pub sub: String,
     pub iss: String,
     pub aud: String,
     pub kid: String,
+    /// The verified device CWT's `arkavo_npe.class`, when the PEP sends one
+    /// of `DEVICE_CLASSES`. Optional: a PEP that omits it is not malformed.
+    pub class: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,20 +254,35 @@ pub fn allowlist_device(obj: &Value) -> Result<DeviceObject, DeviceError> {
             .map(str::to_string)
             .ok_or(DeviceError::MissingField(k))
     };
+    let class = map
+        .get("class")
+        .and_then(Value::as_str)
+        .filter(|c| DEVICE_CLASSES.contains(c))
+        .map(str::to_string);
     Ok(DeviceObject {
         sub: req("sub")?,
         iss: req("iss")?,
         aud: req("aud")?,
         kid: req("kid")?,
+        class,
     })
 }
 
+/// The device NPE's claims for the platform: the allowlisted fields, and
+/// `arkavo_npe` marking it a device, with its class when known. The
+/// platform caps the person's grants by that class (opentdf-platform #60).
 pub fn device_to_value(d: &DeviceObject) -> Value {
+    let mut npe = Map::new();
+    npe.insert("type".into(), json!("device"));
+    if let Some(class) = &d.class {
+        npe.insert("class".into(), json!(class));
+    }
     json!({
         "sub": d.sub,
         "iss": d.iss,
         "aud": d.aud,
         "kid": d.kid,
+        "arkavo_npe": npe,
     })
 }
 
@@ -511,10 +534,40 @@ mod tests {
         assert_eq!(v["sub"], raw["sub"]);
         assert!(v.get("email").is_none());
         assert!(v.get("patreon_user_id").is_none());
+        assert_eq!(v["arkavo_npe"], json!({"type": "device"}));
         assert_eq!(
             allowlist_device(&json!({"sub":"a","iss":"i","aud":"arkavo:devicecheck"})),
             Err(DeviceError::MissingField("kid"))
         );
+    }
+
+    #[test]
+    fn device_class_is_forwarded_as_arkavo_npe() {
+        let base = json!({
+            "sub": "550e8400-e29b-41d4-a716-446655440000",
+            "iss": "https://identity.arkavo.net",
+            "aud": "arkavo:devicecheck",
+            "kid": "cGhvbmUta2lk"
+        });
+        for class in DEVICE_CLASSES {
+            let mut raw = base.clone();
+            raw["class"] = json!(class);
+            let v = device_to_value(&allowlist_device(&raw).unwrap());
+            assert_eq!(v["arkavo_npe"], json!({"type": "device", "class": class}));
+            assert!(v.get("class").is_none(), "class travels only in arkavo_npe");
+        }
+        for bad in [
+            json!("rooted"),
+            json!(""),
+            json!(3),
+            json!({"class": "attested"}),
+        ] {
+            let mut raw = base.clone();
+            raw["class"] = bad.clone();
+            let d = allowlist_device(&raw).unwrap();
+            assert_eq!(d.class, None, "{bad} is dropped, not malformed");
+            assert_eq!(device_to_value(&d)["arkavo_npe"], json!({"type": "device"}));
+        }
     }
 
     #[test]

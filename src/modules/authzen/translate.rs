@@ -531,7 +531,8 @@ mod tests {
             "sub": "550e8400-e29b-41d4-a716-446655440000",
             "iss": "https://identity.arkavo.net",
             "aud": "arkavo:devicecheck",
-            "kid": "cGhvbmUta2lk"
+            "kid": "cGhvbmUta2lk",
+            "class": "attested"
         })
     }
 
@@ -687,7 +688,16 @@ mod tests {
             json!("550e8400-e29b-41d4-a716-446655440000")
         );
         assert!(ents[1]["claims"]["value"].get("email").is_none());
+        assert_eq!(
+            ents[1]["claims"]["value"]["arkavo_npe"],
+            json!({"type": "device", "class": "attested"})
+        );
         assert_eq!(ents[2]["claims"]["value"]["kid"], json!("d2F0Y2gta2lk"));
+        assert_eq!(
+            ents[2]["claims"]["value"]["arkavo_npe"],
+            json!({"type": "device"}),
+            "a device with no class is still marked a device"
+        );
         assert_eq!(ents[3]["claims"]["value"]["region"], json!("us-east-1"));
         assert_eq!(ents[3]["claims"]["value"]["kind"], json!("environment"));
         assert!(ents[3]["claims"]["value"].get("email").is_none());
