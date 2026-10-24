@@ -66,6 +66,113 @@ fn mint_user(sk: &SigningKey) -> String {
     )
 }
 
+/// The person the fixtures describe, as a DeviceCheck token names them: a bare
+/// UUID `sub` and `arkavo_account_id` (authnz-rs `mint_assertion_token`).
+const ACCOUNT: &str = "550e8400-e29b-41d4-a716-446655440000";
+/// `iat` and `exp` of the device tokens in the fixtures; `exp` is 2100-01-01.
+const FIXTURE_IAT: i64 = 1_779_996_400;
+const FIXTURE_EXP: i64 = 4_102_444_800;
+
+/// Claims of a DeviceCheck assertion token as authnz-rs mints one, `cnf`
+/// reduced to its kid.
+fn device_claims(sub: &str, iat: i64, exp: i64, cti: &[u8], cnf_kid: &[u8]) -> Vec<(Cbor, Cbor)> {
+    vec![
+        (Cbor::Integer(1.into()), Cbor::Text(ISS.into())),
+        (Cbor::Integer(2.into()), Cbor::Text(sub.into())),
+        (
+            Cbor::Integer(3.into()),
+            Cbor::Array(vec![
+                Cbor::Text("arkavo:devicecheck".into()),
+                Cbor::Text("https://platform.arkavo.net".into()),
+            ]),
+        ),
+        (Cbor::Integer(4.into()), Cbor::Integer(exp.into())),
+        (Cbor::Integer(6.into()), Cbor::Integer(iat.into())),
+        (Cbor::Integer(7.into()), Cbor::Bytes(cti.to_vec())),
+        (
+            Cbor::Integer(8.into()),
+            Cbor::Map(vec![(
+                Cbor::Integer(3.into()),
+                Cbor::Bytes(cnf_kid.to_vec()),
+            )]),
+        ),
+        (
+            Cbor::Text("arkavo_account_id".into()),
+            Cbor::Text(sub.into()),
+        ),
+        (
+            Cbor::Text("arkavo_npe".into()),
+            Cbor::Map(vec![
+                (Cbor::Text("type".into()), Cbor::Text("device".into())),
+                (Cbor::Text("class".into()), Cbor::Text("attested".into())),
+            ]),
+        ),
+    ]
+}
+
+/// A DeviceCheck token valid now, signed with `sk`.
+fn mint_device(sk: &SigningKey, sub: &str, cnf_kid: &[u8]) -> String {
+    let now = chrono::Utc::now().timestamp();
+    mint_map(
+        sk,
+        KID,
+        device_claims(sub, now, now + 3600, &[5u8; 16], cnf_kid),
+    )
+}
+
+/// The device tokens the fixtures carry: signed with the test key, which
+/// signs deterministically, and valid until `FIXTURE_EXP`.
+fn fixture_device_token(cti: u8, cnf_kid: &[u8]) -> String {
+    let (sk, _) = keypair();
+    mint_map(
+        &sk,
+        KID,
+        device_claims(ACCOUNT, FIXTURE_IAT, FIXTURE_EXP, &[cti; 16], cnf_kid),
+    )
+}
+
+/// A COSE_Key Set holding the test key under `kid`.
+fn key_set_bytes(kid: &[u8]) -> Vec<u8> {
+    use coset::AsCborValue;
+    let (_, vk) = keypair();
+    let point = vk.to_encoded_point(false);
+    let cose_key = coset::CoseKeyBuilder::new_ec2_pub_key(
+        coset::iana::EllipticCurve::P_256,
+        point.x().unwrap().to_vec(),
+        point.y().unwrap().to_vec(),
+    )
+    .algorithm(coset::iana::Algorithm::ES256)
+    .key_id(kid.to_vec())
+    .build();
+    let mut bytes = Vec::new();
+    ciborium::ser::into_writer(
+        &Cbor::Array(vec![cose_key.to_cbor_value().unwrap()]),
+        &mut bytes,
+    )
+    .unwrap();
+    bytes
+}
+
+/// The opaque `token` strings in the fixtures are exactly these DeviceCheck
+/// tokens; re-mint them here after changing `device_claims`.
+#[test]
+fn fixture_device_tokens_are_test_key_device_tokens() {
+    assert_eq!(
+        catalog_req()["context"]["device"]["token"],
+        json!(fixture_device_token(0xd1, b"alpha-device-kid"))
+    );
+    let two: Value =
+        serde_json::from_str(include_str!("fixtures/two_devices_context.json")).unwrap();
+    assert_eq!(
+        two["devices"][0]["token"],
+        json!(fixture_device_token(0xd2, b"phone-kid"))
+    );
+    assert_eq!(
+        two["devices"][1]["token"],
+        json!(fixture_device_token(0xd3, b"watch-kid"))
+    );
+}
+
 fn state(upstream: &str, allowlist: Option<HashSet<String>>) -> (Arc<FacadeState>, SigningKey) {
     state_with_upstream(upstream, allowlist, None)
 }
@@ -233,9 +340,267 @@ async fn two_device_chain_pe_then_npes_then_env() {
         ents[0]["claims"]["value"]["sub"],
         json!("arkavo:550e8400-e29b-41d4-a716-446655440000")
     );
-    assert_eq!(ents[1]["claims"]["value"]["kid"], json!("cGhvbmUta2lk"));
-    assert_eq!(ents[2]["claims"]["value"]["kid"], json!("d2F0Y2gta2lk"));
+    assert_eq!(
+        ents[1]["claims"]["value"],
+        json!({"arkavo_device_token": fixture_device_token(0xd2, b"phone-kid")})
+    );
+    assert_eq!(
+        ents[2]["claims"]["value"],
+        json!({"arkavo_device_token": fixture_device_token(0xd3, b"watch-kid")})
+    );
     assert_eq!(ents[3]["claims"]["value"]["region"], json!("us-east-1"));
+}
+
+/// POST `req` to `/access/v1/evaluations` on a facade with no reachable
+/// upstream, so a 200 means the facade decided without calling it.
+async fn evaluations_without_upstream(req: &Value) -> (StatusCode, Value) {
+    let (st, sk) = state("http://127.0.0.1:1", None);
+    let token = mint_service(&sk, "catalog-node", false);
+    let (status, body, _) = call(
+        facade::router(st),
+        "POST",
+        "/access/v1/evaluations",
+        Some(&token),
+        Some(req),
+        Some(RID),
+    )
+    .await;
+    (status, body)
+}
+
+fn assert_all_deny_closed(body: &Value, message: &str) {
+    let evals = body["evaluations"].as_array().unwrap();
+    assert!(!evals.is_empty());
+    for e in evals {
+        assert_eq!(e["decision"], json!(false), "{body}");
+        assert_eq!(e["context"]["error"]["message"], json!(message), "{body}");
+    }
+}
+
+/// arks verifies a device token with the issuer's keys before forwarding it:
+/// one that does not verify denies its evaluations, as the platform would
+/// deny the whole chain.
+#[tokio::test]
+async fn device_token_that_does_not_verify_is_deny_closed() {
+    let (sk, _) = keypair();
+    let (other_sk, _) = crate::modules::authzen::cwt_verify::test_support::other_keypair();
+    let now = chrono::Utc::now().timestamp();
+    let mut wrong_iss = device_claims(ACCOUNT, now, now + 3600, &[6u8; 16], b"k");
+    wrong_iss[0].1 = Cbor::Text("https://evil.example".into());
+    let mut user_aud = device_claims(ACCOUNT, now, now + 3600, &[6u8; 16], b"k");
+    user_aud[2].1 = Cbor::Text("arkavo".into());
+    let tokens = [
+        ("other key", mint_device(&other_sk, ACCOUNT, b"k")),
+        (
+            "expired",
+            mint_map(
+                &sk,
+                KID,
+                device_claims(ACCOUNT, now - 7200, now - 3600, &[6u8; 16], b"k"),
+            ),
+        ),
+        ("wrong issuer", mint_map(&sk, KID, wrong_iss)),
+        ("not a DeviceCheck token", mint_map(&sk, KID, user_aud)),
+        (
+            "unknown kid",
+            mint_map(
+                &sk,
+                b"kid-9",
+                device_claims(ACCOUNT, now, now + 3600, &[6u8; 16], b"k"),
+            ),
+        ),
+        ("not a CWT", "bm90LWEtY3d0".to_string()),
+    ];
+    for (why, device_token) in tokens {
+        let mut req = catalog_req();
+        req["context"]["device"]["token"] = json!(device_token);
+        let (status, body) = evaluations_without_upstream(&req).await;
+        assert_eq!(status, StatusCode::OK, "{why}: {body}");
+        assert_all_deny_closed(&body, "device token does not verify");
+    }
+}
+
+/// The PEP's `sub` for the device binds, but the token's own does not.
+#[tokio::test]
+async fn device_token_sub_that_does_not_bind_is_deny_closed() {
+    let (sk, _) = keypair();
+    let mut req = catalog_req();
+    req["context"]["device"]["token"] = json!(mint_device(
+        &sk,
+        "00000000-0000-0000-0000-000000000000",
+        b"alpha-device-kid"
+    ));
+    let (status, body) = evaluations_without_upstream(&req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_all_deny_closed(&body, "device token sub does not bind to subject.id");
+}
+
+/// A device the PEP sends without its token cannot be bound by the platform,
+/// which would deny the whole chain, so it is not forwarded at all.
+#[tokio::test]
+async fn device_without_token_is_not_forwarded() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/authorization.v2.AuthorizationService/GetDecisionMultiResource",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            include_str!("fixtures/catalog_multiresource_response.json"),
+            "application/json",
+        ))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let (st, sk) = state(&upstream.uri(), None);
+    let token = mint_service(&sk, "catalog-node", false);
+    let mut req = catalog_req();
+    req["context"]["device"]
+        .as_object_mut()
+        .unwrap()
+        .remove("token");
+    let (status, body, _) = call(
+        facade::router(st),
+        "POST",
+        "/access/v1/evaluations",
+        Some(&token),
+        Some(&req),
+        Some(RID),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["evaluations"][0]["decision"], json!(true));
+    let got: Value =
+        serde_json::from_slice(&upstream.received_requests().await.unwrap()[0].body).unwrap();
+    let ents = got["entityIdentifier"]["entityChain"]["entities"]
+        .as_array()
+        .unwrap();
+    assert_eq!(ents.len(), 2, "{got}");
+    assert_eq!(ents[0]["category"], json!("CATEGORY_SUBJECT"));
+    assert_eq!(ents[1]["ephemeralId"], json!("e1"));
+    assert_eq!(ents[1]["claims"]["value"], json!({"region": "us-east-1"}));
+}
+
+#[tokio::test]
+async fn device_token_that_is_not_a_string_is_400() {
+    let mut req = catalog_req();
+    req["context"]["device"]["token"] = json!(42);
+    let (status, body) = evaluations_without_upstream(&req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["error"],
+        json!("device token must be a non-empty string")
+    );
+}
+
+/// A device token whose key cannot be fetched is an outage, not a deny.
+#[tokio::test]
+async fn device_token_key_set_unavailable_is_500() {
+    let keys_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/cose-keys"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(key_set_bytes(KID)))
+        .up_to_n_times(1)
+        .mount(&keys_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/cose-keys"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&keys_server)
+        .await;
+    // A zero max age refetches on every lookup: the PEP's lookup gets the set,
+    // the device token's finds the identity service down.
+    let keys = CoseKeyCache::with_max_age(
+        format!("{}/.well-known/cose-keys", keys_server.uri()),
+        std::time::Duration::from_secs(0),
+    );
+    let st = FacadeState::new(
+        "http://127.0.0.1:1",
+        ISS.to_string(),
+        keys,
+        None,
+        Some("https://platform.arkavo.net".into()),
+        None,
+        None,
+    )
+    .unwrap();
+    let (sk, _) = keypair();
+    let token = mint_service(&sk, "catalog-node", false);
+    let (status, body, _) = call(
+        facade::router(st),
+        "POST",
+        "/access/v1/evaluations",
+        Some(&token),
+        Some(&catalog_req()),
+        Some(RID),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert_eq!(body["error"], json!("key set unavailable"));
+}
+
+/// The single-evaluation route verifies and forwards a device token too.
+#[tokio::test]
+async fn single_evaluation_forwards_a_verified_device_token() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/authorization.v2.AuthorizationService/GetDecision"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            include_str!("fixtures/mcp_getdecision_response.json"),
+            "application/json",
+        ))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let (st, sk) = state(&upstream.uri(), None);
+    let token = mint_service(&sk, "mcp-edge", false);
+    let device_token = mint_device(&sk, ACCOUNT, b"phone-kid");
+    let mut req = mcp_req();
+    req["context"]["device"] = json!({
+        "sub": ACCOUNT,
+        "iss": ISS,
+        "aud": "arkavo:devicecheck",
+        "kid": "cGhvbmUta2lk",
+        "token": device_token
+    });
+    let (status, body, _) = call(
+        facade::router(st.clone()),
+        "POST",
+        "/access/v1/evaluation",
+        Some(&token),
+        Some(&req),
+        Some(RID),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["decision"], json!(true));
+    let got: Value =
+        serde_json::from_slice(&upstream.received_requests().await.unwrap()[0].body).unwrap();
+    let ents = got["entityIdentifier"]["entityChain"]["entities"]
+        .as_array()
+        .unwrap();
+    assert_eq!(ents.len(), 2);
+    assert_eq!(
+        ents[1]["claims"]["value"],
+        json!({ "arkavo_device_token": device_token })
+    );
+
+    let (other_sk, _) = crate::modules::authzen::cwt_verify::test_support::other_keypair();
+    req["context"]["device"]["token"] = json!(mint_device(&other_sk, ACCOUNT, b"phone-kid"));
+    let (status, body, _) = call(
+        facade::router(st),
+        "POST",
+        "/access/v1/evaluation",
+        Some(&token),
+        Some(&req),
+        Some(RID),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["decision"], json!(false));
+    assert_eq!(
+        body["context"]["error"]["message"],
+        json!("device token does not verify")
+    );
 }
 
 #[tokio::test]

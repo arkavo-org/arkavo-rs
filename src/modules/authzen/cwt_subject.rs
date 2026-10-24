@@ -7,8 +7,13 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde_json::{json, Map, Value};
+use std::fmt;
 
 pub const DEVICECHECK_AUD: &str = "arkavo:devicecheck";
+
+/// The claim a device's entity carries its signed DeviceCheck token under, the
+/// only claim the platform reads from it.
+pub const DEVICE_TOKEN_CLAIM: &str = "arkavo_device_token";
 
 /// Strip a single leading `arkavo:` prefix. Does not strip `apple:` or `client:`.
 pub fn subject_id_bind(s: &str) -> &str {
@@ -48,12 +53,27 @@ pub struct DecodedClaims {
     pub agent_marker: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DeviceObject {
     pub sub: String,
     pub iss: String,
     pub aud: String,
     pub kid: String,
+    /// The raw DeviceCheck CWT as the PEP received it (unpadded base64url).
+    /// A bearer credential: `Debug` redacts it and nothing logs it.
+    pub token: Option<String>,
+}
+
+impl fmt::Debug for DeviceObject {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceObject")
+            .field("sub", &self.sub)
+            .field("iss", &self.iss)
+            .field("aud", &self.aud)
+            .field("kid", &self.kid)
+            .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +81,8 @@ pub enum DeviceError {
     MissingField(&'static str),
     BothDeviceAndDevices,
     EmptyDevices,
+    /// `token` present but not a non-empty string.
+    BadToken,
 }
 
 /// `$token` map: text claim names, no integer keys, no `cnf`.
@@ -246,21 +268,28 @@ pub fn allowlist_device(obj: &Value) -> Result<DeviceObject, DeviceError> {
             .map(str::to_string)
             .ok_or(DeviceError::MissingField(k))
     };
+    let (sub, iss, aud, kid) = (req("sub")?, req("iss")?, req("aud")?, req("kid")?);
+    // Optional: a PEP that has the device's token sends it. null is no token.
+    let token = match map.get("token") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(t)) if !t.is_empty() => Some(t.clone()),
+        Some(_) => return Err(DeviceError::BadToken),
+    };
     Ok(DeviceObject {
-        sub: req("sub")?,
-        iss: req("iss")?,
-        aud: req("aud")?,
-        kid: req("kid")?,
+        sub,
+        iss,
+        aud,
+        kid,
+        token,
     })
 }
 
-pub fn device_to_value(d: &DeviceObject) -> Value {
-    json!({
-        "sub": d.sub,
-        "iss": d.iss,
-        "aud": d.aud,
-        "kid": d.kid,
-    })
+/// A device's entity claims: its signed DeviceCheck token and nothing else.
+/// The platform takes a device's class and app only from a token it verifies
+/// itself, and binds it to the person by the token's `iss` and
+/// `arkavo_account_id`, so no PEP-asserted claim is forwarded beside it.
+pub fn device_token_value(token: &str) -> Value {
+    json!({ DEVICE_TOKEN_CLAIM: token })
 }
 
 /// Environment allowlist: `{region}` plus optional `kind`. Other keys dropped.
@@ -507,14 +536,64 @@ mod tests {
             "patreon_user_id": "x"
         });
         let d = allowlist_device(&raw).unwrap();
-        let v = device_to_value(&d);
-        assert_eq!(v["sub"], raw["sub"]);
-        assert!(v.get("email").is_none());
-        assert!(v.get("patreon_user_id").is_none());
+        assert_eq!(d.sub, "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(d.token, None);
         assert_eq!(
             allowlist_device(&json!({"sub":"a","iss":"i","aud":"arkavo:devicecheck"})),
             Err(DeviceError::MissingField("kid"))
         );
+        // A token does not stand in for the required fields.
+        assert_eq!(
+            allowlist_device(&json!({"token": "t"})),
+            Err(DeviceError::MissingField("sub"))
+        );
+    }
+
+    #[test]
+    fn device_token_is_optional_but_must_be_a_string() {
+        let mut raw = json!({
+            "sub": "550e8400-e29b-41d4-a716-446655440000",
+            "iss": "https://identity.arkavo.net",
+            "aud": "arkavo:devicecheck",
+            "kid": "YWxwaGEtZGV2aWNlLWtpZA",
+            "token": "2D2ESqIB"
+        });
+        assert_eq!(
+            allowlist_device(&raw).unwrap().token.as_deref(),
+            Some("2D2ESqIB")
+        );
+        raw["token"] = Value::Null;
+        assert_eq!(allowlist_device(&raw).unwrap().token, None);
+        for bad in [json!(""), json!(7), json!(["2D2ESqIB"])] {
+            raw["token"] = bad;
+            assert_eq!(allowlist_device(&raw), Err(DeviceError::BadToken));
+        }
+    }
+
+    /// A device reaches the platform as its signed token alone.
+    #[test]
+    fn device_token_value_is_the_token_alone() {
+        assert_eq!(
+            device_token_value("2D2ESqIB"),
+            json!({"arkavo_device_token": "2D2ESqIB"})
+        );
+    }
+
+    /// The raw token is a bearer credential: never in a log line, so never in
+    /// a `Debug` rendering either.
+    #[test]
+    fn device_debug_redacts_the_token() {
+        let d = allowlist_device(&json!({
+            "sub": "550e8400-e29b-41d4-a716-446655440000",
+            "iss": "https://identity.arkavo.net",
+            "aud": "arkavo:devicecheck",
+            "kid": "YWxwaGEtZGV2aWNlLWtpZA",
+            "token": "SECRET-device-token"
+        }))
+        .unwrap();
+        let shown = format!("{d:?}");
+        assert!(!shown.contains("SECRET-device-token"), "{shown}");
+        assert!(shown.contains("YWxwaGEtZGV2aWNlLWtpZA"), "{shown}");
     }
 
     #[test]

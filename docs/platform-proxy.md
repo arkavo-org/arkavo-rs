@@ -81,6 +81,32 @@ The PEP authenticates with a **service CWT** (`Authorization: Bearer`). SARC
 When both flags are on, PEPs must pin the AuthZEN well-known URLs and must not
 POST to `/authorization.v2.AuthorizationService/*`.
 
+### Devices
+
+A PEP sends each DeviceCheck device as an object in `context.device` (one) or
+`context.devices` (an array): `{sub, iss, aud, kid}` as before, plus `token`,
+the raw DeviceCheck CWT exactly as the client presented it (`X-Entity-Token`,
+unpadded base64url). arks verifies the token with the issuer's COSE keys, the
+same set as the PEP's service CWT: signature, `iss`, `exp`, and an `aud` that
+names `arkavo:devicecheck`. Its `sub` must bind to `subject.id` as the device's
+`sub` does. The device goes to the platform as a `CATEGORY_ENVIRONMENT` entity
+whose only claim is `arkavo_device_token: <token>`. No other device field, and
+no `class` or `arkavo_npe` from the PEP, reaches the platform.
+
+| Device | Result |
+|---|---|
+| No `token` (absent or `null`) | Dropped from the chain and logged at info, once per request. The platform would deny a chain that carries a device it cannot bind. |
+| `token` not a non-empty string | 400 |
+| `token` does not verify, or its `sub` does not bind | That evaluation is deny-closed |
+| Key set unavailable while verifying a token | 500 |
+| Missing `sub`/`iss`/`aud`/`kid`; wrong `aud` or unbound `sub` | Unchanged: 400; deny-closed |
+
+The subject entity carries `iss` and `arkavo_account_id` from
+`subject.properties`, as sent: the platform binds a device only when both equal
+the token's, compared exactly. The platform verifies the token again, so its
+`aud` must also name the platform verifier's audience (authnz-rs adds it when
+its platform audience is configured).
+
 ### Caller-credential spike (2026-08-26, TLS renewed)
 
 PR 3's entry criterion: confirm production `platform.arkavo.net` accepts a
