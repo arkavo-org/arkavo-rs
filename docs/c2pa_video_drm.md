@@ -183,7 +183,7 @@ Validate a C2PA manifest against a content hash.
 }
 ```
 
-`creator` comes from the `stds.schema-org.CreativeWork` author, and `ai_generated` and `provenance_chain` come from the `c2pa.actions` assertion. The server never has the asset, so it skips `assertion.dataHash.mismatch` and compares `content_hash` with `org.arkavo.c2pa.content_hash` instead. `signingCredential.untrusted` is still reported unless the signing CA is a trust anchor, so `valid` is `false` for the private Arkavo C2PA CA.
+`creator` comes from the `stds.schema-org.CreativeWork` author, and `ai_generated` and `provenance_chain` come from the `c2pa.actions` assertion. The server never has the asset, so it skips `assertion.dataHash.mismatch` and compares `content_hash` with `org.arkavo.c2pa.content_hash` instead. Only the configured trust anchors are trusted (see `C2PA_TRUST_ANCHORS_PATH`). By default that is the CA in our own signing chain, so a manifest arks signed returns `valid: true`. A manifest signed under any other CA, including CAs on the public C2PA trust list, returns `valid: false` with `signingCredential.untrusted`.
 
 ## Configuration
 
@@ -195,6 +195,9 @@ export C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem
 export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert.pem
 export C2PA_REQUIRE_VALIDATION=true  # Enforce C2PA in media policy
 export C2PA_ALLOWED_CREATORS=creator1@example.com,creator2@example.com
+# Optional: PEM bundle /c2pa/v1/validate trusts. Default: the certificates after the
+# end-entity in C2PA_SIGNING_CERT_PATH (our own CA). List a retired CA here during a rotation.
+export C2PA_TRUST_ANCHORS_PATH=/path/to/c2pa_trust_anchors.pem
 
 # Existing Media DRM Configuration
 export MAX_CONCURRENT_STREAMS=5
@@ -532,10 +535,10 @@ The `/c2pa/v1/validate` endpoint uses c2pa-rs `Reader` for cryptographic verific
 | `claimSignature.validated` | COSE signature verified | None (success) |
 | `claimSignature.insideValidity` | Cert within validity period | None (success) |
 | `assertion.hashedURI.match` | Assertion integrity verified | None (success) |
-| `signingCredential.untrusted` | CA not in C2PA trust store | Use recognized CA for production |
+| `signingCredential.untrusted` | Signing CA is not a trust anchor | From `/c2pa/v1/validate`: signed under a CA other than ours, or `C2PA_TRUST_ANCHORS_PATH` is missing it. From `c2patool`: pass the Arkavo CA with `trust --trust_anchors` |
 | `assertion.dataHash.mismatch` | Asset hash doesn't match | Expected for server-side validation (no asset present) |
 
-**Note on `valid` field:** Server-side validation verifies the COSE signature chain and assertion integrity. The `assertion.dataHash.mismatch` and `signingCredential.untrusted` statuses are expected when validating without the actual asset or with a self-issued CA. Clients should perform full asset-hash binding verification locally after embedding the JUMBF.
+**Note on `valid` field:** Server-side validation verifies the COSE signature chain, assertion integrity and trust in our own CA. It skips `assertion.dataHash.mismatch` because the asset is not present. Clients should check the asset-hash binding locally after embedding the JUMBF.
 
 ### Client Integration Workflow
 
@@ -583,7 +586,7 @@ The `/c2pa/v1/sign` endpoint returns a **base64-encoded JUMBF** (JPEG Universal 
 - **Signing algorithm:** ES256 (ECDSA with P-256/SHA-256) only
 - **Manifest delivery:** Client-side embedding (server generates signed JUMBF, client embeds in container)
 - **Hash computation:** Client-side (server signs the client-provided hash)
-- **Trust:** Self-issued CA produces `signingCredential.untrusted` — use a C2PA-recognized CA for production
+- **Trust:** `/c2pa/v1/validate` trusts only our own CA. Third-party verifiers such as `c2patool` report `signingCredential.untrusted` until the CA is on the C2PA trust list or passed as a trust anchor
 
 ### Future Enhancements
 

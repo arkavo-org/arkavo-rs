@@ -30,6 +30,8 @@ const DATA_HASH_MISMATCH: &str = "assertion.dataHash.mismatch";
 pub struct C2paConfig {
     pub signing_key_path: String,
     pub signing_cert_path: String,
+    /// PEM bundle `/c2pa/v1/validate` trusts; empty trusts nothing
+    pub trust_anchors: String,
     pub _require_validation: bool, // Reserved for future use
     pub allowed_creators: Vec<String>,
 }
@@ -65,6 +67,22 @@ impl C2paConfig {
         }
         info!("C2PA signing cert file exists");
 
+        // Trust our own CA by default: the certificates after the end-entity in the
+        // signing chain. C2PA_TRUST_ANCHORS_PATH replaces them, e.g. to keep a retired
+        // CA during a rotation.
+        let trust_anchors = match std::env::var("C2PA_TRUST_ANCHORS_PATH") {
+            Ok(path) => std::fs::read_to_string(&path)
+                .map_err(|e| format!("Failed to read C2PA trust anchors {}: {}", path, e))?,
+            Err(_) => {
+                let chain = std::fs::read_to_string(&signing_cert_path)
+                    .map_err(|e| format!("Failed to read C2PA signing cert: {}", e))?;
+                ca_certs_from_chain(&chain)
+            }
+        };
+        if trust_anchors.is_empty() {
+            warn!("No C2PA trust anchors: /c2pa/v1/validate will report every manifest untrusted");
+        }
+
         let _require_validation = std::env::var("C2PA_REQUIRE_VALIDATION")
             .unwrap_or_else(|_| "false".to_string())
             .parse()
@@ -82,6 +100,7 @@ impl C2paConfig {
         Ok(Self {
             signing_key_path,
             signing_cert_path,
+            trust_anchors,
             _require_validation,
             allowed_creators,
         })
@@ -266,7 +285,7 @@ pub async fn sign_manifest(
 
 /// POST /c2pa/v1/validate - Validate C2PA manifest
 pub async fn validate_manifest(
-    State(_state): State<Arc<C2paSigningState>>,
+    State(state): State<Arc<C2paSigningState>>,
     Json(req): Json<C2paValidateRequest>,
 ) -> Response {
     info!("C2PA validation request");
@@ -292,7 +311,11 @@ pub async fn validate_manifest(
         };
 
     // Parse and validate C2PA manifest
-    match validate_c2pa_manifest(&manifest_bytes, &req.content_hash) {
+    match validate_c2pa_manifest(
+        &manifest_bytes,
+        &req.content_hash,
+        &state.config.trust_anchors,
+    ) {
         Ok(response) => {
             if response.valid {
                 info!("C2PA manifest validation successful");
@@ -464,6 +487,30 @@ fn signing_key_pkcs8_pem(pem: &[u8]) -> Result<zeroize::Zeroizing<String>, Strin
         .map_err(|e| format!("Failed to encode private key: {}", e))
 }
 
+/// The certificates after the first (end-entity) one in a PEM chain, as a PEM bundle.
+fn ca_certs_from_chain(chain_pem: &str) -> String {
+    const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
+    match chain_pem.match_indices(BEGIN).nth(1) {
+        Some((start, _)) => chain_pem[start..].to_string(),
+        None => String::new(),
+    }
+}
+
+/// Reader context that trusts only `trust_anchors` for manifest signing credentials.
+fn validation_context(trust_anchors: &str) -> Result<Context, String> {
+    if trust_anchors.is_empty() {
+        return Ok(Context::new());
+    }
+    let settings = serde_json::json!({
+        "trust": {
+            "anchors": [{ "trust_anchors": trust_anchors, "trust_kind": "manifest" }]
+        }
+    });
+    Context::new()
+        .with_settings(settings.to_string().as_str())
+        .map_err(|e| format!("Invalid C2PA trust anchors: {}", e))
+}
+
 /// Validate a C2PA manifest by parsing JUMBF data and verifying the signature chain.
 ///
 /// Server-side validation verifies the COSE signature chain and extracts metadata.
@@ -471,12 +518,13 @@ fn signing_key_pkcs8_pem(pem: &[u8]) -> Result<zeroize::Zeroizing<String>, Strin
 fn validate_c2pa_manifest(
     manifest_bytes: &[u8],
     expected_hash: &str,
+    trust_anchors: &str,
 ) -> Result<C2paValidateResponse, String> {
     // Use Reader to parse JUMBF and verify signature chain.
     // We provide an empty stream since the actual asset is on the client side;
     // the Reader will still verify COSE signatures on the manifest itself.
     let empty_stream = Cursor::new(Vec::<u8>::new());
-    let reader = Reader::from_context(Context::new())
+    let reader = Reader::from_context(validation_context(trust_anchors)?)
         .with_manifest_data_and_stream(manifest_bytes, "video/mp4", empty_stream)
         .map_err(|e| format!("Failed to parse C2PA manifest: {}", e))?;
 
@@ -646,9 +694,11 @@ mod tests {
 
     fn make_test_config() -> C2paConfig {
         let (cert_path, key_path) = generate_test_certs();
+        let chain = std::fs::read_to_string(&cert_path).unwrap();
         C2paConfig {
             signing_key_path: key_path.to_str().unwrap().to_string(),
             signing_cert_path: cert_path.to_str().unwrap().to_string(),
+            trust_anchors: ca_certs_from_chain(&chain),
             _require_validation: false,
             allowed_creators: vec![],
         }
@@ -706,8 +756,8 @@ mod tests {
         assert_eq!(manifest_hash, computed_hash, "Manifest hash should match");
 
         // Validate using c2pa-rs Reader
-        let result =
-            validate_c2pa_manifest(&manifest_bytes, hash).expect("Validation should not error");
+        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors)
+            .expect("Validation should not error");
 
         // Check metadata was preserved
         assert_eq!(
@@ -747,7 +797,7 @@ mod tests {
 
         // Validate with a different hash
         let wrong_hash = "0000000000000000000000000000000000000000000000000000000000000000";
-        let result = validate_c2pa_manifest(&manifest_bytes, wrong_hash)
+        let result = validate_c2pa_manifest(&manifest_bytes, wrong_hash, &config.trust_anchors)
             .expect("Validation should not error");
 
         assert!(
@@ -801,8 +851,8 @@ mod tests {
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
 
-        let result =
-            validate_c2pa_manifest(&manifest_bytes, hash).expect("Validation should not error");
+        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors)
+            .expect("Validation should not error");
 
         assert_eq!(
             result.ai_generated,
@@ -870,6 +920,69 @@ mod tests {
         ));
     }
 
+    /// A manifest signed with our own chain validates with no errors once its CA is a
+    /// trust anchor (arkavo-rs#100).
+    #[tokio::test]
+    async fn test_c2pa_validate_trusts_own_ca() {
+        let config = make_test_config();
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+        let (manifest_b64, _) = build_c2pa_manifest(&config, &make_test_request(hash))
+            .await
+            .expect("Signing should succeed");
+        let manifest_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
+                .unwrap();
+
+        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors)
+            .expect("Validation should not error");
+        assert!(
+            result.valid,
+            "Own CA should be trusted: {:?}",
+            result.errors
+        );
+        assert!(result.errors.is_empty());
+    }
+
+    /// A manifest from a CA we don't anchor stays untrusted, and so does every manifest
+    /// when no anchors are configured.
+    #[tokio::test]
+    async fn test_c2pa_validate_rejects_foreign_ca() {
+        let ours = make_test_config();
+        let theirs = make_test_config();
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+        let (manifest_b64, _) = build_c2pa_manifest(&theirs, &make_test_request(hash))
+            .await
+            .expect("Signing should succeed");
+        let manifest_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
+                .unwrap();
+
+        for anchors in [ours.trust_anchors.as_str(), ""] {
+            let result = validate_c2pa_manifest(&manifest_bytes, hash, anchors)
+                .expect("Validation should not error");
+            assert!(!result.valid);
+            assert!(
+                result
+                    .errors
+                    .iter()
+                    .any(|e| e.contains("signingCredential.untrusted")),
+                "Expected untrusted, got {:?}",
+                result.errors
+            );
+        }
+    }
+
+    /// Only the certificates after the end-entity become anchors.
+    #[test]
+    fn test_ca_certs_from_chain() {
+        let config = make_test_config();
+        let chain = std::fs::read_to_string(&config.signing_cert_path).unwrap();
+        let anchors = ca_certs_from_chain(&chain);
+        assert_eq!(anchors.matches("-----BEGIN CERTIFICATE-----").count(), 1);
+        assert!(chain.ends_with(&anchors));
+        assert_eq!(ca_certs_from_chain(&anchors), "");
+    }
+
     /// The signer accepts the SEC1 keys `openssl ecparam` writes as well as PKCS#8.
     #[test]
     fn test_signing_key_accepts_sec1_and_pkcs8() {
@@ -894,7 +1007,7 @@ mod tests {
         let invalid_bytes = b"this is not valid JUMBF data at all";
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
 
-        let result = validate_c2pa_manifest(invalid_bytes, hash);
+        let result = validate_c2pa_manifest(invalid_bytes, hash, "");
         assert!(result.is_err(), "Should fail to parse invalid JUMBF");
     }
 
