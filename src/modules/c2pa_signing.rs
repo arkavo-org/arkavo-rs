@@ -12,7 +12,7 @@ use axum::{
     Json,
 };
 use c2pa::assertions::{c2pa_action, Action, Actions, DigitalSourceType, SoftwareAgent};
-use c2pa::{Builder, ClaimGeneratorInfo, HashRange, Reader, SigningAlg};
+use c2pa::{Builder, ClaimGeneratorInfo, Context, HashRange, Reader, SigningAlg};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
@@ -336,8 +336,9 @@ async fn build_c2pa_manifest(
 
     let private_key = std::fs::read(&config.signing_key_path)
         .map_err(|e| format!("Failed to read private key: {}", e))?;
+    let private_key = signing_key_pkcs8_pem(&private_key)?;
 
-    // Use "c2pa" format for sign_data_hashed_embeddable to produce standalone JUMBF.
+    // Use "c2pa" format for sign_embeddable to produce standalone JUMBF.
     // The client is responsible for embedding the JUMBF into the actual container
     // format (MP4, MOV, etc.) at the correct location.
     let _container_format = match req.container_format {
@@ -347,9 +348,19 @@ async fn build_c2pa_manifest(
     };
     let mime_type = "c2pa";
 
+    // Create signer using ES256 (ECDSA with P-256)
+    info!("Creating C2PA signer with ES256...");
+    let signer = c2pa::create_signer::from_keys(
+        &cert_chain,
+        private_key.as_bytes(),
+        SigningAlg::Es256,
+        None,
+    )
+    .map_err(|e| format!("Failed to create signer: {}", e))?;
+
     // Build a C2PA manifest from spec assertions. Claim v2 requires a c2pa.actions
     // assertion whose first action is c2pa.created (arkavo-rs#98).
-    let mut builder = Builder::new();
+    let mut builder = Builder::from_context(Context::new().with_signer(signer));
     if !req.metadata.title.is_empty() {
         builder.definition.title = Some(req.metadata.title.clone());
     }
@@ -399,7 +410,7 @@ async fn build_c2pa_manifest(
         .map_err(|e| format!("Failed to add hash assertion: {}", e))?;
 
     // Build DataHash from client-provided hash and exclusion ranges.
-    // Name must be "jumbf manifest" to match what sign_data_hashed_embeddable expects.
+    // "jumbf manifest" is the name c2pa gives the manifest exclusion.
     let mut data_hash = c2pa::assertions::DataHash::new("jumbf manifest", "sha256");
 
     let content_hash_bytes = hex::decode(&req.content_hash)
@@ -411,22 +422,16 @@ async fn build_c2pa_manifest(
         data_hash.add_exclusion(HashRange::new(range.start, length));
     }
 
-    // Add DataHash as the required hash binding assertion (c2pa.hash.data).
-    // This is required by sign_data_hashed_embeddable to indicate how the
-    // manifest is bound to the asset's content.
+    // Add DataHash as the hard binding assertion (c2pa.hash.data). The hash is already
+    // computed by the client, so sign_embeddable signs it as-is without an asset stream.
     builder
         .add_assertion(c2pa::assertions::DataHash::LABEL, &data_hash)
         .map_err(|e| format!("Failed to add data hash assertion: {}", e))?;
 
-    // Create signer using ES256 (ECDSA with P-256)
-    info!("Creating C2PA signer with ES256...");
-    let signer = c2pa::create_signer::from_keys(&cert_chain, &private_key, SigningAlg::Es256, None)
-        .map_err(|e| format!("Failed to create signer: {}", e))?;
-
     // Sign with the hashed-data workflow: produces JUMBF bytes for client embedding
     info!("Signing C2PA manifest with data-hashed workflow...");
     let manifest_bytes = builder
-        .sign_data_hashed_embeddable(&*signer, &data_hash, mime_type)
+        .sign_embeddable(mime_type)
         .map_err(|e| format!("C2PA signing failed: {}", e))?;
 
     info!(
@@ -446,6 +451,19 @@ async fn build_c2pa_manifest(
     Ok((manifest_b64, manifest_hash))
 }
 
+/// Normalise the P-256 signing key to PKCS#8 PEM. c2pa's rust_native_crypto signer only
+/// reads PKCS#8, while `openssl ecparam -genkey` (docs/c2pa_video_drm.md) writes SEC1.
+fn signing_key_pkcs8_pem(pem: &[u8]) -> Result<zeroize::Zeroizing<String>, String> {
+    use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey, LineEnding};
+
+    let pem = std::str::from_utf8(pem).map_err(|_| "Private key is not PEM".to_string())?;
+    let key = p256::SecretKey::from_pkcs8_pem(pem)
+        .or_else(|_| p256::SecretKey::from_sec1_pem(pem))
+        .map_err(|_| "Private key is not a P-256 PKCS#8 or SEC1 PEM key".to_string())?;
+    key.to_pkcs8_pem(LineEnding::LF)
+        .map_err(|e| format!("Failed to encode private key: {}", e))
+}
+
 /// Validate a C2PA manifest by parsing JUMBF data and verifying the signature chain.
 ///
 /// Server-side validation verifies the COSE signature chain and extracts metadata.
@@ -458,7 +476,8 @@ fn validate_c2pa_manifest(
     // We provide an empty stream since the actual asset is on the client side;
     // the Reader will still verify COSE signatures on the manifest itself.
     let empty_stream = Cursor::new(Vec::<u8>::new());
-    let reader = Reader::from_manifest_data_and_stream(manifest_bytes, "video/mp4", empty_stream)
+    let reader = Reader::from_context(Context::new())
+        .with_manifest_data_and_stream(manifest_bytes, "video/mp4", empty_stream)
         .map_err(|e| format!("Failed to parse C2PA manifest: {}", e))?;
 
     let mut errors = Vec::new();
@@ -570,10 +589,40 @@ mod tests {
         assert!(json.contains("\"ai_generated\":true"));
     }
 
-    /// Generate a CA + end-entity EC cert chain for C2PA signing tests.
-    /// C2PA requires non-self-signed certificates.
+    /// Generate a CA + end-entity P-256 cert chain for C2PA signing tests.
+    /// C2PA rejects self-signed signing certificates and needs a digitalSignature key
+    /// usage and an emailProtection EKU on the end-entity certificate.
     /// Returns (cert_chain_pem_path, end_entity_key_pem_path) in a temp directory.
     fn generate_test_certs() -> (std::path::PathBuf, std::path::PathBuf) {
+        use rcgen::{
+            BasicConstraints, CertificateParams, DistinguishedName, DnType,
+            ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
+        };
+
+        let dn = |cn: &str, o: &str| {
+            let mut dn = DistinguishedName::new();
+            dn.push(DnType::CommonName, cn);
+            dn.push(DnType::OrganizationName, o);
+            dn.push(DnType::CountryName, "US");
+            dn
+        };
+
+        let ca_key = KeyPair::generate().unwrap();
+        let mut ca_params = CertificateParams::new(Vec::new()).unwrap();
+        ca_params.distinguished_name = dn("Test CA", "Arkavo Test CA");
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+        let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+
+        let ee_key = KeyPair::generate().unwrap();
+        let mut ee_params = CertificateParams::new(Vec::new()).unwrap();
+        ee_params.distinguished_name = dn("C2PA Test Signer", "Arkavo Test");
+        ee_params.is_ca = IsCa::ExplicitNoCa;
+        ee_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        ee_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::EmailProtection];
+        ee_params.use_authority_key_identifier_extension = true;
+        let ee_cert = ee_params.signed_by(&ee_key, &ca_cert, &ca_key).unwrap();
+
         let unique_id = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -586,107 +635,11 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let ca_key_path = dir.join("ca_key.pem");
-        let ca_cert_path = dir.join("ca_cert.pem");
-        let ee_key_path = dir.join("ee_key.pem");
-        let ee_csr_path = dir.join("ee_csr.pem");
-        let ee_cert_path = dir.join("ee_cert.pem");
+        // Chain file: end-entity first, then CA
         let chain_path = dir.join("cert_chain.pem");
-
-        // Generate CA key
-        let status = std::process::Command::new("openssl")
-            .args([
-                "ecparam",
-                "-genkey",
-                "-name",
-                "prime256v1",
-                "-noout",
-                "-out",
-            ])
-            .arg(&ca_key_path)
-            .status()
-            .expect("openssl must be available for tests");
-        assert!(status.success(), "Failed to generate CA key");
-
-        // Generate self-signed CA cert (CA=TRUE)
-        let status = std::process::Command::new("openssl")
-            .args(["req", "-new", "-x509", "-key"])
-            .arg(&ca_key_path)
-            .args(["-out"])
-            .arg(&ca_cert_path)
-            .args([
-                "-days",
-                "1",
-                "-subj",
-                "/CN=Test CA/O=Arkavo Test CA/C=US",
-                "-addext",
-                "basicConstraints=critical,CA:TRUE",
-                "-addext",
-                "keyUsage=critical,keyCertSign,cRLSign",
-            ])
-            .status()
-            .expect("openssl must be available");
-        assert!(status.success(), "Failed to generate CA cert");
-
-        // Generate end-entity key
-        let status = std::process::Command::new("openssl")
-            .args([
-                "ecparam",
-                "-genkey",
-                "-name",
-                "prime256v1",
-                "-noout",
-                "-out",
-            ])
-            .arg(&ee_key_path)
-            .status()
-            .expect("openssl must be available");
-        assert!(status.success(), "Failed to generate EE key");
-
-        // Generate CSR for end-entity
-        let status = std::process::Command::new("openssl")
-            .args(["req", "-new", "-key"])
-            .arg(&ee_key_path)
-            .args(["-out"])
-            .arg(&ee_csr_path)
-            .args(["-subj", "/CN=C2PA Test Signer/O=Arkavo Test/C=US"])
-            .status()
-            .expect("openssl must be available");
-        assert!(status.success(), "Failed to generate CSR");
-
-        // Write extensions config for the end-entity cert.
-        // C2PA requires: digitalSignature key usage + emailProtection EKU.
-        let ext_path = dir.join("ee_ext.cnf");
-        std::fs::write(
-            &ext_path,
-            "keyUsage=critical,digitalSignature\n\
-             basicConstraints=CA:FALSE\n\
-             extendedKeyUsage=emailProtection\n\
-             subjectKeyIdentifier=hash\n\
-             authorityKeyIdentifier=keyid:always\n",
-        )
-        .unwrap();
-
-        // Sign end-entity cert with CA
-        let status = std::process::Command::new("openssl")
-            .args(["x509", "-req", "-in"])
-            .arg(&ee_csr_path)
-            .args(["-CA"])
-            .arg(&ca_cert_path)
-            .args(["-CAkey"])
-            .arg(&ca_key_path)
-            .args(["-CAcreateserial", "-out"])
-            .arg(&ee_cert_path)
-            .args(["-days", "1", "-extfile"])
-            .arg(&ext_path)
-            .status()
-            .expect("openssl must be available");
-        assert!(status.success(), "Failed to sign EE cert");
-
-        // Create cert chain (end-entity + CA)
-        let ee_cert = std::fs::read_to_string(&ee_cert_path).unwrap();
-        let ca_cert = std::fs::read_to_string(&ca_cert_path).unwrap();
-        std::fs::write(&chain_path, format!("{}{}", ee_cert, ca_cert)).unwrap();
+        let ee_key_path = dir.join("ee_key.pem");
+        std::fs::write(&chain_path, format!("{}{}", ee_cert.pem(), ca_cert.pem())).unwrap();
+        std::fs::write(&ee_key_path, ee_key.serialize_pem()).unwrap();
 
         (chain_path, ee_key_path)
     }
@@ -873,12 +826,13 @@ mod tests {
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
 
-        let reader = Reader::from_manifest_data_and_stream(
-            &manifest_bytes,
-            "video/mp4",
-            Cursor::new(Vec::<u8>::new()),
-        )
-        .expect("Manifest should parse");
+        let reader = Reader::from_context(Context::new())
+            .with_manifest_data_and_stream(
+                &manifest_bytes,
+                "video/mp4",
+                Cursor::new(Vec::<u8>::new()),
+            )
+            .expect("Manifest should parse");
         let codes: Vec<&str> = reader
             .validation_status()
             .unwrap_or_default()
@@ -914,6 +868,23 @@ mod tests {
             first.source_type(),
             Some(c2pa::assertions::DigitalSourceType::DigitalCapture)
         ));
+    }
+
+    /// The signer accepts the SEC1 keys `openssl ecparam` writes as well as PKCS#8.
+    #[test]
+    fn test_signing_key_accepts_sec1_and_pkcs8() {
+        use p256::pkcs8::{EncodePrivateKey, LineEnding};
+
+        let key = p256::SecretKey::random(&mut rand_core::OsRng);
+        let sec1 = key.to_sec1_pem(LineEnding::LF).unwrap();
+        let pkcs8 = key.to_pkcs8_pem(LineEnding::LF).unwrap();
+        assert!(sec1.starts_with("-----BEGIN EC PRIVATE KEY-----"));
+
+        let from_sec1 = signing_key_pkcs8_pem(sec1.as_bytes()).unwrap();
+        let from_pkcs8 = signing_key_pkcs8_pem(pkcs8.as_bytes()).unwrap();
+        assert_eq!(*from_sec1, *pkcs8);
+        assert_eq!(*from_pkcs8, *pkcs8);
+        assert!(signing_key_pkcs8_pem(b"not a key").is_err());
     }
 
     /// Test that invalid base64 is rejected during validation.
