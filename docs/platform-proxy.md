@@ -89,21 +89,27 @@ the raw DeviceCheck CWT exactly as the client presented it (`X-Entity-Token`,
 unpadded base64url). arks verifies the token with the issuer's COSE keys, the
 same set as the PEP's service CWT: signature, `iss`, `exp`, and an `aud` that
 names `arkavo:devicecheck`. Its `sub` must bind to `subject.id` as the device's
-`sub` does. The device goes to the platform as a `CATEGORY_ENVIRONMENT` entity
+`sub` does. It must bind as the platform binds it: its `iss` and
+`arkavo_account_id` non-empty and exactly equal to `subject.properties.iss` and
+`.arkavo_account_id`. It must be a device's token as the platform reads one: no
+agent marker beside its device `arkavo_npe` (`arkavo_npe.type` other than
+`device`, `arkavo_swarm`, `arkavo_state_version`, or the `agent` role). The
+device goes to the platform as a `CATEGORY_ENVIRONMENT` entity
 whose only claim is `arkavo_device_token: <token>`. No other device field, and
 no `class` or `arkavo_npe` from the PEP, reaches the platform.
 
 | Device | Result |
 |---|---|
-| No `token` (absent or `null`) | Dropped from the chain and logged at info, once per request. The platform would deny a chain that carries a device it cannot bind. |
-| `token` not a non-empty string | 400 |
-| `token` does not verify, or its `sub` does not bind | That evaluation is deny-closed |
+| No `token` (absent or `null`) | Dropped from the chain; the count is logged at warn, once per request. The platform would deny a chain that carries a device it cannot bind. |
+| `token` not a non-empty string, or with surrounding whitespace | 400 |
+| `token` does not verify, is not a device's token, its `sub` does not bind, or its `iss`/`arkavo_account_id` do not equal the subject's | That evaluation is deny-closed |
 | Key set unavailable while verifying a token | 500 |
+| More devices than the chain cap allows | 400, before any token is verified |
 | Missing `sub`/`iss`/`aud`/`kid`; wrong `aud` or unbound `sub` | Unchanged: 400; deny-closed |
 
-The subject entity carries `iss` and `arkavo_account_id` from
-`subject.properties`, as sent: the platform binds a device only when both equal
-the token's, compared exactly. The platform verifies the token again, so its
+The subject entity carries `iss` from `subject.properties` as sent, and
+`arkavo_account_id` as sent when it is a non-empty string: the platform binds a
+device only when both equal the token's, compared exactly. The platform verifies the token again, so its
 `aud` must also name the platform verifier's audience (authnz-rs adds it when
 its platform audience is configured).
 

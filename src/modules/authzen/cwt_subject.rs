@@ -51,6 +51,11 @@ pub struct DecodedClaims {
     /// Any agent marker (arkavo_npe, arkavo_swarm, arkavo_state_version, or
     /// the `agent` role). Presence alone counts, whatever the value.
     pub agent_marker: bool,
+    /// An agent marker as the platform's `KindOf` reads one: an `arkavo_npe`
+    /// whose `type` is anything but `device`, `arkavo_swarm`,
+    /// `arkavo_state_version`, or the `agent` role (a list or a string). A
+    /// DeviceCheck token's device `arkavo_npe` alone is not one.
+    pub non_device_agent_marker: bool,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -81,7 +86,9 @@ pub enum DeviceError {
     MissingField(&'static str),
     BothDeviceAndDevices,
     EmptyDevices,
-    /// `token` present but not a non-empty string.
+    /// `token` present but not a non-empty string, or with surrounding
+    /// whitespace: verification trims it, but it is forwarded as sent and the
+    /// platform's base64url decoding refuses whitespace.
     BadToken,
 }
 
@@ -272,7 +279,7 @@ pub fn allowlist_device(obj: &Value) -> Result<DeviceObject, DeviceError> {
     // Optional: a PEP that has the device's token sends it. null is no token.
     let token = match map.get("token") {
         None | Some(Value::Null) => None,
-        Some(Value::String(t)) if !t.is_empty() => Some(t.clone()),
+        Some(Value::String(t)) if !t.is_empty() && t.trim() == t => Some(t.clone()),
         Some(_) => return Err(DeviceError::BadToken),
     };
     Ok(DeviceObject {
@@ -432,6 +439,7 @@ mod tests {
             scope: None,
             auth_time: None,
             agent_marker: false,
+            non_device_agent_marker: false,
         }
     }
 
@@ -564,7 +572,13 @@ mod tests {
         );
         raw["token"] = Value::Null;
         assert_eq!(allowlist_device(&raw).unwrap().token, None);
-        for bad in [json!(""), json!(7), json!(["2D2ESqIB"])] {
+        for bad in [
+            json!(""),
+            json!(7),
+            json!(["2D2ESqIB"]),
+            json!(" 2D2ESqIB"),
+            json!("2D2ESqIB\r\n"),
+        ] {
             raw["token"] = bad;
             assert_eq!(allowlist_device(&raw), Err(DeviceError::BadToken));
         }

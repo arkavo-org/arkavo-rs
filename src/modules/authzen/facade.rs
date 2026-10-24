@@ -9,10 +9,10 @@ use crate::modules::authzen::cwt_verify::{
 };
 use crate::modules::authzen::discovery;
 use crate::modules::authzen::translate::{
-    authzen_decision, bulk_request, deny_closed, fulfillable_from_context, get_decision_request,
-    map_action, map_resource, multi_resource_request, parse_bulk_responses,
+    authzen_decision, bulk_request, chain_len, deny_closed, fulfillable_from_context,
+    get_decision_request, map_action, map_resource, multi_resource_request, parse_bulk_responses,
     parse_get_decision_response, parse_resource_decisions, reconstruct_chain, ChainMap,
-    ResourceMap, TranslateError, VerifiedDevices, MAX_EVALUATIONS,
+    ResourceMap, TranslateError, VerifiedDevice, VerifiedDevices, MAX_CHAIN, MAX_EVALUATIONS,
 };
 use axum::extract::rejection::JsonRejection;
 use axum::extract::State;
@@ -311,11 +311,12 @@ fn request_contexts<'a>(body: &'a Value, entries: &'a [Value]) -> Vec<&'a Value>
 /// `sub` of every token that verified. The platform verifies the token again
 /// and is the authority on it; verifying here lets a token that would deny
 /// the platform's whole chain deny its evaluations instead, and binds the
-/// device to the subject by the token's own `sub`. A context whose devices do
-/// not parse is left for `prepare_one` to refuse. Only an unavailable key set
-/// fails the request: a deny would pass an outage off as a policy decision.
-/// A device sent without a token is counted and logged once per request; no
-/// token is ever logged.
+/// device to the subject as the platform does. A context whose devices do not
+/// parse, or are more than its chain can hold, is left for `prepare_one` to
+/// refuse, so no request verifies more than `MAX_CHAIN - 1` tokens per
+/// context. Only an unavailable key set fails the request: a deny would pass
+/// an outage off as a policy decision. A device sent without a token is
+/// counted and logged once per request; no device or token is ever logged.
 async fn verify_device_tokens(
     state: &FacadeState,
     contexts: &[&Value],
@@ -329,6 +330,9 @@ async fn verify_device_tokens(
         let Ok(devices) = devices_from_context(ctx) else {
             continue;
         };
+        if chain_len(devices.len(), Some(ctx)) > MAX_CHAIN {
+            continue;
+        }
         for d in devices {
             let Some(token) = d.token else {
                 tokenless += 1;
@@ -339,7 +343,7 @@ async fn verify_device_tokens(
             }
             match verify_device_token(state, &token, now).await {
                 Ok(claims) => {
-                    verified.insert(token, claims.sub);
+                    verified.insert(token, VerifiedDevice::from(&claims));
                 }
                 Err(VerifyError::KeySet) => return Err(VerifyError::KeySet),
                 Err(e) => {
@@ -353,7 +357,7 @@ async fn verify_device_tokens(
         }
     }
     if tokenless > 0 {
-        log::info!(
+        log::warn!(
             "authzen: evaluation_id={rid} dropped {tokenless} device(s) sent without a \
              DeviceCheck token; the platform binds a device only by its signed token"
         );

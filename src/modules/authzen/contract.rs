@@ -435,6 +435,112 @@ async fn device_token_sub_that_does_not_bind_is_deny_closed() {
     assert_all_deny_closed(&body, "device token sub does not bind to subject.id");
 }
 
+/// The platform binds a device by its token's `iss` and `arkavo_account_id`
+/// against the person entity's, so a token for another account, or a subject
+/// sent without its account, would deny there and is deny-closed here.
+#[tokio::test]
+async fn device_token_that_does_not_bind_to_the_person_is_deny_closed() {
+    let (sk, _) = keypair();
+    let now = chrono::Utc::now().timestamp();
+    let mut claims = device_claims(ACCOUNT, now, now + 3600, &[7u8; 16], b"alpha-device-kid");
+    claims[7].1 = Cbor::Text("00000000-0000-0000-0000-000000000000".into());
+    let mut other_account = catalog_req();
+    other_account["context"]["device"]["token"] = json!(mint_map(&sk, KID, claims));
+    let mut no_subject_account = catalog_req();
+    no_subject_account["subject"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("arkavo_account_id");
+    for req in [other_account, no_subject_account] {
+        let (status, body) = evaluations_without_upstream(&req).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_all_deny_closed(&body, "device token does not bind to subject");
+    }
+}
+
+/// A DeviceCheck token that also carries an agent marker is an agent's to
+/// the platform, never a device.
+#[tokio::test]
+async fn device_token_with_an_agent_marker_is_deny_closed() {
+    let (sk, _) = keypair();
+    let now = chrono::Utc::now().timestamp();
+    let mut claims = device_claims(ACCOUNT, now, now + 3600, &[8u8; 16], b"alpha-device-kid");
+    claims.push((Cbor::Text("arkavo_swarm".into()), Cbor::Text("s1".into())));
+    let mut req = catalog_req();
+    req["context"]["device"]["token"] = json!(mint_map(&sk, KID, claims));
+    let (status, body) = evaluations_without_upstream(&req).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_all_deny_closed(&body, "device token is not a device token");
+}
+
+/// The token is verified trimmed but forwarded as sent; the platform refuses
+/// surrounding whitespace, so it is a malformed request here.
+#[tokio::test]
+async fn device_token_with_surrounding_whitespace_is_400() {
+    let mut req = catalog_req();
+    let token = req["context"]["device"]["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    req["context"]["device"]["token"] = json!(format!("{token}\n"));
+    let (status, body) = evaluations_without_upstream(&req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["error"],
+        json!("device token must be a non-empty string with no surrounding whitespace")
+    );
+}
+
+/// A context over the chain cap is refused as malformed without verifying any
+/// of its tokens: here verifying one would hit the failing key set and 500.
+#[tokio::test]
+async fn over_cap_chain_is_400_before_any_device_token_is_verified() {
+    let keys_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/cose-keys"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(key_set_bytes(KID)))
+        .up_to_n_times(1)
+        .mount(&keys_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/cose-keys"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&keys_server)
+        .await;
+    let keys = CoseKeyCache::with_max_age(
+        format!("{}/.well-known/cose-keys", keys_server.uri()),
+        std::time::Duration::from_secs(0),
+    );
+    let st = FacadeState::new(
+        "http://127.0.0.1:1",
+        ISS.to_string(),
+        keys,
+        None,
+        Some("https://platform.arkavo.net".into()),
+        None,
+        None,
+    )
+    .unwrap();
+    let (sk, _) = keypair();
+    let token = mint_service(&sk, "catalog-node", false);
+    // 1 person + 7 devices + the environment is 9 entities, over the cap of 8.
+    let device = catalog_req()["context"]["device"].clone();
+    let mut req = catalog_req();
+    req["context"]["devices"] = json!(vec![device; 7]);
+    req["context"].as_object_mut().unwrap().remove("device");
+    let (status, body, _) = call(
+        facade::router(st),
+        "POST",
+        "/access/v1/evaluations",
+        Some(&token),
+        Some(&req),
+        Some(RID),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], json!("entity chain exceeds 8"));
+}
+
 /// A device the PEP sends without its token cannot be bound by the platform,
 /// which would deny the whole chain, so it is not forwarded at all.
 #[tokio::test]
@@ -488,7 +594,7 @@ async fn device_token_that_is_not_a_string_is_400() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(
         body["error"],
-        json!("device token must be a non-empty string")
+        json!("device token must be a non-empty string with no surrounding whitespace")
     );
 }
 
@@ -555,6 +661,8 @@ async fn single_evaluation_forwards_a_verified_device_token() {
     let token = mint_service(&sk, "mcp-edge", false);
     let device_token = mint_device(&sk, ACCOUNT, b"phone-kid");
     let mut req = mcp_req();
+    // The platform binds the token to the person by account as well as iss.
+    req["subject"]["properties"]["arkavo_account_id"] = json!(ACCOUNT);
     req["context"]["device"] = json!({
         "sub": ACCOUNT,
         "iss": ISS,
