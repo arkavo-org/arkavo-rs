@@ -183,6 +183,8 @@ Validate a C2PA manifest against a content hash.
 }
 ```
 
+`creator` comes from the `stds.schema-org.CreativeWork` author, and `ai_generated` and `provenance_chain` come from the `c2pa.actions` assertion. The server never has the asset, so it skips `assertion.dataHash.mismatch` and compares `content_hash` with `org.arkavo.c2pa.content_hash` instead. `signingCredential.untrusted` is still reported unless the signing CA is a trust anchor, so `valid` is `false` for the private Arkavo C2PA CA.
+
 ## Configuration
 
 ### Environment Variables
@@ -203,6 +205,8 @@ export MEDIA_METRICS_SUBJECT=media.metrics
 ### Generating C2PA Signing Certificates
 
 C2PA uses ES256 (ECDSA with SHA-256) for signing. **Important:** c2pa-rs rejects self-signed certificates. You must generate a CA + end-entity certificate chain with the `emailProtection` Extended Key Usage.
+
+arks signs with c2pa-rs's pure-Rust crypto backend (`rust_native_crypto`, RustCrypto `p256`). OpenSSL is not linked into the server. The backend only reads PKCS#8 keys, so arks converts a SEC1 `EC PRIVATE KEY` (what `openssl ecparam` writes) to PKCS#8 when it loads the key. Either format works for `C2PA_SIGNING_KEY_PATH`.
 
 ```bash
 # 1. Generate CA key and self-signed CA certificate
@@ -557,7 +561,12 @@ The `/c2pa/v1/sign` endpoint returns a **base64-encoded JUMBF** (JPEG Universal 
 
 **What's inside the JUMBF:**
 - COSE-signed claim with ES256 signature
-- Assertion store: `c2pa.created`, `c2pa.claim.creator`, `dc.title`, `c2pa.ai_generated`, `stds.exif`, `c2pa.hash.data`, `org.arkavo.c2pa.content_hash`
+- Manifest `title` from `metadata.title`
+- Assertion store:
+  - `c2pa.actions.v2`: a single `c2pa.created` action with `when` (`metadata.timestamp`), `softwareAgent.name` (`metadata.software`) and `digitalSourceType` (`trainedAlgorithmicMedia` when `metadata.ai_generated` is true, otherwise `digitalCapture`)
+  - `stds.schema-org.CreativeWork`: `author: [{"@type": "Person", "name": metadata.creator}]` and `metadata.description`
+  - `c2pa.hash.data` and `org.arkavo.c2pa.content_hash`
+- Claim v2 requires the first action to be `c2pa.created` or `c2pa.opened`. The manifests signed before arkavo-rs#98 used custom `c2pa.created` / `c2pa.claim.creator` / `c2pa.ai_generated` / `dc.title` labels and fail `c2patool` with `assertion.action.malformed`. `/c2pa/v1/validate` no longer reads those labels
 - Certificate chain (end-entity + CA)
 - Data hash binding with exclusion ranges
 
