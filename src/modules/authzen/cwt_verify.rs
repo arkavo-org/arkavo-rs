@@ -165,6 +165,7 @@ fn parse_claims(payload: &[u8]) -> Result<DecodedClaims, VerifyError> {
     let mut scope = None;
     let mut auth_time = None;
     let mut agent_marker = false;
+    let mut non_device_agent_marker = false;
     for (k, v) in entries {
         let key_id = match &k {
             Value::Integer(i) => format!("i:{}", i128::from(*i)),
@@ -214,8 +215,13 @@ fn parse_claims(payload: &[u8]) -> Result<DecodedClaims, VerifyError> {
                     let roles = text_array(a)?;
                     if roles.iter().any(|r| r == "agent") {
                         agent_marker = true;
+                        non_device_agent_marker = true;
                     }
                     arkavo_roles = Some(roles);
+                }
+                // The platform also reads a lone string role.
+                ("arkavo_roles", Value::Text(r)) if r == "agent" => {
+                    non_device_agent_marker = true;
                 }
                 ("arkavo_entitlements", Value::Array(a)) => {
                     arkavo_entitlements = Some(text_array(a)?);
@@ -233,8 +239,15 @@ fn parse_claims(payload: &[u8]) -> Result<DecodedClaims, VerifyError> {
                 ("auth_time", ref v) => {
                     auth_time = Some(numeric_date(v).ok_or(VerifyError::Malformed)?);
                 }
-                ("arkavo_npe", _) | ("arkavo_swarm", _) | ("arkavo_state_version", _) => {
+                ("arkavo_npe", ref npe) => {
                     agent_marker = true;
+                    if !is_device_npe(npe) {
+                        non_device_agent_marker = true;
+                    }
+                }
+                ("arkavo_swarm", _) | ("arkavo_state_version", _) => {
+                    agent_marker = true;
+                    non_device_agent_marker = true;
                 }
                 _ => {}
             },
@@ -273,7 +286,21 @@ fn parse_claims(payload: &[u8]) -> Result<DecodedClaims, VerifyError> {
         scope,
         auth_time,
         agent_marker,
+        non_device_agent_marker,
     })
+}
+
+/// An `arkavo_npe` the platform's `KindOf` reads as a device's: a map with
+/// one `type`, the text `device`.
+fn is_device_npe(npe: &Value) -> bool {
+    let Value::Map(members) = npe else {
+        return false;
+    };
+    let mut types = members
+        .iter()
+        .filter(|(k, _)| k.as_text() == Some("type"))
+        .map(|(_, v)| v.as_text());
+    matches!((types.next(), types.next()), (Some(Some("device")), None))
 }
 
 /// The CWT tag may wrap either a bare COSE_Sign1 array or a tagged one —
@@ -932,6 +959,85 @@ mod tests {
                 verify_header_token(&t, &vk, opts()).unwrap().agent_marker,
                 "{k:?}"
             );
+        }
+    }
+
+    /// The platform's `KindOf` reads a DeviceCheck token's `arkavo_npe` of
+    /// `type: device` as a device; any other agent marker makes the token an
+    /// agent's.
+    #[test]
+    fn non_device_agent_marker_spares_only_a_device_npe() {
+        let npe = |entries: Vec<(&str, &str)>| {
+            (
+                Value::Text("arkavo_npe".into()),
+                Value::Map(
+                    entries
+                        .into_iter()
+                        .map(|(k, v)| (Value::Text(k.into()), Value::Text(v.into())))
+                        .collect(),
+                ),
+            )
+        };
+        let device = npe(vec![("type", "device"), ("class", "attested")]);
+        let (sk, vk) = keypair();
+        let claims = |extra: Vec<(Value, Value)>| {
+            verify_header_token(&mint_map(&sk, KID, base_entries_with(extra)), &vk, opts()).unwrap()
+        };
+        let plain_device = claims(vec![device.clone()]);
+        assert!(plain_device.agent_marker);
+        assert!(!plain_device.non_device_agent_marker);
+        assert!(!claims(vec![]).non_device_agent_marker);
+
+        let cases: Vec<(&str, Vec<(Value, Value)>)> = vec![
+            ("npe type agent", vec![npe(vec![("type", "agent")])]),
+            ("npe without type", vec![npe(vec![("class", "attested")])]),
+            (
+                "npe not a map",
+                vec![(
+                    Value::Text("arkavo_npe".into()),
+                    Value::Text("device".into()),
+                )],
+            ),
+            (
+                "device npe and swarm",
+                vec![
+                    device.clone(),
+                    (Value::Text("arkavo_swarm".into()), Value::Text("s1".into())),
+                ],
+            ),
+            (
+                "device npe and state version",
+                vec![
+                    device.clone(),
+                    (
+                        Value::Text("arkavo_state_version".into()),
+                        Value::Integer(0.into()),
+                    ),
+                ],
+            ),
+            (
+                "device npe and agent role",
+                vec![
+                    device.clone(),
+                    (
+                        Value::Text("arkavo_roles".into()),
+                        Value::Array(vec![Value::Text("agent".into())]),
+                    ),
+                ],
+            ),
+            (
+                "agent role as a string",
+                vec![
+                    device,
+                    (
+                        Value::Text("arkavo_roles".into()),
+                        Value::Text("agent".into()),
+                    ),
+                ],
+            ),
+        ];
+        for (why, extra) in cases {
+            assert!(claims(extra).non_device_agent_marker, "{why}");
         }
     }
 }

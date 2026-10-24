@@ -4,13 +4,15 @@
       "sub": "550e8400-e29b-41d4-a716-446655440000",
       "iss": "https://identity.arkavo.net",
       "aud": "arkavo:devicecheck",
-      "kid": "cGhvbmUta2lk"
+      "kid": "cGhvbmUta2lk",
+      "token": "2D2ESqIBJgRFa2lkLTGgWQECqQF4G2h0dHBzOi8vaWRlbnRpdHkuYXJrYXZvLm5ldAJ4JDU1MGU4NDAwLWUyOWItNDFkNC1hNzE2LTQ0NjY1NTQ0MDAwMAOCcmFya2F2bzpkZXZpY2VjaGVja3gbaHR0cHM6Ly9wbGF0Zm9ybS5hcmthdm8ubmV0BBr0hlcABhpqGJbwB1DS0tLS0tLS0tLS0tLS0tLSCKEDSXBob25lLWtpZHFhcmthdm9fYWNjb3VudF9pZHgkNTUwZTg0MDAtZTI5Yi00MWQ0LWE3MTYtNDQ2NjU1NDQwMDAwamFya2F2b19ucGWiZHR5cGVmZGV2aWNlZWNsYXNzaGF0dGVzdGVkWECloGGG1G9gUk2p7P2YUuqGtZdFb8yAXRdWgYtPqDodjObZSRxp9-r_gK_8-lNaw2pjB7D1WMC4iwRUhcW_whHz"
     },
     {
       "sub": "550e8400-e29b-41d4-a716-446655440000",
       "iss": "https://identity.arkavo.net",
       "aud": "arkavo:devicecheck",
-      "kid": "d2F0Y2gta2lk"
+      "kid": "d2F0Y2gta2lk",
+      "token": "2D2ESqIBJgRFa2lkLTGgWQECqQF4G2h0dHBzOi8vaWRlbnRpdHkuYXJrYXZvLm5ldAJ4JDU1MGU4NDAwLWUyOWItNDFkNC1hNzE2LTQ0NjY1NTQ0MDAwMAOCcmFya2F2bzpkZXZpY2VjaGVja3gbaHR0cHM6Ly9wbGF0Zm9ybS5hcmthdm8ubmV0BBr0hlcABhpqGJbwB1DT09PT09PT09PT09PT09PTCKEDSXdhdGNoLWtpZHFhcmthdm9fYWNjb3VudF9pZHgkNTUwZTg0MDAtZTI5Yi00MWQ0LWE3MTYtNDQ2NjU1NDQwMDAwamFya2F2b19ucGWiZHR5cGVmZGV2aWNlZWNsYXNzaGF0dGVzdGVkWECuIO8eHTYP1muoLIeky7WQRCCGTAsaM5rF7THsM1U02WXtlErZ9pBfEBoUWAUDBz5Irq9CYviPEPqsxP3R0wfH"
     }
   ],
   "environment": {

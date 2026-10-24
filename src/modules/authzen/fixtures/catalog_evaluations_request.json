@@ -7,7 +7,7 @@
       "idp": "arkavo",
       "email": "alice@example.com",
       "email_verified": true,
-      "arkavo_account_id": "arkavo:550e8400-e29b-41d4-a716-446655440000",
+      "arkavo_account_id": "550e8400-e29b-41d4-a716-446655440000",
       "arkavo_roles": ["user"],
       "arkavo_entitlements": [
         "tdf:decrypt",
@@ -37,7 +37,9 @@
       "sub": "550e8400-e29b-41d4-a716-446655440000",
       "iss": "https://identity.arkavo.net",
       "aud": "arkavo:devicecheck",
-      "kid": "YWxwaGEtZGV2aWNlLWtpZA"
+      "kid": "YWxwaGEtZGV2aWNlLWtpZA",
+      "class": "attested",
+      "token": "2D2ESqIBJgRFa2lkLTGgWQEJqQF4G2h0dHBzOi8vaWRlbnRpdHkuYXJrYXZvLm5ldAJ4JDU1MGU4NDAwLWUyOWItNDFkNC1hNzE2LTQ0NjY1NTQ0MDAwMAOCcmFya2F2bzpkZXZpY2VjaGVja3gbaHR0cHM6Ly9wbGF0Zm9ybS5hcmthdm8ubmV0BBr0hlcABhpqGJbwB1DR0dHR0dHR0dHR0dHR0dHRCKEDUGFscGhhLWRldmljZS1raWRxYXJrYXZvX2FjY291bnRfaWR4JDU1MGU4NDAwLWUyOWItNDFkNC1hNzE2LTQ0NjY1NTQ0MDAwMGphcmthdm9fbnBlomR0eXBlZmRldmljZWVjbGFzc2hhdHRlc3RlZFhAa6k2XQ2sCq-K1HO5CoKqrYnA050FOhmIHBK9CR2Oonjw2IO8b1TiHQ0QE4ppIWb7eBi9oZTguXVxXNV7av9Atg"
     },
     "environment": {
       "region": "us-east-1"
