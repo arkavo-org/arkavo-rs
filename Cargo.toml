@@ -67,6 +67,7 @@ unicode-segmentation = "1"
 uuid = { version = "1.11", features = ["v4"] }
 fairplay-wrapper = { path = "crates/fairplay-wrapper", optional = true }
 c2pa = { version = "0.91", default-features = false, features = ["file_io", "rust_native_crypto"], optional = true }
+x509-parser = { version = "0.18", optional = true }
 mp4parse = { version = "0.17", optional = true }
 # opentdf-rs v0.11.0 - NanoTDF and KAS support
 # Source: https://github.com/arkavo-org/opentdf-rs/releases/tag/0.11.0
@@ -113,7 +114,7 @@ http = { version = "1", optional = true }
 default = []
 http3 = ["h3", "h3-quinn", "quinn", "http-body", "http"]
 fairplay = ["fairplay-wrapper"]
-c2pa_signing = ["c2pa", "mp4parse"]
+c2pa_signing = ["c2pa", "mp4parse", "x509-parser"]
 
 [dev-dependencies]
 criterion = "0.5.1"

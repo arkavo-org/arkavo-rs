@@ -250,6 +250,7 @@ export C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem
 export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert.pem
 export C2PA_REQUIRE_VALIDATION=true                # Enforce C2PA manifest validation
 export C2PA_ALLOWED_CREATORS=creator1@example.com,creator2@example.com  # Optional creator whitelist
+export C2PA_TRUST_ANCHORS_PATH=/path/to/c2pa_trust_anchors.pem  # Optional; PEM bundle /c2pa/v1/validate trusts (default: the CA certs in C2PA_SIGNING_CERT_PATH)
 
 # FairPlay Streaming Configuration (optional, requires --features fairplay)
 export FAIRPLAY_CREDENTIALS_PATH=/path/to/fps/credentials
