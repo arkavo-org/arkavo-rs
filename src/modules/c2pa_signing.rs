@@ -11,11 +11,18 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use c2pa::{Builder, HashRange, Reader, SigningAlg};
+use c2pa::assertions::{c2pa_action, Action, Actions, DigitalSourceType, SoftwareAgent};
+use c2pa::{Builder, ClaimGeneratorInfo, HashRange, Reader, SigningAlg};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::sync::Arc;
+
+/// schema.org CreativeWork assertion carrying the author (C2PA 2.x, section 18.4).
+const CREATIVE_WORK_LABEL: &str = "stds.schema-org.CreativeWork";
+
+/// Hash-binding status c2pa-rs reports when the manifest is read without its asset.
+const DATA_HASH_MISMATCH: &str = "assertion.dataHash.mismatch";
 
 // ==================== Configuration ====================
 
@@ -340,60 +347,44 @@ async fn build_c2pa_manifest(
     };
     let mime_type = "c2pa";
 
-    // Build a C2PA manifest with assertions
+    // Build a C2PA manifest from spec assertions. Claim v2 requires a c2pa.actions
+    // assertion whose first action is c2pa.created (arkavo-rs#98).
     let mut builder = Builder::new();
-
-    builder
-        .add_assertion(
-            "c2pa.created",
-            &serde_json::json!({
-                "timestamp": req.metadata.timestamp.as_ref()
-                    .unwrap_or(&chrono::Utc::now().to_rfc3339()),
-            }),
-        )
-        .map_err(|e| format!("Failed to add created assertion: {}", e))?;
-
-    builder
-        .add_assertion(
-            "c2pa.claim.creator",
-            &serde_json::json!({
-                "name": req.metadata.creator,
-            }),
-        )
-        .map_err(|e| format!("Failed to add creator assertion: {}", e))?;
-
     if !req.metadata.title.is_empty() {
-        builder
-            .add_assertion(
-                "dc.title",
-                &serde_json::json!({
-                    "title": req.metadata.title,
-                }),
-            )
-            .map_err(|e| format!("Failed to add title assertion: {}", e))?;
+        builder.definition.title = Some(req.metadata.title.clone());
     }
 
-    if let Some(ai_generated) = req.metadata.ai_generated {
-        builder
-            .add_assertion(
-                "c2pa.ai_generated",
-                &serde_json::json!({
-                    "ai_generated": ai_generated,
-                }),
-            )
-            .map_err(|e| format!("Failed to add AI assertion: {}", e))?;
-    }
-
+    let when = req
+        .metadata
+        .timestamp
+        .clone()
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let source_type = if req.metadata.ai_generated == Some(true) {
+        DigitalSourceType::TrainedAlgorithmicMedia
+    } else {
+        DigitalSourceType::DigitalCapture
+    };
+    let mut created = Action::new(c2pa_action::CREATED)
+        .set_when(when)
+        .set_source_type(source_type);
     if let Some(ref software) = req.metadata.software {
-        builder
-            .add_assertion(
-                "stds.exif",
-                &serde_json::json!({
-                    "Software": software,
-                }),
-            )
-            .map_err(|e| format!("Failed to add software assertion: {}", e))?;
+        created = created.set_software_agent(ClaimGeneratorInfo::new(software));
     }
+    builder
+        .add_action(created)
+        .map_err(|e| format!("Failed to add created action: {}", e))?;
+
+    let mut creative_work = serde_json::json!({
+        "@context": "https://schema.org",
+        "@type": "CreativeWork",
+        "author": [{ "@type": "Person", "name": req.metadata.creator }],
+    });
+    if let Some(ref description) = req.metadata.description {
+        creative_work["description"] = serde_json::json!(description);
+    }
+    builder
+        .add_assertion_json(CREATIVE_WORK_LABEL, &creative_work)
+        .map_err(|e| format!("Failed to add CreativeWork assertion: {}", e))?;
 
     // Store content hash as a custom assertion so it can be retrieved during validation
     builder
@@ -475,72 +466,59 @@ fn validate_c2pa_manifest(
     let mut ai_generated = None;
     let mut provenance_chain = Vec::new();
 
-    // Check validation status from c2pa-rs signature verification
+    // Check validation status from c2pa-rs signature verification. The server never has
+    // the asset, so the data-hash check runs against an empty stream and always mismatches;
+    // the binding is checked against org.arkavo.c2pa.content_hash below instead.
     if let Some(statuses) = reader.validation_status() {
         for status in statuses {
-            // validation_status returns errors/warnings - any entry indicates a problem
+            if status.code() == DATA_HASH_MISMATCH {
+                continue;
+            }
             errors.push(format!("C2PA validation: {}", status.code()));
         }
     }
 
     // Extract metadata from the active manifest
     if let Some(manifest) = reader.active_manifest() {
-        // Extract assertions by iterating through all manifest assertions
-        for assertion in manifest.assertions() {
-            let label = assertion.label();
+        if let Ok(work) = manifest.find_assertion::<serde_json::Value>(CREATIVE_WORK_LABEL) {
+            creator = work
+                .pointer("/author/0/name")
+                .and_then(|n| n.as_str())
+                .map(String::from);
+        }
 
-            if label == "c2pa.claim.creator" {
-                if let Ok(data) = assertion.to_assertion::<serde_json::Value>() {
-                    creator = data.get("name").and_then(|n| n.as_str()).map(String::from);
+        if let Ok(actions) = manifest.find_assertion::<Actions>(Actions::LABEL) {
+            for action in actions.actions() {
+                if action.action() == c2pa_action::CREATED {
+                    ai_generated = Some(matches!(
+                        action.source_type(),
+                        Some(DigitalSourceType::TrainedAlgorithmicMedia)
+                    ));
                 }
+                let software = match action.software_agent() {
+                    Some(SoftwareAgent::ClaimGeneratorInfo(info)) => Some(info.name.clone()),
+                    Some(SoftwareAgent::String(name)) => Some(name.clone()),
+                    None => None,
+                };
+                provenance_chain.push(ProvenanceEntry {
+                    action: action.action().trim_start_matches("c2pa.").to_string(),
+                    actor: creator.clone().unwrap_or_default(),
+                    timestamp: action.when().map(String::from),
+                    software,
+                });
             }
+        }
 
-            if label == "c2pa.ai_generated" {
-                if let Ok(data) = assertion.to_assertion::<serde_json::Value>() {
-                    ai_generated = data.get("ai_generated").and_then(|v| v.as_bool());
-                }
-            }
-
-            if label == "org.arkavo.c2pa.content_hash" {
-                if let Ok(data) = assertion.to_assertion::<serde_json::Value>() {
-                    if let Some(hash_value) = data.get("hash").and_then(|h| h.as_str()) {
-                        if hash_value != expected_hash {
-                            errors.push(format!(
-                                "Hash mismatch: expected {}, got {}",
-                                expected_hash, hash_value
-                            ));
-                        }
-                    } else {
-                        errors.push("Content hash assertion missing hash value".to_string());
-                    }
-                }
-            }
-
-            if label == "c2pa.created" {
-                if let Ok(data) = assertion.to_assertion::<serde_json::Value>() {
-                    let timestamp = data
-                        .get("timestamp")
-                        .and_then(|t| t.as_str())
-                        .map(String::from);
-                    provenance_chain.push(ProvenanceEntry {
-                        action: "created".to_string(),
-                        actor: creator.clone().unwrap_or_default(),
-                        timestamp,
-                        software: None,
-                    });
-                }
-            }
-
-            if label == "stds.exif" {
-                if let Ok(data) = assertion.to_assertion::<serde_json::Value>() {
-                    if let Some(sw) = data.get("Software").and_then(|s| s.as_str()) {
-                        // Update the last provenance entry with software info
-                        if let Some(last) = provenance_chain.last_mut() {
-                            last.software = Some(sw.to_string());
-                        }
-                    }
-                }
-            }
+        match manifest.find_assertion::<serde_json::Value>("org.arkavo.c2pa.content_hash") {
+            Ok(data) => match data.get("hash").and_then(|h| h.as_str()) {
+                Some(hash_value) if hash_value != expected_hash => errors.push(format!(
+                    "Hash mismatch: expected {}, got {}",
+                    expected_hash, hash_value
+                )),
+                Some(_) => {}
+                None => errors.push("Content hash assertion missing hash value".to_string()),
+            },
+            Err(_) => errors.push("Content hash assertion missing".to_string()),
         }
     } else {
         errors.push("No active manifest found".to_string());
@@ -880,6 +858,64 @@ mod tests {
         );
     }
 
+    /// The manifest carries spec assertions (arkavo-rs#98): a `c2pa.actions` assertion whose
+    /// first action is `c2pa.created` with a digitalSourceType, and no custom `c2pa.*` labels.
+    #[tokio::test]
+    async fn test_c2pa_manifest_uses_spec_actions() {
+        let config = make_test_config();
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+        let req = make_test_request(hash);
+
+        let (manifest_b64, _) = build_c2pa_manifest(&config, &req)
+            .await
+            .expect("Signing should succeed");
+        let manifest_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
+                .unwrap();
+
+        let reader = Reader::from_manifest_data_and_stream(
+            &manifest_bytes,
+            "video/mp4",
+            Cursor::new(Vec::<u8>::new()),
+        )
+        .expect("Manifest should parse");
+        let codes: Vec<&str> = reader
+            .validation_status()
+            .unwrap_or_default()
+            .iter()
+            .map(|s| s.code())
+            .collect();
+        assert!(
+            !codes.contains(&"assertion.action.malformed"),
+            "Actions must be well formed: {:?}",
+            codes
+        );
+
+        let manifest = reader.active_manifest().expect("Active manifest");
+        assert_eq!(manifest.title(), Some("Test Video"));
+
+        let labels: Vec<&str> = manifest.assertions().iter().map(|a| a.label()).collect();
+        for legacy in [
+            "c2pa.created",
+            "c2pa.claim.creator",
+            "c2pa.ai_generated",
+            "dc.title",
+        ] {
+            assert!(!labels.contains(&legacy), "Legacy label {legacy} emitted");
+        }
+
+        let actions: c2pa::assertions::Actions = manifest
+            .find_assertion(c2pa::assertions::Actions::LABEL)
+            .expect("c2pa.actions assertion");
+        let first = &actions.actions()[0];
+        assert_eq!(first.action(), c2pa::assertions::c2pa_action::CREATED);
+        assert_eq!(first.when(), Some("2025-10-26T12:00:00Z"));
+        assert!(matches!(
+            first.source_type(),
+            Some(c2pa::assertions::DigitalSourceType::DigitalCapture)
+        ));
+    }
+
     /// Test that invalid base64 is rejected during validation.
     #[test]
     fn test_c2pa_validate_invalid_jumbf() {
@@ -964,6 +1000,13 @@ mod tests {
         assert!(
             output_str.contains("test@example.com"),
             "c2patool output should contain our creator: {}",
+            stdout
+        );
+
+        // Claim v2 actions must be well formed (arkavo-rs#98)
+        assert!(
+            !output_str.contains("assertion.action.malformed"),
+            "c2patool reported malformed actions: {}",
             stdout
         );
 
