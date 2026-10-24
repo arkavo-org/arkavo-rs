@@ -79,9 +79,7 @@ impl C2paConfig {
                 ca_certs_from_chain(&chain)
             }
         };
-        if trust_anchors.is_empty() {
-            warn!("No C2PA trust anchors: /c2pa/v1/validate will report every manifest untrusted");
-        }
+        let trust_anchors = usable_trust_anchors(trust_anchors);
 
         let _require_validation = std::env::var("C2PA_REQUIRE_VALIDATION")
             .unwrap_or_else(|_| "false".to_string())
@@ -496,6 +494,48 @@ fn ca_certs_from_chain(chain_pem: &str) -> String {
     }
 }
 
+/// Check the anchor bundle once at startup. c2pa silently skips certificates it can't
+/// parse, so malformed blocks are dropped here with a warning; a bundle with no usable
+/// certificate becomes empty (trust nothing) instead of failing quietly per request.
+fn usable_trust_anchors(pem: String) -> String {
+    const UNTRUSTED: &str = "/c2pa/v1/validate will report every manifest untrusted";
+
+    let blocks = match pem::parse_many(&pem) {
+        Ok(blocks) => blocks,
+        Err(e) => {
+            warn!("C2PA trust anchors are not PEM ({}): {}", e, UNTRUSTED);
+            return String::new();
+        }
+    };
+    let certs: Vec<pem::Pem> = blocks
+        .into_iter()
+        .filter(|block| block.tag() == "CERTIFICATE")
+        .filter(
+            |block| match x509_parser::parse_x509_certificate(block.contents()) {
+                Ok(_) => true,
+                Err(e) => {
+                    warn!("Skipping malformed C2PA trust anchor: {}", e);
+                    false
+                }
+            },
+        )
+        .collect();
+    if certs.is_empty() {
+        warn!("No C2PA trust anchors: {}", UNTRUSTED);
+        return String::new();
+    }
+
+    let pem = pem::encode_many_config(
+        &certs,
+        pem::EncodeConfig::new().set_line_ending(pem::LineEnding::LF),
+    );
+    if let Err(e) = validation_context(&pem) {
+        warn!("{}: {}", e, UNTRUSTED);
+        return String::new();
+    }
+    pem
+}
+
 /// Reader context that trusts only `trust_anchors` for manifest signing credentials.
 fn validation_context(trust_anchors: &str) -> Result<Context, String> {
     if trust_anchors.is_empty() {
@@ -698,7 +738,7 @@ mod tests {
         C2paConfig {
             signing_key_path: key_path.to_str().unwrap().to_string(),
             signing_cert_path: cert_path.to_str().unwrap().to_string(),
-            trust_anchors: ca_certs_from_chain(&chain),
+            trust_anchors: usable_trust_anchors(ca_certs_from_chain(&chain)),
             _require_validation: false,
             allowed_creators: vec![],
         }
@@ -970,6 +1010,32 @@ mod tests {
                 result.errors
             );
         }
+    }
+
+    /// Whitespace, certificate-free or malformed bundles become "trust nothing" at startup;
+    /// a good bundle is kept (trimmed) and still validates our manifests.
+    #[test]
+    fn test_usable_trust_anchors() {
+        assert_eq!(usable_trust_anchors(" \n\t\n".to_string()), "");
+        assert_eq!(usable_trust_anchors("not a certificate\n".to_string()), "");
+        assert_eq!(
+            usable_trust_anchors(
+                "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n".to_string()
+            ),
+            ""
+        );
+
+        let config = make_test_config();
+        assert!(!config.trust_anchors.is_empty());
+        let padded = format!("\n{}\n\n", config.trust_anchors);
+        assert_eq!(usable_trust_anchors(padded), config.trust_anchors);
+
+        // A malformed block is dropped; the good certificate survives.
+        let mixed = format!(
+            "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n{}",
+            config.trust_anchors
+        );
+        assert_eq!(usable_trust_anchors(mixed), config.trust_anchors);
     }
 
     /// Only the certificates after the end-entity become anchors.
