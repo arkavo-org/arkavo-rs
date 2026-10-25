@@ -14,7 +14,10 @@ use axum::{
 use c2pa::assertions::{c2pa_action, Action, Actions, DigitalSourceType, SoftwareAgent};
 use c2pa::{Builder, ClaimGeneratorInfo, Context, HashRange, Reader, SigningAlg};
 
-use super::c2pa_kms::{DigestSigner, KmsKey, RemoteKeySigner};
+use super::c2pa_kms::{
+    connect_with_retry, DigestSigner, KmsKey, RemoteKeySigner, CONNECT_ATTEMPTS,
+    CONNECT_FIRST_RETRY,
+};
 use super::license::person_token::PersonTokenVerifier;
 use axum::http::HeaderMap;
 use log::{error, info, warn};
@@ -95,7 +98,10 @@ impl C2paConfig {
                     .ok()
                     .and_then(|blocks| blocks.into_iter().find(|b| b.tag() == "CERTIFICATE"))
                     .ok_or("C2PA signing cert chain has no certificate")?;
-                let key = KmsKey::connect(key_id, signer_cert.contents()).await?;
+                let key = connect_with_retry(CONNECT_ATTEMPTS, CONNECT_FIRST_RETRY, || {
+                    KmsKey::connect(key_id.clone(), signer_cert.contents())
+                })
+                .await?;
                 info!("C2PA claim signing uses AWS KMS");
                 SigningKey::Remote(Arc::new(key))
             }
@@ -476,18 +482,22 @@ pub async fn sign_manifest(
             )
                 .into_response()
         }
-        Err(e) => {
-            error!("C2PA signing failed: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": format!("Signing failed: {}", e),
-                    "status": "error"
-                })),
-            )
-                .into_response()
-        }
+        Err(e) => signing_failed_response(&e),
     }
+}
+
+/// Logs why signing failed and returns a generic 500. The cause can carry KMS
+/// detail (AWS account id, IAM role and session, key ARN) that callers must not see.
+fn signing_failed_response(detail: &str) -> Response {
+    error!("C2PA signing failed: {}", detail);
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({
+            "error": "Signing failed",
+            "status": "error"
+        })),
+    )
+        .into_response()
 }
 
 /// POST /c2pa/v1/validate - Validate C2PA manifest
@@ -1433,6 +1443,24 @@ mod tests {
             "Remote-key manifest should validate: {:?}",
             result.errors
         );
+    }
+
+    /// Signing errors can carry KMS detail (account id, IAM role, key ARN); the
+    /// response body must not.
+    #[tokio::test]
+    async fn test_signing_failure_response_hides_the_cause() {
+        let detail = "KMS Sign failed: AccessDeniedException: User: \
+                      arn:aws:sts::123456789012:assumed-role/arks/i-0abc is not authorized \
+                      to perform: kms:Sign on resource: arn:aws:kms:us-east-1:123456789012:key/k";
+        let response = signing_failed_response(detail);
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "Signing failed");
+        assert_eq!(json["status"], "error");
+        assert!(!String::from_utf8_lossy(&body).contains("123456789012"));
     }
 
     /// Only the certificates after the end-entity become anchors.
