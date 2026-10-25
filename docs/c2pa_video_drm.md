@@ -191,7 +191,9 @@ Validate a C2PA manifest against a content hash.
 
 ```bash
 # C2PA Signing Configuration
-export C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem
+export C2PA_SIGNER=kms                        # required: kms (production) or file (development)
+export C2PA_KMS_KEY_ID=arn:aws:kms:us-east-1:<account>:key/<id>   # with C2PA_SIGNER=kms
+export C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem        # with C2PA_SIGNER=file
 export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert.pem
 export C2PA_REQUIRE_VALIDATION=true  # Enforce C2PA in media policy
 export C2PA_ALLOWED_CREATORS=creator1@example.com,creator2@example.com
@@ -202,6 +204,32 @@ export C2PA_TRUST_ANCHORS_PATH=/path/to/c2pa_trust_anchors.pem
 export C2PA_TSA_URL=http://timestamp.digicert.com
 # Optional: PEM roots of that TSA, trusted by /c2pa/v1/validate for timestamps only.
 export C2PA_TSA_TRUST_ANCHORS_PATH=/path/to/tsa_roots.pem
+
+### Signing key in AWS KMS
+
+In production, the claim-signing key is an AWS KMS `ECC_NIST_P256` key: it is non-exportable, every signature is logged in CloudTrail, and access is scoped by IAM. No private key file sits on the server. arks computes the SHA-256 of the COSE `Sig_structure`, calls KMS `Sign` (`ECDSA_SHA_256`, message type `DIGEST`), and converts the DER signature KMS returns into the raw `r||s` form COSE ES256 needs. Each call is bounded at 5 s, within the 15 s limit for the whole sign request.
+
+- **Choosing the backend:** `C2PA_SIGNER` must be set. Use `kms` in production and `file` only for development and tests. If it's unset or has another value, C2PA signing stays disabled at startup.
+- **Startup check:** arks calls KMS `GetPublicKey` and refuses to enable signing unless the key matches the public key in the signer certificate (the first certificate in `C2PA_SIGNING_CERT_PATH`).
+- **Credentials:** the standard AWS chain (`AWS_PROFILE`, environment, SSO). The identity needs only `kms:Sign` and `kms:GetPublicKey` on this one key.
+
+**Setup.** The key is generated inside KMS. Our own CA issues the signer certificate directly from the KMS public key, so no CSR is needed:
+
+```bash
+aws kms create-key --key-spec ECC_NIST_P256 --key-usage SIGN_VERIFY \
+  --description "Arkavo C2PA claim signing"
+aws kms get-public-key --key-id <key-id> --query PublicKey --output text \
+  | base64 -d | openssl pkey -pubin -inform DER -out c2pa_kms_pub.pem
+
+printf "keyUsage=critical,digitalSignature\nbasicConstraints=CA:FALSE\nextendedKeyUsage=emailProtection\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n" > ee.cnf
+openssl x509 -new -force_pubkey c2pa_kms_pub.pem \
+  -subj "/CN=Arkavo C2PA Signer/O=Arkavo/C=US/ST=Maryland/L=Columbia" \
+  -CA c2pa_ca_cert.pem -CAkey c2pa_ca_key.pem -days 365 \
+  -set_serial 0x$(openssl rand -hex 16) -extfile ee.cnf -out c2pa_cert.pem
+cat c2pa_cert.pem c2pa_ca_cert.pem > c2pa_cert_chain.pem
+```
+
+`openssl` here is an operator tool (OpenSSL 3); it is not linked into arks. A CA on the C2PA trust list will instead want a CSR signed by the KMS key.
 
 ### Timestamps
 
@@ -284,6 +312,7 @@ rm c2pa_csr.pem c2pa_ext.cnf c2pa_ca_cert.srl
 
 **Environment variables:**
 ```bash
+export C2PA_SIGNER=file
 export C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem
 export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert_chain.pem  # chain, not single cert
 ```
@@ -430,8 +459,8 @@ This metadata is:
 
 ### Private Key Protection
 
-- C2PA signing keys must be protected with strict file permissions
-- Consider using Hardware Security Modules (HSM) or KMS for production
+- Production keeps the claim-signing key in AWS KMS (`C2PA_SIGNER=kms`, see [Signing key in AWS KMS](#signing-key-in-aws-kms)); key files are for development only
+- Keep the Arkavo C2PA CA key offline, away from the signing host
 - Rotate keys periodically
 - Never commit private keys to version control
 
@@ -628,11 +657,12 @@ The `/c2pa/v1/sign` endpoint returns a **base64-encoded JUMBF** (JPEG Universal 
 
 ### C2PA Signing Disabled
 
-**Symptom:** Server logs: `C2PA signing disabled: C2PA_SIGNING_KEY_PATH not set`
+**Symptom:** Server logs: `C2PA signing disabled: C2PA_SIGNER not set`, or a KMS error.
 
 **Solution:**
 ```bash
-export C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem
+export C2PA_SIGNER=kms C2PA_KMS_KEY_ID=<key arn>     # production
+# or, for development: export C2PA_SIGNER=file C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem
 export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert.pem
 ```
 

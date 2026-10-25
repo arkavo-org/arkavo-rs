@@ -13,6 +13,8 @@ use axum::{
 };
 use c2pa::assertions::{c2pa_action, Action, Actions, DigitalSourceType, SoftwareAgent};
 use c2pa::{Builder, ClaimGeneratorInfo, Context, HashRange, Reader, SigningAlg};
+
+use super::c2pa_kms::{DigestSigner, KmsKey, RemoteKeySigner};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
@@ -29,9 +31,17 @@ const DATA_HASH_MISMATCH: &str = "assertion.dataHash.mismatch";
 
 // ==================== Configuration ====================
 
+/// Where the claim-signing private key lives.
+pub enum SigningKey {
+    /// PEM file on disk; development and tests only (C2PA_SIGNER=file)
+    File(String),
+    /// Non-exportable key in a key service, e.g. AWS KMS (C2PA_SIGNER=kms)
+    Remote(Arc<dyn DigestSigner>),
+}
+
 /// C2PA signing configuration
 pub struct C2paConfig {
-    pub signing_key_path: String,
+    pub signing_key: SigningKey,
     pub signing_cert_path: String,
     /// PEM bundle `/c2pa/v1/validate` trusts; empty trusts nothing
     pub trust_anchors: String,
@@ -44,27 +54,17 @@ pub struct C2paConfig {
 }
 
 impl C2paConfig {
-    /// Load C2PA configuration from environment variables
-    pub fn from_env() -> Result<Self, String> {
+    /// Load C2PA configuration from environment variables. With C2PA_SIGNER=kms this
+    /// also checks that the KMS key matches the signer certificate.
+    pub async fn from_env() -> Result<Self, String> {
         use log::info;
 
         info!("Loading C2PA configuration from environment...");
-
-        let signing_key_path = std::env::var("C2PA_SIGNING_KEY_PATH")
-            .map_err(|_| "C2PA_SIGNING_KEY_PATH not set".to_string())?;
-
-        info!("C2PA_SIGNING_KEY_PATH: {}", signing_key_path);
 
         let signing_cert_path = std::env::var("C2PA_SIGNING_CERT_PATH")
             .map_err(|_| "C2PA_SIGNING_CERT_PATH not set".to_string())?;
 
         info!("C2PA_SIGNING_CERT_PATH: {}", signing_cert_path);
-
-        // Check if files exist and are readable
-        if !std::path::Path::new(&signing_key_path).exists() {
-            return Err(format!("C2PA signing key not found: {}", signing_key_path));
-        }
-        info!("C2PA signing key file exists");
 
         if !std::path::Path::new(&signing_cert_path).exists() {
             return Err(format!(
@@ -73,6 +73,39 @@ impl C2paConfig {
             ));
         }
         info!("C2PA signing cert file exists");
+
+        // The key backend must be chosen explicitly: a key file is for development and
+        // tests; production keeps the key in KMS (arkavo-rs#104).
+        let signing_key = match std::env::var("C2PA_SIGNER").as_deref() {
+            Ok("kms") => {
+                let key_id = std::env::var("C2PA_KMS_KEY_ID")
+                    .map_err(|_| "C2PA_SIGNER=kms needs C2PA_KMS_KEY_ID".to_string())?;
+                let chain = std::fs::read(&signing_cert_path)
+                    .map_err(|e| format!("Failed to read C2PA signing cert: {}", e))?;
+                let signer_cert = pem::parse_many(&chain)
+                    .ok()
+                    .and_then(|blocks| blocks.into_iter().find(|b| b.tag() == "CERTIFICATE"))
+                    .ok_or("C2PA signing cert chain has no certificate")?;
+                let key = KmsKey::connect(key_id, signer_cert.contents()).await?;
+                info!("C2PA claim signing uses AWS KMS");
+                SigningKey::Remote(Arc::new(key))
+            }
+            Ok("file") => {
+                let path = std::env::var("C2PA_SIGNING_KEY_PATH")
+                    .map_err(|_| "C2PA_SIGNER=file needs C2PA_SIGNING_KEY_PATH".to_string())?;
+                if !std::path::Path::new(&path).exists() {
+                    return Err(format!("C2PA signing key not found: {}", path));
+                }
+                warn!("C2PA claim signing uses a key file: development only");
+                SigningKey::File(path)
+            }
+            Ok(other) => return Err(format!("C2PA_SIGNER must be kms or file, not {}", other)),
+            Err(_) => {
+                return Err(
+                    "C2PA_SIGNER not set (kms for production, file for development)".to_string(),
+                )
+            }
+        };
 
         // Trust our own CA by default: the certificates after the end-entity in the
         // signing chain. C2PA_TRUST_ANCHORS_PATH replaces them, e.g. to keep a retired
@@ -137,7 +170,7 @@ impl C2paConfig {
         info!("C2PA configuration loaded successfully");
 
         Ok(Self {
-            signing_key_path,
+            signing_key,
             signing_cert_path,
             trust_anchors,
             tsa_trust_anchors,
@@ -422,10 +455,6 @@ fn build_c2pa_manifest(
     let cert_chain = std::fs::read(&config.signing_cert_path)
         .map_err(|e| format!("Failed to read certificate: {}", e))?;
 
-    let private_key = std::fs::read(&config.signing_key_path)
-        .map_err(|e| format!("Failed to read private key: {}", e))?;
-    let private_key = signing_key_pkcs8_pem(&private_key)?;
-
     // Use "c2pa" format for sign_embeddable to produce standalone JUMBF.
     // The client is responsible for embedding the JUMBF into the actual container
     // format (MP4, MOV, etc.) at the correct location.
@@ -438,13 +467,25 @@ fn build_c2pa_manifest(
 
     // Create signer using ES256 (ECDSA with P-256)
     info!("Creating C2PA signer with ES256...");
-    let signer = c2pa::create_signer::from_keys(
-        &cert_chain,
-        private_key.as_bytes(),
-        SigningAlg::Es256,
-        config.tsa_url.clone(),
-    )
-    .map_err(|e| format!("Failed to create signer: {}", e))?;
+    let signer: c2pa::BoxedSigner = match &config.signing_key {
+        SigningKey::File(path) => {
+            let private_key =
+                std::fs::read(path).map_err(|e| format!("Failed to read private key: {}", e))?;
+            let private_key = signing_key_pkcs8_pem(&private_key)?;
+            c2pa::create_signer::from_keys(
+                &cert_chain,
+                private_key.as_bytes(),
+                SigningAlg::Es256,
+                config.tsa_url.clone(),
+            )
+            .map_err(|e| format!("Failed to create signer: {}", e))?
+        }
+        SigningKey::Remote(key) => Box::new(RemoteKeySigner::new(
+            key.clone(),
+            &cert_chain,
+            config.tsa_url.clone(),
+        )?),
+    };
 
     // Build a C2PA manifest from spec assertions. Claim v2 requires a c2pa.actions
     // assertion whose first action is c2pa.created (arkavo-rs#98).
@@ -855,7 +896,7 @@ mod tests {
     ) -> C2paConfig {
         let chain = std::fs::read_to_string(&cert_path).unwrap();
         C2paConfig {
-            signing_key_path: key_path.to_str().unwrap().to_string(),
+            signing_key: SigningKey::File(key_path.to_str().unwrap().to_string()),
             signing_cert_path: cert_path.to_str().unwrap().to_string(),
             trust_anchors: usable_trust_anchors(ca_certs_from_chain(&chain), AnchorKind::Manifest),
             tsa_trust_anchors: String::new(),
@@ -1250,6 +1291,35 @@ mod tests {
         assert!(
             !without_tsa_root.valid,
             "An untrusted timestamp must not extend validity"
+        );
+    }
+
+    /// A key held by a key service signs manifests that validate like file-key ones:
+    /// the DER signature it returns is converted for COSE (arkavo-rs#104).
+    #[test]
+    fn test_c2pa_remote_key_round_trip() {
+        let (cert_path, key_path) = generate_test_certs();
+        let pem = std::fs::read_to_string(&key_path).unwrap();
+        let key = p256::ecdsa::SigningKey::from(
+            <p256::SecretKey as p256::pkcs8::DecodePrivateKey>::from_pkcs8_pem(&pem).unwrap(),
+        );
+        let mut config = config_from_certs((cert_path, key_path.clone()));
+        config.signing_key =
+            SigningKey::Remote(Arc::new(super::super::c2pa_kms::tests::LocalKey(key)));
+        std::fs::remove_file(&key_path).unwrap();
+
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+        let (manifest_b64, _) =
+            build_c2pa_manifest(&config, &make_test_request(hash)).expect("Signing should succeed");
+        let manifest_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
+                .unwrap();
+        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors, "")
+            .expect("Validation should not error");
+        assert!(
+            result.valid,
+            "Remote-key manifest should validate: {:?}",
+            result.errors
         );
     }
 

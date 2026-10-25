@@ -881,7 +881,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize C2PA signing state (optional - only if configured)
     #[cfg(feature = "c2pa_signing")]
-    let c2pa_signing_state = match c2pa_signing::C2paConfig::from_env() {
+    let c2pa_signing_state = match c2pa_signing::C2paConfig::from_env().await {
         Ok(config) => {
             info!("C2PA signing enabled");
             Some(Arc::new(c2pa_signing::C2paSigningState::new(config)))
