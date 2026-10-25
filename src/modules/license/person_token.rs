@@ -16,6 +16,10 @@ const PASSKEY_AUD: &str = "arkavo";
 #[derive(Debug, Clone)]
 pub struct Person {
     pub sub: String,
+    /// The token's `arkavo_entitlements` (attribute value FQNs), empty when absent.
+    /// Read by C2PA signing (arkavo-rs#120), which is behind the `c2pa_signing` feature.
+    #[cfg_attr(not(feature = "c2pa_signing"), allow(dead_code))]
+    pub entitlements: Vec<String>,
     /// The raw bearer, forwarded to the platform as the decision entity.
     pub token: String,
 }
@@ -93,6 +97,7 @@ impl PersonTokenVerifier {
         }
         Ok(Person {
             sub: claims.sub,
+            entitlements: claims.arkavo_entitlements.unwrap_or_default(),
             token: token.to_string(),
         })
     }
