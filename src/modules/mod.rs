@@ -1,5 +1,7 @@
 pub mod authzen;
 #[cfg(feature = "c2pa_signing")]
+pub mod c2pa_kms;
+#[cfg(feature = "c2pa_signing")]
 pub mod c2pa_signing;
 pub mod cbor_protocol;
 pub mod crypto;
