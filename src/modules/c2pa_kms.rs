@@ -4,15 +4,67 @@
 //! service to sign the SHA-256 digest, and convert the DER ECDSA signature it returns
 //! into the raw `r || s` form COSE ES256 needs. The certificate chain stays a PEM file
 //! because it is public.
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use aws_sdk_kms::primitives::Blob;
 use aws_sdk_kms::types::{MessageType, SigningAlgorithmSpec};
 use c2pa::{Signer, SigningAlg};
+use log::warn;
 use sha2::{Digest, Sha256};
 
 /// Upper bound on one key-service signing call.
-const KMS_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const KMS_CALL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Startup attempts to reach KMS before C2PA signing is left disabled.
+pub const CONNECT_ATTEMPTS: u32 = 3;
+/// Wait before the second attempt; doubles after each failure.
+pub const CONNECT_FIRST_RETRY: Duration = Duration::from_secs(1);
+
+/// Why [`KmsKey::connect`] failed.
+#[derive(Debug)]
+pub enum ConnectError {
+    /// KMS could not be reached or refused the call (network not up yet, credentials,
+    /// throttling); the same configuration may work on a later attempt.
+    Unavailable(String),
+    /// The signer certificate is unreadable or does not match the key; retrying
+    /// cannot help.
+    Invalid(String),
+}
+
+/// Runs `connect` until it succeeds, fails with [`ConnectError::Invalid`], or has
+/// failed `attempts` times with [`ConnectError::Unavailable`]. Without this, one
+/// failed call at boot leaves `/c2pa/v1/*` unmounted until arks restarts.
+pub async fn connect_with_retry<T, F, Fut>(
+    attempts: u32,
+    first_retry: Duration,
+    mut connect: F,
+) -> Result<T, String>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, ConnectError>>,
+{
+    let mut delay = first_retry;
+    for attempt in 1..=attempts {
+        match connect().await {
+            Ok(value) => return Ok(value),
+            Err(ConnectError::Invalid(e)) => return Err(e),
+            Err(ConnectError::Unavailable(e)) if attempt == attempts => {
+                return Err(format!("{} (gave up after {} attempts)", e, attempts))
+            }
+            Err(ConnectError::Unavailable(e)) => {
+                warn!(
+                    "KMS unavailable (attempt {}/{}): {}; retrying in {:?}",
+                    attempt, attempts, e, delay
+                );
+                tokio::time::sleep(delay).await;
+                delay *= 2;
+            }
+        }
+    }
+    Err("KMS connect needs at least one attempt".to_string())
+}
 
 /// A non-exportable P-256 key that signs SHA-256 digests.
 pub trait DigestSigner: Send + Sync {
@@ -101,7 +153,7 @@ pub struct KmsKey {
 impl KmsKey {
     /// Load AWS credentials from the environment and check that `key_id` is the key
     /// whose public half is in the signer certificate.
-    pub async fn connect(key_id: String, signer_cert_der: &[u8]) -> Result<Self, String> {
+    pub async fn connect(key_id: String, signer_cert_der: &[u8]) -> Result<Self, ConnectError> {
         let shared = aws_config::load_from_env().await;
         let timeouts = aws_config::timeout::TimeoutConfig::builder()
             .operation_timeout(KMS_CALL_TIMEOUT)
@@ -122,18 +174,18 @@ impl KmsKey {
             .send()
             .await
             .map_err(|e| {
-                format!(
+                ConnectError::Unavailable(format!(
                     "KMS GetPublicKey failed: {}",
                     aws_sdk_kms::error::DisplayErrorContext(e)
-                )
+                ))
             })?;
-        let spki = public_key
-            .public_key()
-            .ok_or("KMS GetPublicKey returned no public key")?;
-        if spki.as_ref() != cert_spki(signer_cert_der)? {
-            return Err(
+        let spki = public_key.public_key().ok_or_else(|| {
+            ConnectError::Unavailable("KMS GetPublicKey returned no public key".to_string())
+        })?;
+        if spki.as_ref() != cert_spki(signer_cert_der).map_err(ConnectError::Invalid)? {
+            return Err(ConnectError::Invalid(
                 "The KMS key does not match the signer certificate's public key".to_string(),
-            );
+            ));
         }
         Ok(key)
     }
@@ -219,6 +271,49 @@ pub mod tests {
             RemoteKeySigner::new(key, pem.as_bytes(), Some("http://tsa".to_string())).unwrap();
         assert_eq!(stamped.reserve_size() - plain.reserve_size(), 10000);
         assert_eq!(stamped.time_authority_url().as_deref(), Some("http://tsa"));
+    }
+
+    /// A KMS that is briefly unreachable at startup (network not up yet, throttling)
+    /// still ends up connected.
+    #[tokio::test]
+    async fn test_connect_retries_until_kms_is_reachable() {
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        let key = connect_with_retry(3, std::time::Duration::ZERO, || async {
+            match calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                0 | 1 => Err(ConnectError::Unavailable("dispatch failure".to_string())),
+                _ => Ok("key"),
+            }
+        })
+        .await;
+        assert_eq!(key, Ok("key"));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    /// A key that does not match the certificate fails at once: retrying cannot help.
+    #[tokio::test]
+    async fn test_connect_does_not_retry_a_mismatched_key() {
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        let key: Result<(), String> = connect_with_retry(3, std::time::Duration::ZERO, || async {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(ConnectError::Invalid("key mismatch".to_string()))
+        })
+        .await;
+        assert_eq!(key, Err("key mismatch".to_string()));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_connect_gives_up_after_the_last_attempt() {
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        let key: Result<(), String> = connect_with_retry(3, std::time::Duration::ZERO, || async {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(ConnectError::Unavailable("timed out".to_string()))
+        })
+        .await;
+        let error = key.unwrap_err();
+        assert!(error.contains("timed out"), "{}", error);
+        assert!(error.contains("3 attempts"), "{}", error);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
     }
 
     #[test]

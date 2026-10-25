@@ -14,7 +14,10 @@ use axum::{
 use c2pa::assertions::{c2pa_action, Action, Actions, DigitalSourceType, SoftwareAgent};
 use c2pa::{Builder, ClaimGeneratorInfo, Context, HashRange, Reader, SigningAlg};
 
-use super::c2pa_kms::{DigestSigner, KmsKey, RemoteKeySigner};
+use super::c2pa_kms::{
+    connect_with_retry, DigestSigner, KmsKey, RemoteKeySigner, CONNECT_ATTEMPTS,
+    CONNECT_FIRST_RETRY,
+};
 use super::license::person_token::PersonTokenVerifier;
 use axum::http::HeaderMap;
 use log::{error, info, warn};
@@ -95,7 +98,10 @@ impl C2paConfig {
                     .ok()
                     .and_then(|blocks| blocks.into_iter().find(|b| b.tag() == "CERTIFICATE"))
                     .ok_or("C2PA signing cert chain has no certificate")?;
-                let key = KmsKey::connect(key_id, signer_cert.contents()).await?;
+                let key = connect_with_retry(CONNECT_ATTEMPTS, CONNECT_FIRST_RETRY, || {
+                    KmsKey::connect(key_id.clone(), signer_cert.contents())
+                })
+                .await?;
                 info!("C2PA claim signing uses AWS KMS");
                 SigningKey::Remote(Arc::new(key))
             }

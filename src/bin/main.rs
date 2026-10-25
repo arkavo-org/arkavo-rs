@@ -890,7 +890,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )))
         }
         Err(e) => {
-            info!("C2PA signing disabled: {}", e);
+            // C2PA_SIGNER set means the operator wants C2PA, so its failure is an error,
+            // not routine startup noise: /c2pa/v1/* stays unmounted until restart.
+            if std::env::var_os("C2PA_SIGNER").is_some() {
+                error!("C2PA signing disabled: {}", e);
+            } else {
+                info!("C2PA signing disabled: {}", e);
+            }
             None
         }
     };
