@@ -303,7 +303,7 @@ pub struct C2paValidateResponse {
 
 pub struct C2paSigningState {
     pub config: C2paConfig,
-    /// identity.arkavo.net passkey tokens; only people may sign (GHSA-5rfq-r96w-c7mf)
+    /// identity.arkavo.net passkey tokens; only people may sign (arkavo-rs#109)
     pub person_tokens: Arc<PersonTokenVerifier>,
     /// Recent sign requests per token subject, for the hourly limit
     sign_requests: std::sync::Mutex<std::collections::HashMap<String, Vec<std::time::Instant>>>,
@@ -361,7 +361,7 @@ fn sign_error(status: StatusCode, error: &str, extra: serde_json::Value) -> Resp
 /// POST /c2pa/v1/sign - Sign C2PA manifest with pre-computed hash
 ///
 /// Only a signed-in person may sign, and the manifest names them as the author
-/// (GHSA-5rfq-r96w-c7mf). The request must exclude exactly one range, the C2PA
+/// (arkavo-rs#109). The request must exclude exactly one range, the C2PA
 /// `uuid` box the manifest is embedded in, so no media bytes can be left unhashed.
 pub async fn sign_manifest(
     State(state): State<Arc<C2paSigningState>>,
@@ -1750,7 +1750,7 @@ mod tests {
     }
 }
 
-/// `/c2pa/v1/sign` is not a signing oracle (GHSA-5rfq-r96w-c7mf).
+/// `/c2pa/v1/sign` is not a signing oracle (arkavo-rs#109).
 #[cfg(test)]
 mod sign_endpoint_tests {
     use super::*;

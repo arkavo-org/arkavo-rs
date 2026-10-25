@@ -105,7 +105,15 @@ This document describes the integration of C2PA (Coalition for Content Provenanc
 
 Sign a C2PA manifest with a pre-computed content hash.
 
-**Who may sign:** only a signed-in person. The request needs `Authorization: Bearer <passkey CWT>`, the identity.arkavo.net token, verified the same way as `/media/v1`: `aud` must contain `arkavo` and `MEDIA_PLATFORM_AUDIENCE`, the `sub` must be person-shaped, and agent tokens are refused. A missing or invalid token gets 401, and a non-person token 403. The manifest's author (`stds.schema-org.CreativeWork`) is the token's `sub`; `metadata.creator` is ignored. `C2PA_ALLOWED_CREATORS`, if set, filters on `sub`. Each subject may make `C2PA_SIGN_LIMIT_PER_HOUR` requests per hour (default 120); over the limit gets 429 with `Retry-After`. Every request is logged with its `sub`, content hash and exclusion range. These rules close GHSA-5rfq-r96w-c7mf.
+**Who may sign:** only a signed-in person. The request needs `Authorization: Bearer <passkey CWT>`, the identity.arkavo.net token, verified the same way as `/media/v1`: `aud` must contain `arkavo` and `MEDIA_PLATFORM_AUDIENCE`, the `sub` must be person-shaped, and agent tokens are refused. A missing or invalid token gets 401, and a non-person token 403. The manifest's creator (`org.arkavo.recording`) is the token's `sub`; `metadata.creator` is ignored. `C2PA_ALLOWED_CREATORS`, if set, filters on `sub`. Each subject may make `C2PA_SIGN_LIMIT_PER_HOUR` requests per hour (default 120); over the limit gets 429 with `Retry-After`. Every request is logged with its `sub`, content hash and exclusion range.
+
+**Manifest contents:** the claim follows C2PA spec 2.2, the version c2pa-rs 0.91 generates, and passes the C2PA Conformance Program's spec 2.2 and integrity rubrics.
+- **Generator:** `claim_generator_info` names the product, "Arkavo Creator", with `specVersion` `2.2.0`. It includes the product's version when `metadata.software` is `Arkavo Creator <version>`, and the signing service as `org.arkavo.signer`.
+- **Created assertions** (attributed to the signer):
+  - `c2pa.actions.v2`: a `c2pa.created` action, with `allActionsIncluded` from `metadata.all_actions_included`. It defaults to false; send true only when that action is the asset's whole history.
+  - `org.arkavo.recording`: the creator and the optional description.
+  - The `c2pa.hash.data` hard binding.
+- **Instance ID:** each manifest gets its own `xmp:iid:` instanceID.
 
 **Exclusion rule:** `exclusion_ranges` must be exactly one range with `box_type: "uuid"`, and its length must equal the C2PA manifest box the client will embed: 45 bytes of box header (size, type, UUID, version/flags, `manifest\0`, Merkle offset) plus the JUMBF length. That way only the manifest box itself is unhashed, and no media bytes are.
 
@@ -129,7 +137,8 @@ The server signs, then checks the length. On a mismatch it discards the manifest
     "description": "Optional description",
     "timestamp": "2025-10-26T00:00:00Z", // ISO 8601
     "ai_generated": false,
-    "software": "Arkavo Client v1.0"
+    "software": "Arkavo Creator 1.4.2",
+    "all_actions_included": false // optional; true only if the actions are the whole history
   }
 }
 ```
@@ -189,7 +198,7 @@ Validate a C2PA manifest against a content hash.
 }
 ```
 
-`signed_at` is the timestamp's signing time, and is present only when the manifest has one (see [Timestamps](#timestamps)). `creator` comes from the `stds.schema-org.CreativeWork` author, and `ai_generated` and `provenance_chain` come from the `c2pa.actions` assertion. The server never has the asset, so it skips `assertion.dataHash.mismatch` and compares `content_hash` with `org.arkavo.c2pa.content_hash` instead. Only the configured trust anchors are trusted (see `C2PA_TRUST_ANCHORS_PATH`). By default that is the CA in our own signing chain, so a manifest arks signed returns `valid: true`. A manifest signed under any other CA, including CAs on the public C2PA trust list, returns `valid: false` with `signingCredential.untrusted`.
+`signed_at` is the timestamp's signing time, and is present only when the manifest has one (see [Timestamps](#timestamps)). `creator` comes from the `org.arkavo.recording` assertion, and `ai_generated` and `provenance_chain` come from the `c2pa.actions` assertion. The server never has the asset, so it skips `assertion.dataHash.mismatch` and compares `content_hash` with `org.arkavo.c2pa.content_hash` instead. Only the configured trust anchors are trusted (see `C2PA_TRUST_ANCHORS_PATH`). By default that is the CA in our own signing chain, so a manifest arks signed returns `valid: true`. A manifest signed under any other CA, including CAs on the public C2PA trust list, returns `valid: false` with `signingCredential.untrusted`.
 
 ## Configuration
 
@@ -207,9 +216,11 @@ export C2PA_ALLOWED_CREATORS=arkavo:<uuid-1>,arkavo:<uuid-2>  # token subjects (
 # end-entity in C2PA_SIGNING_CERT_PATH (our own CA). List a retired CA here during a rotation.
 export C2PA_TRUST_ANCHORS_PATH=/path/to/c2pa_trust_anchors.pem
 # Optional: RFC 3161 timestamp authority (see "Timestamps" below). Unset signs without one.
-export C2PA_TSA_URL=http://timestamp.digicert.com
-# Optional: PEM roots of that TSA, trusted by /c2pa/v1/validate for timestamps only.
-export C2PA_TSA_TRUST_ANCHORS_PATH=/path/to/tsa_roots.pem
+# Use a TSA on the C2PA TSA trust list, or validators report timeStamp.untrusted.
+export C2PA_TSA_URL=https://ts-c2pa.ssl.com
+# Optional: PEM roots of that TSA, trusted by /c2pa/v1/validate for timestamps only:
+# the C2PA TSA trust list (conformance-public trust-list/C2PA-TSA-TRUST-LIST.pem).
+export C2PA_TSA_TRUST_ANCHORS_PATH=/path/to/C2PA-TSA-TRUST-LIST.pem
 
 # Existing Media DRM Configuration
 export MAX_CONCURRENT_STREAMS=5
@@ -260,10 +271,9 @@ Without a trusted timestamp, a verifier checks the signer certificate against th
   | Timestamp, TSA root not trusted | `valid: false`, `signingCredential.untrusted` + `signingCredential.expired` |
 
 - `C2PA_TSA_TRUST_ANCHORS_PATH` is a trust list separate from the manifest anchors, so a TSA root never vouches for a signing certificate.
-- Choosing a TSA:
-  - DigiCert's public TSA (`http://timestamp.digicert.com`) is free, needs no account, and chains to "DigiCert Trusted Root G4". That root is **not** on the C2PA TSA trust list, so `c2patool` and other C2PA validators report `timeStamp.untrusted` unless they are given the G4 root as a TSA anchor.
-  - TSAs on the [C2PA TSA trust list](https://github.com/c2pa-org/conformance-public/tree/main/trust-list) need an account. For example, SSL.com's `https://ts-c2pa.ssl.com` needs an API key, which arks can't send yet.
-  - Our signer chains to a private CA, so third-party verifiers already need the Arkavo CA as an anchor. A C2PA-listed TSA becomes worthwhile once the signer certificate also comes from a C2PA-listed CA.
+- Choosing a TSA: use one on the [C2PA TSA trust list](https://github.com/c2pa-org/conformance-public/tree/main/trust-list). The C2PA conformance checks need a trusted timestamp, and so does a manifest outliving its signer certificate for third-party verifiers.
+  - SSL.com's `https://ts-c2pa.ssl.com` chains to "SSL.com C2PA ECC Root CA 2025", which is on the list. On 2026-10-25 it issued timestamps without an API key, and manifests signed with it passed the conformance rubrics with `timeStamp.trusted`. Its plans meter timestamps (the free C2PA tier lists 2,500 a year), so confirm the account's terms before production uses it.
+  - DigiCert's public TSA (`http://timestamp.digicert.com`) is free and needs no account, but it chains to "DigiCert Trusted Root G4", which is **not** on the C2PA TSA trust list. `c2patool` and other C2PA validators report `timeStamp.untrusted` for it. DigiCert's C2PA TSA hierarchy is on the list, but has no public endpoint.
 - Latency: one DigiCert timestamp added about 270 ms to signing (measured 2026-10-24).
 
 ### Generating C2PA Signing Certificates
