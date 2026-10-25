@@ -61,7 +61,6 @@ http-body-util = "0.1"
 base64 = "0.22"
 chrono = "0.4"
 aws-config = { version = "1.5.13", features = ["behavior-version-latest"] }
-aws-sdk-s3 = "1.68.0"
 aws-sdk-dynamodb = "1"
 unicode-segmentation = "1"
 uuid = { version = "1.11", features = ["v4"] }

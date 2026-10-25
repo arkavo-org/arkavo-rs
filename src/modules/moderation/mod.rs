@@ -24,7 +24,7 @@ pub struct Settings {
     pub subject_prefix: String,
     /// DynamoDB endpoint override, e.g. a DynamoDB Local container. When
     /// set, the moderation client uses it with static placeholder
-    /// credentials, leaving the process's AWS credentials (S3) untouched.
+    /// credentials, leaving the process's AWS credentials (KMS) untouched.
     pub dynamodb_endpoint: Option<String>,
 }
 

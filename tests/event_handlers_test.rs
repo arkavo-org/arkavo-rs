@@ -9,7 +9,6 @@ struct ServerSettings {
     nats_url: String,
     nats_subject: String,
     redis_url: String,
-    s3_bucket: String,
 }
 
 #[derive(Debug)]
@@ -40,11 +39,9 @@ async fn test_minimal_event_handling() {
         nats_url: String::from("nats://localhost:4222"),
         nats_subject: String::from("test.subject"),
         redis_url: String::from("redis://localhost:6379"),
-        s3_bucket: String::from("test-bucket"),
     };
 
     // Validate test setup
     assert_eq!(settings.port, 8080);
-    assert_eq!(settings.s3_bucket, "test-bucket");
     assert_eq!(MessageType::Event as u8, 0x06);
 }
