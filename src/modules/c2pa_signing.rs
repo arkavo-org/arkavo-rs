@@ -612,6 +612,9 @@ fn build_c2pa_manifest(
     // Build a C2PA manifest from spec assertions. Claim v2 requires a c2pa.actions
     // assertion whose first action is c2pa.created (arkavo-rs#98).
     let mut builder = Builder::from_context(Context::new().with_signer(signer));
+    // The claim schema requires a non-empty instanceID, and the server never has the
+    // asset to take one from, so mint one per signed version (arkavo-rs#114).
+    builder.definition.instance_id = format!("xmp:iid:{}", uuid::Uuid::new_v4());
     if !req.metadata.title.is_empty() {
         builder.definition.title = Some(req.metadata.title.clone());
     }
@@ -1489,6 +1492,33 @@ mod tests {
         assert_eq!(*from_sec1, *pkcs8);
         assert_eq!(*from_pkcs8, *pkcs8);
         assert!(signing_key_pkcs8_pem(b"not a key").is_err());
+    }
+
+    /// Every signed manifest carries its own non-empty `xmp:iid:` instanceID (arkavo-rs#114).
+    #[test]
+    fn test_c2pa_instance_id_is_unique_and_non_empty() {
+        let config = make_test_config();
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+        let instance_id = || {
+            let (manifest_b64, _) = build_c2pa_manifest(&config, &make_test_request(hash))
+                .expect("Signing should succeed");
+            let bytes =
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
+                    .unwrap();
+            let result = validate_c2pa_manifest(&bytes, hash, &config.trust_anchors, "").unwrap();
+            assert!(result.valid, "{:?}", result.errors);
+            let reader = Reader::from_context(Context::new())
+                .with_manifest_data_and_stream(&bytes, "video/mp4", Cursor::new(Vec::<u8>::new()))
+                .unwrap();
+            reader.active_manifest().unwrap().instance_id().to_string()
+        };
+        let (first, second) = (instance_id(), instance_id());
+        assert!(
+            first.starts_with("xmp:iid:") && first.len() > "xmp:iid:".len(),
+            "{}",
+            first
+        );
+        assert_ne!(first, second);
     }
 
     /// Test that invalid base64 is rejected during validation.
