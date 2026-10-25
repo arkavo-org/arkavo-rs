@@ -287,6 +287,11 @@ pub struct C2paValidateRequest {
     pub manifest: String,
     /// Content hash to validate against (hex-encoded)
     pub content_hash: String,
+    /// Where the client found the manifest box. When given, it must be the exclusion the
+    /// manifest was signed with: a box that grew or moved leaves the hash of the other
+    /// bytes unchanged while the media offsets point elsewhere.
+    #[serde(default)]
+    pub exclusion_ranges: Option<Vec<ExclusionRange>>,
 }
 
 /// Provenance chain entry
@@ -569,6 +574,7 @@ pub async fn validate_manifest(
         &req.content_hash,
         &state.config.trust_anchors,
         &state.config.tsa_trust_anchors,
+        req.exclusion_ranges.as_deref(),
     ) {
         Ok(response) => {
             if response.valid {
@@ -902,6 +908,7 @@ fn validate_c2pa_manifest(
     expected_hash: &str,
     trust_anchors: &str,
     tsa_trust_anchors: &str,
+    exclusion_ranges: Option<&[ExclusionRange]>,
 ) -> Result<C2paValidateResponse, String> {
     // Use Reader to parse JUMBF and verify signature chain.
     // We provide an empty stream since the actual asset is on the client side;
@@ -966,6 +973,38 @@ fn validate_c2pa_manifest(
                     timestamp: action.when().map(String::from),
                     software,
                 });
+            }
+        }
+
+        // The exclusion the manifest was signed with, from arks' own content-hash
+        // assertion: it holds the same ranges as c2pa.hash.data, which the Reader's
+        // manifest view leaves out.
+        if let Some(observed) = exclusion_ranges {
+            let mut observed: Vec<(u64, u64)> = observed.iter().map(|r| (r.start, r.end)).collect();
+            observed.sort_unstable();
+            // arks always signs exactly one range, so a missing, malformed or empty one
+            // means the signed exclusion is unknown, and nothing matches it
+            let signed: Option<Vec<(u64, u64)>> = manifest
+                .find_assertion::<serde_json::Value>("org.arkavo.c2pa.content_hash")
+                .ok()
+                .and_then(|data| data.get("exclusion_ranges").cloned())
+                .and_then(|ranges| serde_json::from_value::<Vec<ExclusionRange>>(ranges).ok())
+                .filter(|ranges| !ranges.is_empty())
+                .map(|ranges| {
+                    let mut signed: Vec<(u64, u64)> =
+                        ranges.iter().map(|r| (r.start, r.end)).collect();
+                    signed.sort_unstable();
+                    signed
+                });
+            match signed {
+                Some(signed) if signed == observed => {}
+                Some(signed) => errors.push(format!(
+                    "Exclusion mismatch: the manifest box is at {:?}, signed at {:?}",
+                    observed, signed
+                )),
+                None => errors.push(
+                    "Exclusion mismatch: the manifest does not say where it was signed".to_string(),
+                ),
             }
         }
 
@@ -1266,9 +1305,91 @@ mod tests {
         let bytes = builder.sign_embeddable("c2pa").unwrap();
 
         let result =
-            validate_c2pa_manifest(&bytes, RUBRIC_HASH, &config.trust_anchors, "").unwrap();
+            validate_c2pa_manifest(&bytes, RUBRIC_HASH, &config.trust_anchors, "", None).unwrap();
         assert!(result.valid, "{:?}", result.errors);
         assert_eq!(result.creator.as_deref(), Some("arkavo:older-subject"));
+
+        // Its content-hash assertion has no exclusion_ranges, so the signed exclusion is
+        // unknown: no client-supplied range, not even an empty one, can match it.
+        let range = ExclusionRange {
+            start: 100,
+            end: 500,
+            box_type: Some("uuid".into()),
+        };
+        for observed in [vec![], vec![range]] {
+            let result = validate_c2pa_manifest(
+                &bytes,
+                RUBRIC_HASH,
+                &config.trust_anchors,
+                "",
+                Some(&observed),
+            )
+            .unwrap();
+            assert!(!result.valid, "{} range(s)", observed.len());
+            assert!(
+                result
+                    .errors
+                    .iter()
+                    .any(|e| e.starts_with("Exclusion mismatch")),
+                "{:?}",
+                result.errors
+            );
+        }
+    }
+
+    /// The box a client found must be the exclusion the manifest was signed with: a box
+    /// that grew or moved leaves the hash of the other bytes unchanged while the media
+    /// offsets point elsewhere.
+    #[test]
+    fn test_c2pa_validate_checks_the_signed_exclusion() {
+        let config = make_test_config();
+        let (manifest_b64, _) = build_c2pa_manifest(&config, &make_test_request(RUBRIC_HASH))
+            .expect("Signing should succeed");
+        let bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
+                .unwrap();
+        let validate = |ranges: Option<Vec<ExclusionRange>>| {
+            validate_c2pa_manifest(
+                &bytes,
+                RUBRIC_HASH,
+                &config.trust_anchors,
+                "",
+                ranges.as_deref(),
+            )
+            .unwrap()
+        };
+        let range = |start, end| ExclusionRange {
+            start,
+            end,
+            box_type: Some("uuid".into()),
+        };
+
+        // make_test_request signs the exclusion 100..500
+        let matching = validate(Some(vec![range(100, 500)]));
+        assert!(matching.valid, "{:?}", matching.errors);
+        assert!(
+            validate(None).valid,
+            "clients that send no range are checked as before"
+        );
+        for observed in [vec![range(100, 516)], vec![range(116, 516)], vec![]] {
+            let result = validate(Some(observed.clone()));
+            assert!(
+                !result.valid,
+                "{:?}",
+                observed
+                    .iter()
+                    .map(|r| (r.start, r.end))
+                    .collect::<Vec<_>>()
+            );
+            assert!(
+                result
+                    .errors
+                    .iter()
+                    .any(|e| e.starts_with("Exclusion mismatch")),
+                "{:?}",
+                result.errors
+            );
+        }
     }
 
     /// The claim generator is the product, with the spec version the claim follows
@@ -1332,7 +1453,7 @@ mod tests {
         assert_eq!(manifest_hash, computed_hash, "Manifest hash should match");
 
         // Validate using c2pa-rs Reader
-        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors, "")
+        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors, "", None)
             .expect("Validation should not error");
 
         // Check metadata was preserved
@@ -1371,8 +1492,9 @@ mod tests {
 
         // Validate with a different hash
         let wrong_hash = "0000000000000000000000000000000000000000000000000000000000000000";
-        let result = validate_c2pa_manifest(&manifest_bytes, wrong_hash, &config.trust_anchors, "")
-            .expect("Validation should not error");
+        let result =
+            validate_c2pa_manifest(&manifest_bytes, wrong_hash, &config.trust_anchors, "", None)
+                .expect("Validation should not error");
 
         assert!(
             result.errors.iter().any(|e| e.contains("Hash mismatch")),
@@ -1421,7 +1543,7 @@ mod tests {
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
 
-        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors, "")
+        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors, "", None)
             .expect("Validation should not error");
 
         assert_eq!(
@@ -1500,7 +1622,7 @@ mod tests {
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
 
-        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors, "")
+        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors, "", None)
             .expect("Validation should not error");
         assert!(
             result.valid,
@@ -1524,7 +1646,7 @@ mod tests {
                 .unwrap();
 
         for anchors in [ours.trust_anchors.as_str(), ""] {
-            let result = validate_c2pa_manifest(&manifest_bytes, hash, anchors, "")
+            let result = validate_c2pa_manifest(&manifest_bytes, hash, anchors, "", None)
                 .expect("Validation should not error");
             assert!(!result.valid);
             assert!(
@@ -1601,7 +1723,7 @@ mod tests {
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
-        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors, "")
+        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors, "", None)
             .expect("Validation should not error");
         assert_eq!(result.signed_at, None);
     }
@@ -1644,7 +1766,7 @@ mod tests {
         }
 
         let check = |bytes: &[u8], tsa: &str| {
-            validate_c2pa_manifest(bytes, hash, &config.trust_anchors, tsa)
+            validate_c2pa_manifest(bytes, hash, &config.trust_anchors, tsa, None)
                 .expect("Validation should not error")
         };
         let expired = check(&untimestamped, &tsa_anchors);
@@ -1689,7 +1811,7 @@ mod tests {
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
-        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors, "")
+        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors, "", None)
             .expect("Validation should not error");
         assert!(
             result.valid,
@@ -1755,7 +1877,8 @@ mod tests {
             let bytes =
                 base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                     .unwrap();
-            let result = validate_c2pa_manifest(&bytes, hash, &config.trust_anchors, "").unwrap();
+            let result =
+                validate_c2pa_manifest(&bytes, hash, &config.trust_anchors, "", None).unwrap();
             assert!(result.valid, "{:?}", result.errors);
             let reader = Reader::from_context(Context::new())
                 .with_manifest_data_and_stream(&bytes, "video/mp4", Cursor::new(Vec::<u8>::new()))
@@ -1778,7 +1901,7 @@ mod tests {
         let invalid_bytes = b"this is not valid JUMBF data at all";
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
 
-        let result = validate_c2pa_manifest(invalid_bytes, hash, "", "");
+        let result = validate_c2pa_manifest(invalid_bytes, hash, "", "", None);
         assert!(result.is_err(), "Should fail to parse invalid JUMBF");
     }
 
@@ -2062,7 +2185,8 @@ mod sign_endpoint_tests {
         )
         .unwrap();
         assert_eq!(bytes.len() as u64 + MANIFEST_BOX_OVERHEAD, len);
-        let result = validate_c2pa_manifest(&bytes, HASH, &state.config.trust_anchors, "").unwrap();
+        let result =
+            validate_c2pa_manifest(&bytes, HASH, &state.config.trust_anchors, "", None).unwrap();
         assert!(result.valid, "{:?}", result.errors);
         assert_eq!(result.creator.as_deref(), Some(SUB));
     }
