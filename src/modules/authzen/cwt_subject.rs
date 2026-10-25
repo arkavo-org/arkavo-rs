@@ -157,10 +157,17 @@ fn is_slug(s: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// True for exactly `campaign/value/<digits>` and
-/// `campaign-tier/value/<digits>_<[a-z0-9-]+>` under the Patreon attr namespace.
-/// Expects an already ASCII-lowercased FQN.
+/// The creator-publishing entitlement, granted by the platform's `identity-core`
+/// source (arkavo-rs#95). Patreon and App Store Creator Membership both mint it.
+const PUBLISH_ENTITLEMENT: &str = "https://patreon.arkavo.com/attr/arkavo-creator/value/publish";
+
+/// True for exactly `campaign/value/<digits>`,
+/// `campaign-tier/value/<digits>_<[a-z0-9-]+>` and `arkavo-creator/value/publish`
+/// under the Patreon attr namespace. Expects an already ASCII-lowercased FQN.
 fn is_patreon_entitlement(fqn: &str) -> bool {
+    if fqn == PUBLISH_ENTITLEMENT {
+        return true;
+    }
     let Some(rest) = fqn.strip_prefix(PATREON_ATTR_PREFIX) else {
         return false;
     };
@@ -176,7 +183,8 @@ fn is_patreon_entitlement(fqn: &str) -> bool {
 }
 
 /// Filter PEP-supplied `arkavo_entitlements` down to the Patreon definitions the
-/// platform's composite `patreon` source owns. Lowercases, de-duplicates (input
+/// platform's composite `patreon` source owns, plus the publish entitlement its
+/// `identity-core` source owns. Lowercases, de-duplicates (input
 /// order), and returns `Ok(None)` when the input is not an array or nothing
 /// survives. More than `MAX_FORWARDED_ENTITLEMENTS` survivors is `Err(count)`
 /// (never truncates); the caller owns logging so one subject yields one line.
