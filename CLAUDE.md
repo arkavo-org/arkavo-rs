@@ -251,7 +251,7 @@ export C2PA_KMS_KEY_ID=arn:aws:kms:...                 # With C2PA_SIGNER=kms; m
 export C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem  # With C2PA_SIGNER=file
 export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert.pem
 export C2PA_REQUIRE_VALIDATION=true                # Enforce C2PA manifest validation
-export C2PA_ALLOWED_CREATORS=creator1@example.com,creator2@example.com  # Optional creator whitelist
+export C2PA_ALLOWED_CREATORS=arkavo:<uuid-1>,arkavo:<uuid-2>  # Optional; allowlist of passkey token subjects (sub), not emails
 export C2PA_TRUST_ANCHORS_PATH=/path/to/c2pa_trust_anchors.pem  # Optional; PEM bundle /c2pa/v1/validate trusts (default: the CA certs in C2PA_SIGNING_CERT_PATH)
 export C2PA_SIGN_LIMIT_PER_HOUR=120                     # /c2pa/v1/sign per token subject (needs a passkey CWT; one uuid exclusion = manifest box)
 export C2PA_TSA_URL=http://timestamp.digicert.com      # Optional RFC 3161 TSA; when set, a TSA failure fails the sign request (15 s bound)

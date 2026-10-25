@@ -202,7 +202,7 @@ export C2PA_KMS_KEY_ID=arn:aws:kms:us-east-1:<account>:key/<id>   # with C2PA_SI
 export C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem        # with C2PA_SIGNER=file
 export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert.pem
 export C2PA_REQUIRE_VALIDATION=true  # Enforce C2PA in media policy
-export C2PA_ALLOWED_CREATORS=creator1@example.com,creator2@example.com
+export C2PA_ALLOWED_CREATORS=arkavo:<uuid-1>,arkavo:<uuid-2>  # token subjects (sub), not emails
 # Optional: PEM bundle /c2pa/v1/validate trusts. Default: the certificates after the
 # end-entity in C2PA_SIGNING_CERT_PATH (our own CA). List a retired CA here during a rotation.
 export C2PA_TRUST_ANCHORS_PATH=/path/to/c2pa_trust_anchors.pem
@@ -474,7 +474,7 @@ This metadata is:
 
 ```bash
 # Restrict signing to trusted creators
-export C2PA_ALLOWED_CREATORS=verified1@example.com,verified2@example.com
+export C2PA_ALLOWED_CREATORS=arkavo:<uuid-1>,arkavo:<uuid-2>  # token subjects (sub)
 ```
 
 Benefits:
@@ -677,7 +677,7 @@ export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert.pem
 **Symptom:** API returns: `{"error": "Creator not authorized", "status": "denied"}`
 
 **Solution:**
-- Add creator to allowlist: `export C2PA_ALLOWED_CREATORS=creator@example.com`
+- Add the creator's token subject to the allowlist: `export C2PA_ALLOWED_CREATORS=arkavo:<uuid>`
 - Or remove allowlist to allow all creators (development only)
 
 ### C2PA Signing Fails: "the certificate was self-signed"

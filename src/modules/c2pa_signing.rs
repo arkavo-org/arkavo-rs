@@ -392,6 +392,17 @@ pub async fn sign_manifest(
         }
     };
 
+    // Validate hash format (should be hex-encoded SHA-256) before it counts against
+    // the subject's quota.
+    if req.content_hash.len() != 64 || !req.content_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        error!("Invalid content hash format: {}", req.content_hash);
+        return sign_error(
+            StatusCode::BAD_REQUEST,
+            "Invalid content hash format (expected 64 hex chars)",
+            serde_json::json!({}),
+        );
+    }
+
     if let Err(retry_after) = state.admit(&person.sub) {
         warn!("C2PA signing rate limited for {}", person.sub);
         let mut response = sign_error(
@@ -410,19 +421,6 @@ pub async fn sign_manifest(
         "C2PA sign request: sub={} content_hash={} exclusion={}..{} format={:?}",
         person.sub, req.content_hash, exclusion.start, exclusion.end, req.container_format
     );
-
-    // Validate hash format (should be hex-encoded SHA-256)
-    if req.content_hash.len() != 64 || !req.content_hash.chars().all(|c| c.is_ascii_hexdigit()) {
-        error!("Invalid content hash format: {}", req.content_hash);
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "Invalid content hash format (expected 64 hex chars)",
-                "status": "error"
-            })),
-        )
-            .into_response();
-    }
 
     // Signing is blocking: with a TSA it waits on an HTTP round trip, and c2pa's HTTP
     // client has no timeout of its own, so bound the request here.
@@ -1740,6 +1738,21 @@ mod sign_endpoint_tests {
         let result = validate_c2pa_manifest(&bytes, HASH, &state.config.trust_anchors, "").unwrap();
         assert!(result.valid, "{:?}", result.errors);
         assert_eq!(result.creator.as_deref(), Some(SUB));
+    }
+
+    #[tokio::test]
+    async fn test_sign_bad_hash_uses_no_quota() {
+        let state = state(1);
+        let mut bad = body(uuid_range(0, 1));
+        bad["content_hash"] = serde_json::json!("not-hex");
+        let (status, _, _) = sign(&state, Some(&token(SUB)), bad).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _, _) = sign(&state, Some(&token(SUB)), body(uuid_range(0, 1))).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "quota must be intact"
+        );
     }
 
     #[tokio::test]
