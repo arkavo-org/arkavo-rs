@@ -25,6 +25,10 @@ use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::sync::Arc;
 
+/// The entitlement signing requires when `C2PA_REQUIRE_ENTITLEMENT` is set: the creator
+/// membership's publish attribute, the same one publishing requires (arkavo-rs#120).
+pub(crate) const SIGNING_ENTITLEMENT: &str =
+    "https://patreon.arkavo.com/attr/arkavo-creator/value/publish";
 /// Arkavo's assertion for the request's creator and description. It replaces
 /// `stds.schema-org.CreativeWork`, which spec 2.2 deprecates (arkavo-rs#115).
 const RECORDING_LABEL: &str = "org.arkavo.recording";
@@ -70,6 +74,8 @@ pub struct C2paConfig {
     pub tsa_url: Option<String>,
     pub _require_validation: bool, // Reserved for future use
     pub allowed_creators: Vec<String>,
+    /// `C2PA_REQUIRE_ENTITLEMENT`: only tokens carrying [`SIGNING_ENTITLEMENT`] may sign
+    pub require_entitlement: bool,
 }
 
 impl C2paConfig {
@@ -182,6 +188,11 @@ impl C2paConfig {
             .parse()
             .unwrap_or(false);
 
+        let require_entitlement = std::env::var("C2PA_REQUIRE_ENTITLEMENT")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse()
+            .unwrap_or(false);
+
         let allowed_creators = std::env::var("C2PA_ALLOWED_CREATORS")
             .unwrap_or_default()
             .split(',')
@@ -199,6 +210,7 @@ impl C2paConfig {
             tsa_url,
             _require_validation,
             allowed_creators,
+            require_entitlement,
         })
     }
 }
@@ -391,6 +403,18 @@ pub async fn sign_manifest(
             StatusCode::FORBIDDEN,
             "Creator not authorized",
             serde_json::json!({}),
+        );
+    }
+    // Signing is for creator members: the same entitlement publishing needs (arkavo-rs#120).
+    // Checked before anything counts against the subject's quota.
+    if state.config.require_entitlement
+        && !person.entitlements.iter().any(|e| e == SIGNING_ENTITLEMENT)
+    {
+        warn!("C2PA signing denied: token lacks the signing entitlement");
+        return sign_error(
+            StatusCode::FORBIDDEN,
+            "signing entitlement required",
+            serde_json::json!({ "required_entitlement": SIGNING_ENTITLEMENT }),
         );
     }
     req.metadata.creator = person.sub.clone();
@@ -1076,6 +1100,7 @@ mod tests {
             tsa_url: None,
             _require_validation: false,
             allowed_creators: vec![],
+            require_entitlement: false,
         }
     }
 
@@ -1832,42 +1857,61 @@ mod sign_endpoint_tests {
     const HASH: &str = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
 
     fn token(sub: &str) -> String {
+        token_with_entitlements(sub, &[])
+    }
+
+    /// A passkey token whose `arkavo_entitlements` lists `entitlements` (omitted when empty)
+    fn token_with_entitlements(sub: &str, entitlements: &[&str]) -> String {
         let (sk, _) = keypair();
         let now = chrono::Utc::now().timestamp();
-        mint_map(
-            &sk,
-            KID,
-            vec![
-                (Value::Integer(1.into()), Value::Text(ISS.into())),
-                (Value::Integer(2.into()), Value::Text(sub.into())),
-                (
-                    Value::Integer(3.into()),
-                    Value::Array(vec![
-                        Value::Text("arkavo".into()),
-                        Value::Text(PLATFORM.into()),
-                    ]),
+        let mut claims = vec![
+            (Value::Integer(1.into()), Value::Text(ISS.into())),
+            (Value::Integer(2.into()), Value::Text(sub.into())),
+            (
+                Value::Integer(3.into()),
+                Value::Array(vec![
+                    Value::Text("arkavo".into()),
+                    Value::Text(PLATFORM.into()),
+                ]),
+            ),
+            (
+                Value::Integer(4.into()),
+                Value::Integer((now + 3600).into()),
+            ),
+            (Value::Integer(6.into()), Value::Integer(now.into())),
+            (
+                Value::Integer(7.into()),
+                Value::Bytes(uuid::Uuid::new_v4().as_bytes().to_vec()),
+            ),
+        ];
+        if !entitlements.is_empty() {
+            claims.push((
+                Value::Text("arkavo_entitlements".into()),
+                Value::Array(
+                    entitlements
+                        .iter()
+                        .map(|e| Value::Text((*e).into()))
+                        .collect(),
                 ),
-                (
-                    Value::Integer(4.into()),
-                    Value::Integer((now + 3600).into()),
-                ),
-                (Value::Integer(6.into()), Value::Integer(now.into())),
-                (
-                    Value::Integer(7.into()),
-                    Value::Bytes(uuid::Uuid::new_v4().as_bytes().to_vec()),
-                ),
-            ],
-        )
+            ));
+        }
+        mint_map(&sk, KID, claims)
     }
 
     fn state(limit: usize) -> Arc<C2paSigningState> {
+        state_with(limit, false)
+    }
+
+    fn state_with(limit: usize, require_entitlement: bool) -> Arc<C2paSigningState> {
         let (_, vk) = keypair();
         let verifier = PersonTokenVerifier::new(
             CoseKeyCache::with_static_keys(vec![(KID.to_vec(), vk)]),
             ISS.into(),
             PLATFORM.into(),
         );
-        let mut state = C2paSigningState::new(tests::make_test_config(), Arc::new(verifier));
+        let mut config = tests::make_test_config();
+        config.require_entitlement = require_entitlement;
+        let mut state = C2paSigningState::new(config, Arc::new(verifier));
         state.sign_limit_per_hour = limit;
         Arc::new(state)
     }
@@ -2005,6 +2049,34 @@ mod sign_endpoint_tests {
             StatusCode::UNPROCESSABLE_ENTITY,
             "quota must be intact"
         );
+    }
+
+    /// With C2PA_REQUIRE_ENTITLEMENT, only a creator member may sign: the token must carry
+    /// the publish entitlement (arkavo-rs#120). A refusal costs no quota.
+    #[tokio::test]
+    async fn test_sign_requires_the_publish_entitlement_when_configured() {
+        let state = state_with(1, true);
+        let view = "https://patreon.arkavo.com/attr/arkavo-creator/value/view";
+        for bearer in [token(SUB), token_with_entitlements(SUB, &[view])] {
+            let (status, json, _) = sign(&state, Some(&bearer), body(uuid_range(0, 1))).await;
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert_eq!(json["error"], "signing entitlement required");
+            assert_eq!(json["required_entitlement"], SIGNING_ENTITLEMENT);
+        }
+        let member = token_with_entitlements(SUB, &[view, SIGNING_ENTITLEMENT]);
+        let (status, _, _) = sign(&state, Some(&member), body(uuid_range(0, 1))).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "a member signs as before, with the quota intact"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sign_ignores_entitlements_unless_configured() {
+        let state = state(10);
+        let (status, _, _) = sign(&state, Some(&token(SUB)), body(uuid_range(0, 1))).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]

@@ -105,7 +105,7 @@ This document describes the integration of C2PA (Coalition for Content Provenanc
 
 Sign a C2PA manifest with a pre-computed content hash.
 
-**Who may sign:** only a signed-in person. The request needs `Authorization: Bearer <passkey CWT>`, the identity.arkavo.net token, verified the same way as `/media/v1`: `aud` must contain `arkavo` and `MEDIA_PLATFORM_AUDIENCE`, the `sub` must be person-shaped, and agent tokens are refused. A missing or invalid token gets 401, and a non-person token 403. The manifest's creator (`org.arkavo.recording`) is the token's `sub`; `metadata.creator` is ignored. `C2PA_ALLOWED_CREATORS`, if set, filters on `sub`. Each subject may make `C2PA_SIGN_LIMIT_PER_HOUR` requests per hour (default 120); over the limit gets 429 with `Retry-After`. Every request is logged with its `sub`, content hash and exclusion range.
+**Who may sign:** only a signed-in person. The request needs `Authorization: Bearer <passkey CWT>`, the identity.arkavo.net token, verified the same way as `/media/v1`: `aud` must contain `arkavo` and `MEDIA_PLATFORM_AUDIENCE`, the `sub` must be person-shaped, and agent tokens are refused. A missing or invalid token gets 401, and a non-person token 403. The manifest's creator (`org.arkavo.recording`) is the token's `sub`; `metadata.creator` is ignored. `C2PA_ALLOWED_CREATORS`, if set, filters on `sub`. With `C2PA_REQUIRE_ENTITLEMENT=true`, only creator members may sign: the token's `arkavo_entitlements` must include `https://patreon.arkavo.com/attr/arkavo-creator/value/publish`, the attribute publishing requires. Otherwise the request gets 403 with `"error": "signing entitlement required"` and `required_entitlement` naming the attribute. Like every refusal, it uses none of the subject's quota. Each subject may make `C2PA_SIGN_LIMIT_PER_HOUR` requests per hour (default 120); over the limit gets 429 with `Retry-After`. Every request is logged with its `sub`, content hash and exclusion range.
 
 **Manifest contents:** the claim follows C2PA spec 2.2, the version c2pa-rs 0.91 generates, and passes the C2PA Conformance Program's spec 2.2 and integrity rubrics.
 - **Generator:** `claim_generator_info` names the product, "Arkavo Creator", with `specVersion` `2.2.0`. It includes the product's version when `metadata.software` is `Arkavo Creator <version>`, and the signing service as `org.arkavo.signer`.
@@ -212,6 +212,7 @@ export C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem        # with C2PA_SI
 export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert_chain.pem      # signer certificate, then the CA
 export C2PA_REQUIRE_VALIDATION=true  # Enforce C2PA in media policy
 export C2PA_ALLOWED_CREATORS=arkavo:<uuid-1>,arkavo:<uuid-2>  # token subjects (sub), not emails
+export C2PA_REQUIRE_ENTITLEMENT=true  # only creator members (the publish entitlement) may sign; default false
 # Optional: PEM bundle /c2pa/v1/validate trusts. Default: the certificates after the
 # end-entity in C2PA_SIGNING_CERT_PATH (our own CA). List a retired CA here during a rotation.
 export C2PA_TRUST_ANCHORS_PATH=/path/to/c2pa_trust_anchors.pem
