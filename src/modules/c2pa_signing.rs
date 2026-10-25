@@ -15,6 +15,8 @@ use c2pa::assertions::{c2pa_action, Action, Actions, DigitalSourceType, Software
 use c2pa::{Builder, ClaimGeneratorInfo, Context, HashRange, Reader, SigningAlg};
 
 use super::c2pa_kms::{DigestSigner, KmsKey, RemoteKeySigner};
+use super::license::person_token::PersonTokenVerifier;
+use axum::http::HeaderMap;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
@@ -22,6 +24,13 @@ use std::sync::Arc;
 
 /// schema.org CreativeWork assertion carrying the author (C2PA 2.x, section 18.4).
 const CREATIVE_WORK_LABEL: &str = "stds.schema-org.CreativeWork";
+
+/// Default hourly cap on sign requests per token subject (C2PA_SIGN_LIMIT_PER_HOUR).
+const DEFAULT_SIGN_LIMIT_PER_HOUR: usize = 120;
+
+/// Bytes a top-level C2PA `uuid` box adds around the JUMBF: size (4) + type (4) +
+/// UUID (16) + version/flags (4) + "manifest\0" (9) + Merkle offset (8).
+const MANIFEST_BOX_OVERHEAD: u64 = 45;
 
 /// Upper bound on a sign request, including the TSA round trip.
 const SIGNING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
@@ -205,6 +214,8 @@ pub enum ContainerFormat {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct C2paMetadata {
     pub title: String,
+    /// Ignored on input: the signer sets it to the verified token subject.
+    #[serde(default)]
     pub creator: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -278,59 +289,138 @@ pub struct C2paValidateResponse {
 
 pub struct C2paSigningState {
     pub config: C2paConfig,
+    /// identity.arkavo.net passkey tokens; only people may sign (GHSA-5rfq-r96w-c7mf)
+    pub person_tokens: Arc<PersonTokenVerifier>,
+    /// Recent sign requests per token subject, for the hourly limit
+    sign_requests: std::sync::Mutex<std::collections::HashMap<String, Vec<std::time::Instant>>>,
+    sign_limit_per_hour: usize,
 }
 
 impl C2paSigningState {
-    pub fn new(config: C2paConfig) -> Self {
-        Self { config }
+    pub fn new(config: C2paConfig, person_tokens: Arc<PersonTokenVerifier>) -> Self {
+        let sign_limit_per_hour = std::env::var("C2PA_SIGN_LIMIT_PER_HOUR")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&n: &usize| n > 0)
+            .unwrap_or(DEFAULT_SIGN_LIMIT_PER_HOUR);
+        Self {
+            config,
+            person_tokens,
+            sign_requests: Default::default(),
+            sign_limit_per_hour,
+        }
+    }
+
+    /// Count a sign request for `sub`; Err(seconds to wait) when over the hourly limit.
+    fn admit(&self, sub: &str) -> Result<(), u64> {
+        const HOUR: std::time::Duration = std::time::Duration::from_secs(3600);
+        let now = std::time::Instant::now();
+        let mut requests = self
+            .sign_requests
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        requests.retain(|_, times| {
+            times.retain(|t| now.duration_since(*t) < HOUR);
+            !times.is_empty()
+        });
+        let times = requests.entry(sub.to_string()).or_default();
+        if times.len() >= self.sign_limit_per_hour {
+            let wait = HOUR.saturating_sub(now.duration_since(times[0]));
+            return Err(wait.as_secs().max(1));
+        }
+        times.push(now);
+        Ok(())
     }
 }
 
 // ==================== API Handlers ====================
 
+/// JSON error response for the sign endpoint.
+fn sign_error(status: StatusCode, error: &str, extra: serde_json::Value) -> Response {
+    let mut body = serde_json::json!({ "error": error, "status": "error" });
+    if let (Some(body), Some(extra)) = (body.as_object_mut(), extra.as_object()) {
+        body.extend(extra.clone());
+    }
+    (status, Json(body)).into_response()
+}
+
 /// POST /c2pa/v1/sign - Sign C2PA manifest with pre-computed hash
+///
+/// Only a signed-in person may sign, and the manifest names them as the author
+/// (GHSA-5rfq-r96w-c7mf). The request must exclude exactly one range, the C2PA
+/// `uuid` box the manifest is embedded in, so no media bytes can be left unhashed.
 pub async fn sign_manifest(
     State(state): State<Arc<C2paSigningState>>,
-    Json(req): Json<C2paSignRequest>,
+    headers: HeaderMap,
+    Json(mut req): Json<C2paSignRequest>,
 ) -> Response {
-    info!(
-        "C2PA signing request from creator: {}, format: {:?}",
-        req.metadata.creator, req.container_format
-    );
-
-    // Validate creator if allowlist is configured
-    if !state.config.allowed_creators.is_empty()
-        && !state
-            .config
-            .allowed_creators
-            .contains(&req.metadata.creator)
+    let person = match state
+        .person_tokens
+        .verify(&headers, chrono::Utc::now().timestamp())
+        .await
     {
-        warn!(
-            "C2PA signing denied: creator '{}' not in allowlist",
-            req.metadata.creator
-        );
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "Creator not authorized",
-                "status": "denied"
-            })),
-        )
-            .into_response();
-    }
+        Ok(person) => person,
+        Err(e) => {
+            warn!("C2PA signing refused: {}", e.reason());
+            return sign_error(e.status(), e.reason(), serde_json::json!({}));
+        }
+    };
 
-    // Validate hash format (should be hex-encoded SHA-256)
+    // The author is the verified subject, never the self-asserted metadata.creator.
+    if !state.config.allowed_creators.is_empty()
+        && !state.config.allowed_creators.contains(&person.sub)
+    {
+        warn!("C2PA signing denied: subject not in C2PA_ALLOWED_CREATORS");
+        return sign_error(
+            StatusCode::FORBIDDEN,
+            "Creator not authorized",
+            serde_json::json!({}),
+        );
+    }
+    req.metadata.creator = person.sub.clone();
+
+    let exclusion = match req.exclusion_ranges.as_slice() {
+        [range] if range.box_type.as_deref() == Some("uuid") && range.end > range.start => {
+            range.clone()
+        }
+        _ => {
+            return sign_error(
+                StatusCode::BAD_REQUEST,
+                "exclusion_ranges must be exactly one range with box_type \"uuid\" covering the C2PA manifest box",
+                serde_json::json!({}),
+            )
+        }
+    };
+
+    // Validate hash format (should be hex-encoded SHA-256) before it counts against
+    // the subject's quota.
     if req.content_hash.len() != 64 || !req.content_hash.chars().all(|c| c.is_ascii_hexdigit()) {
         error!("Invalid content hash format: {}", req.content_hash);
-        return (
+        return sign_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "Invalid content hash format (expected 64 hex chars)",
-                "status": "error"
-            })),
-        )
-            .into_response();
+            "Invalid content hash format (expected 64 hex chars)",
+            serde_json::json!({}),
+        );
     }
+
+    if let Err(retry_after) = state.admit(&person.sub) {
+        warn!("C2PA signing rate limited for {}", person.sub);
+        let mut response = sign_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many signing requests",
+            serde_json::json!({}),
+        );
+        if let Ok(value) = axum::http::HeaderValue::from_str(&retry_after.to_string()) {
+            response
+                .headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, value);
+        }
+        return response;
+    }
+    info!(
+        "C2PA sign request: sub={} content_hash={} exclusion={}..{} format={:?}",
+        person.sub, req.content_hash, exclusion.start, exclusion.end, req.container_format
+    );
 
     // Signing is blocking: with a TSA it waits on an HTTP round trip, and c2pa's HTTP
     // client has no timeout of its own, so bound the request here.
@@ -351,8 +441,30 @@ pub async fn sign_manifest(
                 .into_response();
         }
     };
+    // Only the manifest box itself may be unhashed: the excluded range must be exactly
+    // as long as the box that will carry this manifest. Otherwise discard it and tell
+    // the client the length to request.
+    let signed = signed.and_then(|(manifest, manifest_hash)| {
+        let jumbf_len =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest)
+                .map(|bytes| bytes.len() as u64)
+                .map_err(|e| format!("Signed manifest is not base64: {}", e))?;
+        Ok((manifest, manifest_hash, MANIFEST_BOX_OVERHEAD + jumbf_len))
+    });
     match signed {
-        Ok((manifest, manifest_hash)) => {
+        Ok((_, _, box_len)) if exclusion.end - exclusion.start != box_len => {
+            info!(
+                "C2PA manifest discarded: exclusion length {} != manifest box {}",
+                exclusion.end - exclusion.start,
+                box_len
+            );
+            sign_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "exclusion range length must equal the C2PA manifest box length",
+                serde_json::json!({ "required_exclusion_length": box_len }),
+            )
+        }
+        Ok((manifest, manifest_hash, _)) => {
             info!("C2PA manifest signed successfully");
             (
                 StatusCode::OK,
@@ -887,7 +999,7 @@ mod tests {
         (chain_path, ee_key_path)
     }
 
-    fn make_test_config() -> C2paConfig {
+    pub(super) fn make_test_config() -> C2paConfig {
         config_from_certs(generate_test_certs())
     }
 
@@ -1445,5 +1557,215 @@ mod tests {
 
         // Clean up
         let _ = std::fs::remove_file(&jumbf_path);
+    }
+}
+
+/// `/c2pa/v1/sign` is not a signing oracle (GHSA-5rfq-r96w-c7mf).
+#[cfg(test)]
+mod sign_endpoint_tests {
+    use super::*;
+    use crate::modules::authzen::cose_keys::CoseKeyCache;
+    use crate::modules::authzen::cwt_verify::test_support::{keypair, mint_map};
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::routing::post;
+    use axum::Router;
+    use ciborium::value::Value;
+    use tower::ServiceExt;
+
+    const ISS: &str = "https://identity.test";
+    const PLATFORM: &str = "https://platform.arkavo.net";
+    const KID: &[u8] = b"kid-1";
+    const SUB: &str = "arkavo:9b1d3c5e-0000-4000-8000-000000000001";
+    const HASH: &str = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+
+    fn token(sub: &str) -> String {
+        let (sk, _) = keypair();
+        let now = chrono::Utc::now().timestamp();
+        mint_map(
+            &sk,
+            KID,
+            vec![
+                (Value::Integer(1.into()), Value::Text(ISS.into())),
+                (Value::Integer(2.into()), Value::Text(sub.into())),
+                (
+                    Value::Integer(3.into()),
+                    Value::Array(vec![
+                        Value::Text("arkavo".into()),
+                        Value::Text(PLATFORM.into()),
+                    ]),
+                ),
+                (
+                    Value::Integer(4.into()),
+                    Value::Integer((now + 3600).into()),
+                ),
+                (Value::Integer(6.into()), Value::Integer(now.into())),
+                (
+                    Value::Integer(7.into()),
+                    Value::Bytes(uuid::Uuid::new_v4().as_bytes().to_vec()),
+                ),
+            ],
+        )
+    }
+
+    fn state(limit: usize) -> Arc<C2paSigningState> {
+        let (_, vk) = keypair();
+        let verifier = PersonTokenVerifier::new(
+            CoseKeyCache::with_static_keys(vec![(KID.to_vec(), vk)]),
+            ISS.into(),
+            PLATFORM.into(),
+        );
+        let mut state = C2paSigningState::new(tests::make_test_config(), Arc::new(verifier));
+        state.sign_limit_per_hour = limit;
+        Arc::new(state)
+    }
+
+    fn body(ranges: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "content_hash": HASH,
+            "exclusion_ranges": ranges,
+            "container_format": "mov",
+            "metadata": {
+                "title": "Test", "creator": "anyone",
+                "timestamp": "2026-10-25T00:00:00Z"
+            }
+        })
+    }
+
+    async fn sign(
+        state: &Arc<C2paSigningState>,
+        bearer: Option<&str>,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value, Option<String>) {
+        let app = Router::new()
+            .route("/c2pa/v1/sign", post(sign_manifest))
+            .with_state(state.clone());
+        let mut request = Request::post("/c2pa/v1/sign").header("content-type", "application/json");
+        if let Some(token) = bearer {
+            request = request.header("authorization", format!("Bearer {}", token));
+        }
+        let response = app
+            .oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .map(|v| v.to_str().unwrap().to_string());
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or_default(),
+            retry_after,
+        )
+    }
+
+    fn uuid_range(start: u64, len: u64) -> serde_json::Value {
+        serde_json::json!([{ "start": start, "end": start + len, "box_type": "uuid" }])
+    }
+
+    #[tokio::test]
+    async fn test_sign_requires_a_person_token() {
+        let state = state(10);
+        let (status, _, _) = sign(&state, None, body(uuid_range(1000, 4045))).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, _, _) = sign(&state, Some("not-a-cwt"), body(uuid_range(1000, 4045))).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_sign_refuses_other_exclusion_shapes() {
+        let state = state(10);
+        let t = token(SUB);
+        for ranges in [
+            serde_json::json!([]),
+            serde_json::json!([{ "start": 0, "end": 10, "box_type": "uuid" },
+                               { "start": 20, "end": 30, "box_type": "uuid" }]),
+            serde_json::json!([{ "start": 0, "end": 4045 }]),
+            serde_json::json!([{ "start": 0, "end": 4045, "box_type": "mdat" }]),
+            serde_json::json!([{ "start": 100, "end": 100, "box_type": "uuid" }]),
+        ] {
+            let (status, _, _) = sign(&state, Some(&t), body(ranges.clone())).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{}", ranges);
+        }
+    }
+
+    /// The advisory's reproduction: excluding the whole file is refused, and nothing is
+    /// returned that could be embedded.
+    #[tokio::test]
+    async fn test_sign_refuses_whole_file_exclusion() {
+        let state = state(10);
+        let (status, json, _) = sign(
+            &state,
+            Some(&token(SUB)),
+            body(uuid_range(0, 7_375 + 45 + 14_000)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(json.get("manifest").is_none());
+        assert!(json["required_exclusion_length"].as_u64().unwrap() > 45);
+    }
+
+    /// A client learns the box length from the 422 and signs on the next pass; the
+    /// manifest names the token subject, not metadata.creator.
+    #[tokio::test]
+    async fn test_sign_binds_creator_and_box_length() {
+        let state = state(10);
+        let t = token(SUB);
+        let (status, json, _) = sign(&state, Some(&t), body(uuid_range(7_375, 1))).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        let mut len = json["required_exclusion_length"].as_u64().unwrap();
+        let mut signed = None;
+        for _ in 0..4 {
+            let (status, json, _) = sign(&state, Some(&t), body(uuid_range(7_375, len))).await;
+            if status == StatusCode::OK {
+                signed = Some(json);
+                break;
+            }
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+            len = json["required_exclusion_length"].as_u64().unwrap();
+        }
+        let signed = signed.expect("length should converge");
+        let bytes = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            signed["manifest"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bytes.len() as u64 + MANIFEST_BOX_OVERHEAD, len);
+        let result = validate_c2pa_manifest(&bytes, HASH, &state.config.trust_anchors, "").unwrap();
+        assert!(result.valid, "{:?}", result.errors);
+        assert_eq!(result.creator.as_deref(), Some(SUB));
+    }
+
+    #[tokio::test]
+    async fn test_sign_bad_hash_uses_no_quota() {
+        let state = state(1);
+        let mut bad = body(uuid_range(0, 1));
+        bad["content_hash"] = serde_json::json!("not-hex");
+        let (status, _, _) = sign(&state, Some(&token(SUB)), bad).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _, _) = sign(&state, Some(&token(SUB)), body(uuid_range(0, 1))).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "quota must be intact"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sign_is_rate_limited_per_subject() {
+        let state = state(1);
+        let (first, _, _) = sign(&state, Some(&token(SUB)), body(uuid_range(0, 1))).await;
+        assert_eq!(first, StatusCode::UNPROCESSABLE_ENTITY);
+        let (second, _, retry_after) =
+            sign(&state, Some(&token(SUB)), body(uuid_range(0, 1))).await;
+        assert_eq!(second, StatusCode::TOO_MANY_REQUESTS);
+        assert!(retry_after.unwrap().parse::<u64>().unwrap() > 0);
+        let other = "arkavo:9b1d3c5e-0000-4000-8000-000000000002";
+        let (third, _, _) = sign(&state, Some(&token(other)), body(uuid_range(0, 1))).await;
+        assert_eq!(third, StatusCode::UNPROCESSABLE_ENTITY);
     }
 }

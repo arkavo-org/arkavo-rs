@@ -884,7 +884,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let c2pa_signing_state = match c2pa_signing::C2paConfig::from_env().await {
         Ok(config) => {
             info!("C2PA signing enabled");
-            Some(Arc::new(c2pa_signing::C2paSigningState::new(config)))
+            Some(Arc::new(c2pa_signing::C2paSigningState::new(
+                config,
+                Arc::new(modules::license::config::person_verifier_from_env()),
+            )))
         }
         Err(e) => {
             info!("C2PA signing disabled: {}", e);
