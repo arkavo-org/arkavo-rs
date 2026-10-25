@@ -944,21 +944,29 @@ fn validate_c2pa_manifest(
         if let Some(observed) = exclusion_ranges {
             let mut observed: Vec<(u64, u64)> = observed.iter().map(|r| (r.start, r.end)).collect();
             observed.sort_unstable();
-            let mut signed: Vec<(u64, u64)> = manifest
+            // arks always signs exactly one range, so a missing, malformed or empty one
+            // means the signed exclusion is unknown, and nothing matches it
+            let signed: Option<Vec<(u64, u64)>> = manifest
                 .find_assertion::<serde_json::Value>("org.arkavo.c2pa.content_hash")
                 .ok()
                 .and_then(|data| data.get("exclusion_ranges").cloned())
                 .and_then(|ranges| serde_json::from_value::<Vec<ExclusionRange>>(ranges).ok())
-                .unwrap_or_default()
-                .iter()
-                .map(|r| (r.start, r.end))
-                .collect();
-            signed.sort_unstable();
-            if observed != signed {
-                errors.push(format!(
+                .filter(|ranges| !ranges.is_empty())
+                .map(|ranges| {
+                    let mut signed: Vec<(u64, u64)> =
+                        ranges.iter().map(|r| (r.start, r.end)).collect();
+                    signed.sort_unstable();
+                    signed
+                });
+            match signed {
+                Some(signed) if signed == observed => {}
+                Some(signed) => errors.push(format!(
                     "Exclusion mismatch: the manifest box is at {:?}, signed at {:?}",
                     observed, signed
-                ));
+                )),
+                None => errors.push(
+                    "Exclusion mismatch: the manifest does not say where it was signed".to_string(),
+                ),
             }
         }
 
@@ -1244,6 +1252,33 @@ mod tests {
             validate_c2pa_manifest(&bytes, RUBRIC_HASH, &config.trust_anchors, "", None).unwrap();
         assert!(result.valid, "{:?}", result.errors);
         assert_eq!(result.creator.as_deref(), Some("arkavo:older-subject"));
+
+        // Its content-hash assertion has no exclusion_ranges, so the signed exclusion is
+        // unknown: no client-supplied range, not even an empty one, can match it.
+        let range = ExclusionRange {
+            start: 100,
+            end: 500,
+            box_type: Some("uuid".into()),
+        };
+        for observed in [vec![], vec![range]] {
+            let result = validate_c2pa_manifest(
+                &bytes,
+                RUBRIC_HASH,
+                &config.trust_anchors,
+                "",
+                Some(&observed),
+            )
+            .unwrap();
+            assert!(!result.valid, "{} range(s)", observed.len());
+            assert!(
+                result
+                    .errors
+                    .iter()
+                    .any(|e| e.starts_with("Exclusion mismatch")),
+                "{:?}",
+                result.errors
+            );
+        }
     }
 
     /// The box a client found must be the exclusion the manifest was signed with: a box
