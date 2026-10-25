@@ -25,8 +25,13 @@ use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::sync::Arc;
 
-/// schema.org CreativeWork assertion carrying the author (C2PA 2.x, section 18.4).
-const CREATIVE_WORK_LABEL: &str = "stds.schema-org.CreativeWork";
+/// Arkavo's assertion for the request's creator and description. It replaces
+/// `stds.schema-org.CreativeWork`, which spec 2.2 deprecates (arkavo-rs#115).
+const RECORDING_LABEL: &str = "org.arkavo.recording";
+/// The product that generates the claims, named in `claim_generator_info`
+const PRODUCT_NAME: &str = "Arkavo Creator";
+/// The C2PA specification version the claims follow: c2pa-rs 0.91 generates spec 2.2
+const C2PA_SPEC_VERSION: &str = "2.2.0";
 
 /// Default hourly cap on sign requests per token subject (C2PA_SIGN_LIMIT_PER_HOUR).
 const DEFAULT_SIGN_LIMIT_PER_HOUR: usize = 120;
@@ -231,6 +236,9 @@ pub struct C2paMetadata {
     pub ai_generated: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub software: Option<String>,
+    /// Whether the actions describe the asset's whole history; false when absent
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all_actions_included: Option<bool>,
 }
 
 /// C2PA signing request
@@ -609,16 +617,6 @@ fn build_c2pa_manifest(
         )?),
     };
 
-    // Build a C2PA manifest from spec assertions. Claim v2 requires a c2pa.actions
-    // assertion whose first action is c2pa.created (arkavo-rs#98).
-    let mut builder = Builder::from_context(Context::new().with_signer(signer));
-    // The claim schema requires a non-empty instanceID, and the server never has the
-    // asset to take one from, so mint one per signed version (arkavo-rs#114).
-    builder.definition.instance_id = format!("xmp:iid:{}", uuid::Uuid::new_v4());
-    if !req.metadata.title.is_empty() {
-        builder.definition.title = Some(req.metadata.title.clone());
-    }
-
     let when = req
         .metadata
         .timestamp
@@ -635,21 +633,43 @@ fn build_c2pa_manifest(
     if let Some(ref software) = req.metadata.software {
         created = created.set_software_agent(ClaimGeneratorInfo::new(software));
     }
-    builder
-        .add_action(created)
-        .map_err(|e| format!("Failed to add created action: {}", e))?;
+    let created =
+        serde_json::to_value(created).map_err(|e| format!("Failed to encode action: {}", e))?;
 
-    let mut creative_work = serde_json::json!({
-        "@context": "https://schema.org",
-        "@type": "CreativeWork",
-        "author": [{ "@type": "Person", "name": req.metadata.creator }],
-    });
+    let mut recording = serde_json::json!({ "creator": req.metadata.creator });
     if let Some(ref description) = req.metadata.description {
-        creative_work["description"] = serde_json::json!(description);
+        recording["description"] = serde_json::json!(description);
     }
-    builder
-        .add_assertion_json(CREATIVE_WORK_LABEL, &creative_work)
-        .map_err(|e| format!("Failed to add CreativeWork assertion: {}", e))?;
+
+    // Build a C2PA manifest from spec assertions. Claim v2 requires a c2pa.actions
+    // assertion whose first action is c2pa.created (arkavo-rs#98). The actions and the
+    // recording are created assertions, attributed to the signer, as the conformance
+    // rubrics require of the inception action; allActionsIncluded is only true when the
+    // client says the actions are the asset's whole history (arkavo-rs#115).
+    let mut definition = serde_json::json!({
+        // The claim schema requires a non-empty instanceID, and the server never has
+        // the asset to take one from, so mint one per signed version (arkavo-rs#114).
+        "instance_id": format!("xmp:iid:{}", uuid::Uuid::new_v4()),
+        "assertions": [
+            {
+                "label": Actions::LABEL_VERSIONED,
+                "created": true,
+                "data": {
+                    "actions": [created],
+                    "allActionsIncluded": req.metadata.all_actions_included.unwrap_or(false),
+                },
+            },
+            { "label": RECORDING_LABEL, "created": true, "data": recording },
+        ],
+    });
+    if !req.metadata.title.is_empty() {
+        definition["title"] = serde_json::json!(req.metadata.title);
+    }
+    let mut builder = Builder::from_context(Context::new().with_signer(signer))
+        .with_definition(definition.to_string())
+        .map_err(|e| format!("Failed to build manifest definition: {}", e))?;
+    builder.definition.claim_generator_info =
+        vec![claim_generator_info(req.metadata.software.as_deref())];
 
     // Store content hash as a custom assertion so it can be retrieved during validation
     builder
@@ -703,6 +723,24 @@ fn build_c2pa_manifest(
     let manifest_hash = hex::encode(hasher.finalize());
 
     Ok((manifest_b64, manifest_hash))
+}
+
+/// The claim generator is the product, Arkavo Creator, with its version when the request's
+/// software is `Arkavo Creator <version>`. It carries the spec version the claim follows
+/// (required for spec 2.4+) and the signing service that built it.
+fn claim_generator_info(software: Option<&str>) -> ClaimGeneratorInfo {
+    let mut info = ClaimGeneratorInfo::new(PRODUCT_NAME);
+    info.version = software
+        .and_then(|software| software.strip_prefix(PRODUCT_NAME))
+        .and_then(|rest| rest.strip_prefix(' '))
+        .map(|version| version.trim().to_string())
+        .filter(|version| !version.is_empty());
+    info.set_spec_version(C2PA_SPEC_VERSION);
+    info.insert(
+        "org.arkavo.signer",
+        format!("arks/{}", env!("CARGO_PKG_VERSION")),
+    );
+    info
 }
 
 /// Normalise the P-256 signing key to PKCS#8 PEM. c2pa's rust_native_crypto signer only
@@ -855,9 +893,9 @@ fn validate_c2pa_manifest(
     if let Some(manifest) = reader.active_manifest() {
         signed_at = manifest.signature_info().and_then(|info| info.time.clone());
 
-        if let Ok(work) = manifest.find_assertion::<serde_json::Value>(CREATIVE_WORK_LABEL) {
-            creator = work
-                .pointer("/author/0/name")
+        if let Ok(recording) = manifest.find_assertion::<serde_json::Value>(RECORDING_LABEL) {
+            creator = recording
+                .get("creator")
                 .and_then(|n| n.as_str())
                 .map(String::from);
         }
@@ -941,6 +979,7 @@ mod tests {
             timestamp: Some("2025-10-26T00:00:00Z".to_string()),
             ai_generated: Some(true),
             software: Some("Arkavo KAS".to_string()),
+            all_actions_included: None,
         };
         let json = serde_json::to_string(&metadata).unwrap();
         assert!(json.contains("\"ai_generated\":true"));
@@ -1047,8 +1086,101 @@ mod tests {
                 timestamp: Some("2025-10-26T12:00:00Z".to_string()),
                 ai_generated: Some(false),
                 software: Some("Arkavo Test Suite".to_string()),
+                all_actions_included: None,
             },
         }
+    }
+
+    /// The signed manifest as crJSON, the form the C2PA conformance rubrics evaluate
+    fn signed_crjson(req: &C2paSignRequest) -> serde_json::Value {
+        let (manifest_b64, _) =
+            build_c2pa_manifest(&make_test_config(), req).expect("Signing should succeed");
+        let bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
+                .unwrap();
+        Reader::from_context(Context::new())
+            .with_manifest_data_and_stream(&bytes, "video/mp4", Cursor::new(Vec::<u8>::new()))
+            .unwrap()
+            .to_crjson_value()
+            .unwrap()
+    }
+
+    const RUBRIC_HASH: &str = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+
+    /// Rubrics `inception_action_position` and `mandatory_all_actions_included` (arkavo-rs#115):
+    /// the actions are attributed to the signer, and say whether they are the whole history.
+    #[test]
+    fn test_c2pa_actions_are_created_and_say_whether_complete() {
+        let crjson = signed_crjson(&make_test_request(RUBRIC_HASH));
+        let manifest = &crjson["manifests"][0];
+        let created: Vec<&str> = manifest["claim.v2"]["created_assertions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|a| a["url"].as_str())
+            .collect();
+        assert!(
+            created.iter().any(|url| url.ends_with("c2pa.actions.v2")),
+            "actions must be a created assertion: {:?}",
+            created
+        );
+        let actions = &manifest["assertions"]["c2pa.actions.v2"];
+        assert_eq!(actions["actions"][0]["action"], "c2pa.created");
+        assert_eq!(actions["allActionsIncluded"], false);
+
+        let mut complete = make_test_request(RUBRIC_HASH);
+        complete.metadata.all_actions_included = Some(true);
+        let crjson = signed_crjson(&complete);
+        assert_eq!(
+            crjson["manifests"][0]["assertions"]["c2pa.actions.v2"]["allActionsIncluded"],
+            true
+        );
+    }
+
+    /// Rubric `no_deprecated_assertions` (arkavo-rs#115): no `stds.*` assertions. The creator
+    /// and description move to a namespaced assertion.
+    #[test]
+    fn test_c2pa_manifest_has_no_deprecated_assertions() {
+        let crjson = signed_crjson(&make_test_request(RUBRIC_HASH));
+        let assertions = crjson["manifests"][0]["assertions"].as_object().unwrap();
+        let labels: Vec<&String> = assertions.keys().collect();
+        assert!(
+            labels.iter().all(|label| !label.starts_with("stds.")),
+            "{:?}",
+            labels
+        );
+        assert_eq!(assertions[RECORDING_LABEL]["creator"], "test@example.com");
+        assert_eq!(assertions[RECORDING_LABEL]["description"], "A test video");
+    }
+
+    /// The claim generator is the product, with the spec version the claim follows
+    /// (rubric `mandatory_spec_version`, arkavo-rs#115).
+    #[test]
+    fn test_c2pa_claim_generator_names_the_product_and_spec_version() {
+        let generator = |software: &str| {
+            let mut req = make_test_request(RUBRIC_HASH);
+            req.metadata.software = Some(software.to_string());
+            let info =
+                signed_crjson(&req)["manifests"][0]["claim.v2"]["claim_generator_info"].clone();
+            if info.is_array() {
+                info[0].clone()
+            } else {
+                info
+            }
+        };
+
+        let info = generator("Arkavo Creator 1.4.2");
+        assert_eq!(info["name"], "Arkavo Creator");
+        assert_eq!(info["version"], "1.4.2");
+        assert_eq!(info["specVersion"], C2PA_SPEC_VERSION);
+        assert!(info["org.arkavo.signer"]
+            .as_str()
+            .unwrap()
+            .starts_with("arks/"));
+
+        let info = generator("ArkavoKit c2pa-sign");
+        assert_eq!(info["name"], "Arkavo Creator");
+        assert!(info.get("version").is_none(), "{}", info);
     }
 
     /// Round-trip test: sign a manifest and validate it, checking metadata preservation.
