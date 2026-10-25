@@ -183,7 +183,7 @@ Validate a C2PA manifest against a content hash.
 }
 ```
 
-`creator` comes from the `stds.schema-org.CreativeWork` author, and `ai_generated` and `provenance_chain` come from the `c2pa.actions` assertion. The server never has the asset, so it skips `assertion.dataHash.mismatch` and compares `content_hash` with `org.arkavo.c2pa.content_hash` instead. Only the configured trust anchors are trusted (see `C2PA_TRUST_ANCHORS_PATH`). By default that is the CA in our own signing chain, so a manifest arks signed returns `valid: true`. A manifest signed under any other CA, including CAs on the public C2PA trust list, returns `valid: false` with `signingCredential.untrusted`.
+`signed_at` is the timestamp's signing time, and is present only when the manifest has one (see [Timestamps](#timestamps)). `creator` comes from the `stds.schema-org.CreativeWork` author, and `ai_generated` and `provenance_chain` come from the `c2pa.actions` assertion. The server never has the asset, so it skips `assertion.dataHash.mismatch` and compares `content_hash` with `org.arkavo.c2pa.content_hash` instead. Only the configured trust anchors are trusted (see `C2PA_TRUST_ANCHORS_PATH`). By default that is the CA in our own signing chain, so a manifest arks signed returns `valid: true`. A manifest signed under any other CA, including CAs on the public C2PA trust list, returns `valid: false` with `signingCredential.untrusted`.
 
 ## Configuration
 
@@ -198,6 +198,30 @@ export C2PA_ALLOWED_CREATORS=creator1@example.com,creator2@example.com
 # Optional: PEM bundle /c2pa/v1/validate trusts. Default: the certificates after the
 # end-entity in C2PA_SIGNING_CERT_PATH (our own CA). List a retired CA here during a rotation.
 export C2PA_TRUST_ANCHORS_PATH=/path/to/c2pa_trust_anchors.pem
+# Optional: RFC 3161 timestamp authority (see "Timestamps" below). Unset signs without one.
+export C2PA_TSA_URL=http://timestamp.digicert.com
+# Optional: PEM roots of that TSA, trusted by /c2pa/v1/validate for timestamps only.
+export C2PA_TSA_TRUST_ANCHORS_PATH=/path/to/tsa_roots.pem
+
+### Timestamps
+
+Without a trusted timestamp, a verifier checks the signer certificate against the current time. So once "Arkavo C2PA Signer" expires, every manifest signed so far reports `signingCredential.expired`, not just new ones.
+
+- With `C2PA_TSA_URL` set, arks gets an RFC 3161 timestamp for every manifest. If the TSA fails or doesn't answer within 15 s, the sign request fails (500 or 504); arks never returns an untimestamped manifest instead. The request goes through c2pa's `ureq` client over rustls.
+- A timestamp only counts if its TSA is trusted. Tested with a signer certificate that expired after signing, `/c2pa/v1/validate` gives:
+
+  | Manifest | Result |
+  |---|---|
+  | No timestamp | `valid: false`, `signingCredential.expired` |
+  | Timestamp, TSA root in `C2PA_TSA_TRUST_ANCHORS_PATH` | `valid: true`, `signed_at` set |
+  | Timestamp, TSA root not trusted | `valid: false`, `signingCredential.untrusted` + `signingCredential.expired` |
+
+- `C2PA_TSA_TRUST_ANCHORS_PATH` is a trust list separate from the manifest anchors, so a TSA root never vouches for a signing certificate.
+- Choosing a TSA:
+  - DigiCert's public TSA (`http://timestamp.digicert.com`) is free, needs no account, and chains to "DigiCert Trusted Root G4". That root is **not** on the C2PA TSA trust list, so `c2patool` and other C2PA validators report `timeStamp.untrusted` unless they are given the G4 root as a TSA anchor.
+  - TSAs on the [C2PA TSA trust list](https://github.com/c2pa-org/conformance-public/tree/main/trust-list) need an account. For example, SSL.com's `https://ts-c2pa.ssl.com` needs an API key, which arks can't send yet.
+  - Our signer chains to a private CA, so third-party verifiers already need the Arkavo CA as an anchor. A C2PA-listed TSA becomes worthwhile once the signer certificate also comes from a C2PA-listed CA.
+- Latency: one DigiCert timestamp added about 270 ms to signing (measured 2026-10-24).
 
 # Existing Media DRM Configuration
 export MAX_CONCURRENT_STREAMS=5
@@ -537,6 +561,8 @@ The `/c2pa/v1/validate` endpoint uses c2pa-rs `Reader` for cryptographic verific
 | `assertion.hashedURI.match` | Assertion integrity verified | None (success) |
 | `signingCredential.untrusted` | Signing CA is not a trust anchor | From `/c2pa/v1/validate`: signed under a CA other than ours, or `C2PA_TRUST_ANCHORS_PATH` is missing it. From `c2patool`: pass the Arkavo CA with `trust --trust_anchors` |
 | `assertion.dataHash.mismatch` | Asset hash doesn't match | Expected for server-side validation (no asset present) |
+| `signingCredential.expired` | Signer certificate expired and no trusted timestamp | Renew the signer certificate; set `C2PA_TSA_URL` and `C2PA_TSA_TRUST_ANCHORS_PATH` so manifests outlive it |
+| `timeStamp.untrusted` | The TSA's root is not a TSA anchor | Add the TSA root to `C2PA_TSA_TRUST_ANCHORS_PATH` |
 
 **Note on `valid` field:** Server-side validation verifies the COSE signature chain, assertion integrity and trust in our own CA. It skips `assertion.dataHash.mismatch` because the asset is not present. Clients should check the asset-hash binding locally after embedding the JUMBF.
 

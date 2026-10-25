@@ -66,7 +66,7 @@ aws-sdk-dynamodb = "1"
 unicode-segmentation = "1"
 uuid = { version = "1.11", features = ["v4"] }
 fairplay-wrapper = { path = "crates/fairplay-wrapper", optional = true }
-c2pa = { version = "0.91", default-features = false, features = ["file_io", "rust_native_crypto"], optional = true }
+c2pa = { version = "0.91", default-features = false, features = ["file_io", "rust_native_crypto", "http_ureq"], optional = true }
 x509-parser = { version = "0.18", optional = true }
 mp4parse = { version = "0.17", optional = true }
 # opentdf-rs v0.11.0 - NanoTDF and KAS support
@@ -122,6 +122,8 @@ serial_test = "3.2.0"
 wiremock = "0.6"
 # Self-signed cert generation for the http3 end-to-end smoke test.
 rcgen = "0.13"
+# Short-lived signer certificates for the C2PA timestamp test.
+time = "0.3"
 
 [[bench]]
 name = "benchmarks"

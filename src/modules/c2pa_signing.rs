@@ -21,6 +21,9 @@ use std::sync::Arc;
 /// schema.org CreativeWork assertion carrying the author (C2PA 2.x, section 18.4).
 const CREATIVE_WORK_LABEL: &str = "stds.schema-org.CreativeWork";
 
+/// Upper bound on a sign request, including the TSA round trip.
+const SIGNING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Hash-binding status c2pa-rs reports when the manifest is read without its asset.
 const DATA_HASH_MISMATCH: &str = "assertion.dataHash.mismatch";
 
@@ -32,6 +35,10 @@ pub struct C2paConfig {
     pub signing_cert_path: String,
     /// PEM bundle `/c2pa/v1/validate` trusts; empty trusts nothing
     pub trust_anchors: String,
+    /// PEM bundle of timestamp-authority roots `/c2pa/v1/validate` trusts
+    pub tsa_trust_anchors: String,
+    /// RFC 3161 timestamp authority; unset signs without a timestamp
+    pub tsa_url: Option<String>,
     pub _require_validation: bool, // Reserved for future use
     pub allowed_creators: Vec<String>,
 }
@@ -79,7 +86,41 @@ impl C2paConfig {
                 ca_certs_from_chain(&chain)
             }
         };
-        let trust_anchors = usable_trust_anchors(trust_anchors);
+        let trust_anchors = usable_trust_anchors(trust_anchors, AnchorKind::Manifest);
+
+        // A timestamp keeps manifests valid after the signer certificate expires.
+        // When set, a TSA failure fails the sign request (arkavo-rs#102).
+        let tsa_url = std::env::var("C2PA_TSA_URL")
+            .ok()
+            .map(|url| url.trim().to_string())
+            .filter(|url| !url.is_empty());
+        match &tsa_url {
+            Some(url) if !(url.starts_with("http://") || url.starts_with("https://")) => {
+                return Err(format!("C2PA_TSA_URL must be an http(s) URL: {}", url));
+            }
+            Some(url) => info!("C2PA timestamp authority: {}", url),
+            None => warn!(
+                "C2PA_TSA_URL not set: manifests carry no timestamp and expire with the signer certificate"
+            ),
+        }
+
+        // Only a trusted timestamp sets the signing time, so /c2pa/v1/validate needs the
+        // TSA's roots (e.g. the C2PA TSA trust list). Kept apart from the manifest
+        // anchors so a TSA root never vouches for a signing certificate.
+        let tsa_trust_anchors = match std::env::var("C2PA_TSA_TRUST_ANCHORS_PATH") {
+            Ok(path) => usable_trust_anchors(
+                std::fs::read_to_string(&path).map_err(|e| {
+                    format!("Failed to read C2PA TSA trust anchors {}: {}", path, e)
+                })?,
+                AnchorKind::Tsa,
+            ),
+            Err(_) => {
+                if tsa_url.is_some() {
+                    warn!("C2PA_TSA_TRUST_ANCHORS_PATH not set: /c2pa/v1/validate will report every timestamp untrusted");
+                }
+                String::new()
+            }
+        };
 
         let _require_validation = std::env::var("C2PA_REQUIRE_VALIDATION")
             .unwrap_or_else(|_| "false".to_string())
@@ -99,6 +140,8 @@ impl C2paConfig {
             signing_key_path,
             signing_cert_path,
             trust_anchors,
+            tsa_trust_anchors,
+            tsa_url,
             _require_validation,
             allowed_creators,
         })
@@ -193,6 +236,9 @@ pub struct C2paValidateResponse {
     pub provenance_chain: Option<Vec<ProvenanceEntry>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_generated: Option<bool>,
+    /// Trusted signing time from the RFC 3161 timestamp, if the manifest has one
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signed_at: Option<String>,
 }
 
 // ==================== Shared State ====================
@@ -253,8 +299,26 @@ pub async fn sign_manifest(
             .into_response();
     }
 
-    // Build C2PA manifest
-    match build_c2pa_manifest(&state.config, &req).await {
+    // Signing is blocking: with a TSA it waits on an HTTP round trip, and c2pa's HTTP
+    // client has no timeout of its own, so bound the request here.
+    let signing_state = state.clone();
+    let signing =
+        tokio::task::spawn_blocking(move || build_c2pa_manifest(&signing_state.config, &req));
+    let signed = match tokio::time::timeout(SIGNING_TIMEOUT, signing).await {
+        Ok(joined) => joined.unwrap_or_else(|e| Err(format!("Signing task failed: {}", e))),
+        Err(_) => {
+            error!("C2PA signing timed out after {:?}", SIGNING_TIMEOUT);
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(serde_json::json!({
+                    "error": "Signing timed out waiting for the timestamp authority",
+                    "status": "error"
+                })),
+            )
+                .into_response();
+        }
+    };
+    match signed {
         Ok((manifest, manifest_hash)) => {
             info!("C2PA manifest signed successfully");
             (
@@ -302,6 +366,7 @@ pub async fn validate_manifest(
                         creator: None,
                         provenance_chain: None,
                         ai_generated: None,
+                        signed_at: None,
                     }),
                 )
                     .into_response();
@@ -313,6 +378,7 @@ pub async fn validate_manifest(
         &manifest_bytes,
         &req.content_hash,
         &state.config.trust_anchors,
+        &state.config.tsa_trust_anchors,
     ) {
         Ok(response) => {
             if response.valid {
@@ -332,6 +398,7 @@ pub async fn validate_manifest(
                     creator: None,
                     provenance_chain: None,
                     ai_generated: None,
+                    signed_at: None,
                 }),
             )
                 .into_response()
@@ -346,7 +413,7 @@ pub async fn validate_manifest(
 /// The client computes a content hash with exclusion ranges and sends it to the server.
 /// The server constructs a C2PA manifest with assertions, signs it using the configured
 /// credentials, and returns the signed JUMBF manifest bytes for the client to embed.
-async fn build_c2pa_manifest(
+fn build_c2pa_manifest(
     config: &C2paConfig,
     req: &C2paSignRequest,
 ) -> Result<(String, String), String> {
@@ -375,7 +442,7 @@ async fn build_c2pa_manifest(
         &cert_chain,
         private_key.as_bytes(),
         SigningAlg::Es256,
-        None,
+        config.tsa_url.clone(),
     )
     .map_err(|e| format!("Failed to create signer: {}", e))?;
 
@@ -494,16 +561,41 @@ fn ca_certs_from_chain(chain_pem: &str) -> String {
     }
 }
 
+/// Which trust list an anchor bundle feeds.
+#[derive(Clone, Copy)]
+enum AnchorKind {
+    /// Roots for manifest signing certificates (our own CA)
+    Manifest,
+    /// Roots for RFC 3161 timestamp-authority certificates
+    Tsa,
+}
+
+impl AnchorKind {
+    fn name(self) -> &'static str {
+        match self {
+            AnchorKind::Manifest => "trust anchors",
+            AnchorKind::Tsa => "TSA trust anchors",
+        }
+    }
+
+    fn untrusted(self) -> &'static str {
+        match self {
+            AnchorKind::Manifest => "/c2pa/v1/validate will report every manifest untrusted",
+            AnchorKind::Tsa => "/c2pa/v1/validate will report every timestamp untrusted",
+        }
+    }
+}
+
 /// Check the anchor bundle once at startup. c2pa silently skips certificates it can't
 /// parse, so malformed blocks are dropped here with a warning; a bundle with no usable
 /// certificate becomes empty (trust nothing) instead of failing quietly per request.
-fn usable_trust_anchors(pem: String) -> String {
-    const UNTRUSTED: &str = "/c2pa/v1/validate will report every manifest untrusted";
+fn usable_trust_anchors(pem: String, kind: AnchorKind) -> String {
+    let untrusted = kind.untrusted();
 
     let blocks = match pem::parse_many(&pem) {
         Ok(blocks) => blocks,
         Err(e) => {
-            warn!("C2PA trust anchors are not PEM ({}): {}", e, UNTRUSTED);
+            warn!("C2PA {} are not PEM ({}): {}", kind.name(), e, untrusted);
             return String::new();
         }
     };
@@ -514,14 +606,14 @@ fn usable_trust_anchors(pem: String) -> String {
             |block| match x509_parser::parse_x509_certificate(block.contents()) {
                 Ok(_) => true,
                 Err(e) => {
-                    warn!("Skipping malformed C2PA trust anchor: {}", e);
+                    warn!("Skipping malformed C2PA {}: {}", kind.name(), e);
                     false
                 }
             },
         )
         .collect();
     if certs.is_empty() {
-        warn!("No C2PA trust anchors: {}", UNTRUSTED);
+        warn!("No C2PA {}: {}", kind.name(), untrusted);
         return String::new();
     }
 
@@ -529,23 +621,29 @@ fn usable_trust_anchors(pem: String) -> String {
         &certs,
         pem::EncodeConfig::new().set_line_ending(pem::LineEnding::LF),
     );
-    if let Err(e) = validation_context(&pem) {
-        warn!("{}: {}", e, UNTRUSTED);
+    let checked = match kind {
+        AnchorKind::Manifest => validation_context(&pem, ""),
+        AnchorKind::Tsa => validation_context("", &pem),
+    };
+    if let Err(e) = checked {
+        warn!("{}: {}", e, untrusted);
         return String::new();
     }
     pem
 }
 
-/// Reader context that trusts only `trust_anchors` for manifest signing credentials.
-fn validation_context(trust_anchors: &str) -> Result<Context, String> {
-    if trust_anchors.is_empty() {
+/// Reader context that trusts only `trust_anchors` for manifest signing credentials and
+/// only `tsa_trust_anchors` for timestamps.
+fn validation_context(trust_anchors: &str, tsa_trust_anchors: &str) -> Result<Context, String> {
+    let anchors: Vec<serde_json::Value> = [(trust_anchors, "manifest"), (tsa_trust_anchors, "tsa")]
+        .into_iter()
+        .filter(|(pem, _)| !pem.is_empty())
+        .map(|(pem, kind)| serde_json::json!({ "trust_anchors": pem, "trust_kind": kind }))
+        .collect();
+    if anchors.is_empty() {
         return Ok(Context::new());
     }
-    let settings = serde_json::json!({
-        "trust": {
-            "anchors": [{ "trust_anchors": trust_anchors, "trust_kind": "manifest" }]
-        }
-    });
+    let settings = serde_json::json!({ "trust": { "anchors": anchors } });
     Context::new()
         .with_settings(settings.to_string().as_str())
         .map_err(|e| format!("Invalid C2PA trust anchors: {}", e))
@@ -559,18 +657,20 @@ fn validate_c2pa_manifest(
     manifest_bytes: &[u8],
     expected_hash: &str,
     trust_anchors: &str,
+    tsa_trust_anchors: &str,
 ) -> Result<C2paValidateResponse, String> {
     // Use Reader to parse JUMBF and verify signature chain.
     // We provide an empty stream since the actual asset is on the client side;
     // the Reader will still verify COSE signatures on the manifest itself.
     let empty_stream = Cursor::new(Vec::<u8>::new());
-    let reader = Reader::from_context(validation_context(trust_anchors)?)
+    let reader = Reader::from_context(validation_context(trust_anchors, tsa_trust_anchors)?)
         .with_manifest_data_and_stream(manifest_bytes, "video/mp4", empty_stream)
         .map_err(|e| format!("Failed to parse C2PA manifest: {}", e))?;
 
     let mut errors = Vec::new();
     let mut creator = None;
     let mut ai_generated = None;
+    let mut signed_at = None;
     let mut provenance_chain = Vec::new();
 
     // Check validation status from c2pa-rs signature verification. The server never has
@@ -587,6 +687,8 @@ fn validate_c2pa_manifest(
 
     // Extract metadata from the active manifest
     if let Some(manifest) = reader.active_manifest() {
+        signed_at = manifest.signature_info().and_then(|info| info.time.clone());
+
         if let Ok(work) = manifest.find_assertion::<serde_json::Value>(CREATIVE_WORK_LABEL) {
             creator = work
                 .pointer("/author/0/name")
@@ -643,6 +745,7 @@ fn validate_c2pa_manifest(
         creator,
         provenance_chain: chain,
         ai_generated,
+        signed_at,
     })
 }
 
@@ -682,6 +785,13 @@ mod tests {
     /// usage and an emailProtection EKU on the end-entity certificate.
     /// Returns (cert_chain_pem_path, end_entity_key_pem_path) in a temp directory.
     fn generate_test_certs() -> (std::path::PathBuf, std::path::PathBuf) {
+        generate_test_certs_until(None)
+    }
+
+    /// As `generate_test_certs`, with the end-entity certificate expiring at `ee_not_after`.
+    fn generate_test_certs_until(
+        ee_not_after: Option<time::OffsetDateTime>,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
         use rcgen::{
             BasicConstraints, CertificateParams, DistinguishedName, DnType,
             ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
@@ -709,6 +819,10 @@ mod tests {
         ee_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         ee_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::EmailProtection];
         ee_params.use_authority_key_identifier_extension = true;
+        if let Some(not_after) = ee_not_after {
+            ee_params.not_before = time::OffsetDateTime::now_utc() - time::Duration::hours(1);
+            ee_params.not_after = not_after;
+        }
         let ee_cert = ee_params.signed_by(&ee_key, &ca_cert, &ca_key).unwrap();
 
         let unique_id = std::time::SystemTime::now()
@@ -733,12 +847,19 @@ mod tests {
     }
 
     fn make_test_config() -> C2paConfig {
-        let (cert_path, key_path) = generate_test_certs();
+        config_from_certs(generate_test_certs())
+    }
+
+    fn config_from_certs(
+        (cert_path, key_path): (std::path::PathBuf, std::path::PathBuf),
+    ) -> C2paConfig {
         let chain = std::fs::read_to_string(&cert_path).unwrap();
         C2paConfig {
             signing_key_path: key_path.to_str().unwrap().to_string(),
             signing_cert_path: cert_path.to_str().unwrap().to_string(),
-            trust_anchors: usable_trust_anchors(ca_certs_from_chain(&chain)),
+            trust_anchors: usable_trust_anchors(ca_certs_from_chain(&chain), AnchorKind::Manifest),
+            tsa_trust_anchors: String::new(),
+            tsa_url: None,
             _require_validation: false,
             allowed_creators: vec![],
         }
@@ -772,9 +893,8 @@ mod tests {
         let req = make_test_request(hash);
 
         // Sign
-        let (manifest_b64, manifest_hash) = build_c2pa_manifest(&config, &req)
-            .await
-            .expect("Signing should succeed");
+        let (manifest_b64, manifest_hash) =
+            build_c2pa_manifest(&config, &req).expect("Signing should succeed");
 
         // Manifest should be non-empty base64
         assert!(!manifest_b64.is_empty(), "Manifest should not be empty");
@@ -796,7 +916,7 @@ mod tests {
         assert_eq!(manifest_hash, computed_hash, "Manifest hash should match");
 
         // Validate using c2pa-rs Reader
-        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors)
+        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors, "")
             .expect("Validation should not error");
 
         // Check metadata was preserved
@@ -827,9 +947,7 @@ mod tests {
         let req = make_test_request(hash);
 
         // Sign with one hash
-        let (manifest_b64, _) = build_c2pa_manifest(&config, &req)
-            .await
-            .expect("Signing should succeed");
+        let (manifest_b64, _) = build_c2pa_manifest(&config, &req).expect("Signing should succeed");
 
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
@@ -837,7 +955,7 @@ mod tests {
 
         // Validate with a different hash
         let wrong_hash = "0000000000000000000000000000000000000000000000000000000000000000";
-        let result = validate_c2pa_manifest(&manifest_bytes, wrong_hash, &config.trust_anchors)
+        let result = validate_c2pa_manifest(&manifest_bytes, wrong_hash, &config.trust_anchors, "")
             .expect("Validation should not error");
 
         assert!(
@@ -854,9 +972,7 @@ mod tests {
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
         let req = make_test_request(hash);
 
-        let (manifest_b64, _) = build_c2pa_manifest(&config, &req)
-            .await
-            .expect("Signing should succeed");
+        let (manifest_b64, _) = build_c2pa_manifest(&config, &req).expect("Signing should succeed");
 
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
@@ -883,15 +999,13 @@ mod tests {
         let mut req = make_test_request(hash);
         req.metadata.ai_generated = Some(true);
 
-        let (manifest_b64, _) = build_c2pa_manifest(&config, &req)
-            .await
-            .expect("Signing should succeed");
+        let (manifest_b64, _) = build_c2pa_manifest(&config, &req).expect("Signing should succeed");
 
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
 
-        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors)
+        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors, "")
             .expect("Validation should not error");
 
         assert_eq!(
@@ -909,9 +1023,7 @@ mod tests {
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
         let req = make_test_request(hash);
 
-        let (manifest_b64, _) = build_c2pa_manifest(&config, &req)
-            .await
-            .expect("Signing should succeed");
+        let (manifest_b64, _) = build_c2pa_manifest(&config, &req).expect("Signing should succeed");
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
@@ -966,14 +1078,13 @@ mod tests {
     async fn test_c2pa_validate_trusts_own_ca() {
         let config = make_test_config();
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
-        let (manifest_b64, _) = build_c2pa_manifest(&config, &make_test_request(hash))
-            .await
-            .expect("Signing should succeed");
+        let (manifest_b64, _) =
+            build_c2pa_manifest(&config, &make_test_request(hash)).expect("Signing should succeed");
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
 
-        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors)
+        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors, "")
             .expect("Validation should not error");
         assert!(
             result.valid,
@@ -990,15 +1101,14 @@ mod tests {
         let ours = make_test_config();
         let theirs = make_test_config();
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
-        let (manifest_b64, _) = build_c2pa_manifest(&theirs, &make_test_request(hash))
-            .await
-            .expect("Signing should succeed");
+        let (manifest_b64, _) =
+            build_c2pa_manifest(&theirs, &make_test_request(hash)).expect("Signing should succeed");
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
 
         for anchors in [ours.trust_anchors.as_str(), ""] {
-            let result = validate_c2pa_manifest(&manifest_bytes, hash, anchors)
+            let result = validate_c2pa_manifest(&manifest_bytes, hash, anchors, "")
                 .expect("Validation should not error");
             assert!(!result.valid);
             assert!(
@@ -1016,11 +1126,18 @@ mod tests {
     /// a good bundle is kept (trimmed) and still validates our manifests.
     #[test]
     fn test_usable_trust_anchors() {
-        assert_eq!(usable_trust_anchors(" \n\t\n".to_string()), "");
-        assert_eq!(usable_trust_anchors("not a certificate\n".to_string()), "");
+        assert_eq!(
+            usable_trust_anchors(" \n\t\n".to_string(), AnchorKind::Manifest),
+            ""
+        );
+        assert_eq!(
+            usable_trust_anchors("not a certificate\n".to_string(), AnchorKind::Manifest),
+            ""
+        );
         assert_eq!(
             usable_trust_anchors(
-                "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n".to_string()
+                "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n".to_string(),
+                AnchorKind::Manifest
             ),
             ""
         );
@@ -1028,14 +1145,112 @@ mod tests {
         let config = make_test_config();
         assert!(!config.trust_anchors.is_empty());
         let padded = format!("\n{}\n\n", config.trust_anchors);
-        assert_eq!(usable_trust_anchors(padded), config.trust_anchors);
+        assert_eq!(
+            usable_trust_anchors(padded, AnchorKind::Manifest),
+            config.trust_anchors
+        );
 
         // A malformed block is dropped; the good certificate survives.
         let mixed = format!(
             "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n{}",
             config.trust_anchors
         );
-        assert_eq!(usable_trust_anchors(mixed), config.trust_anchors);
+        assert_eq!(
+            usable_trust_anchors(mixed, AnchorKind::Manifest),
+            config.trust_anchors
+        );
+    }
+
+    /// With a TSA configured, a TSA that can't be reached fails the sign request rather
+    /// than returning a manifest without a timestamp (arkavo-rs#102).
+    #[test]
+    fn test_c2pa_tsa_failure_fails_signing() {
+        let mut config = make_test_config();
+        config.tsa_url = Some("http://127.0.0.1:9/".to_string());
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+        let result = build_c2pa_manifest(&config, &make_test_request(hash));
+        assert!(
+            result.is_err(),
+            "Signing must fail when the TSA is unreachable"
+        );
+    }
+
+    /// Untimestamped manifests report no signing time.
+    #[test]
+    fn test_c2pa_signed_at_absent_without_tsa() {
+        let config = make_test_config();
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+        let (manifest_b64, _) =
+            build_c2pa_manifest(&config, &make_test_request(hash)).expect("Signing should succeed");
+        let manifest_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
+                .unwrap();
+        let result = validate_c2pa_manifest(&manifest_bytes, hash, &config.trust_anchors, "")
+            .expect("Validation should not error");
+        assert_eq!(result.signed_at, None);
+    }
+
+    /// A trusted timestamp keeps a manifest valid after its signer certificate expires;
+    /// without one the manifest expires with the certificate. Needs a live TSA, so it runs
+    /// only with C2PA_TSA_TEST_URL and C2PA_TSA_TEST_ANCHORS (PEM roots of that TSA) set.
+    #[test]
+    fn test_c2pa_timestamp_outlives_signer_certificate() {
+        let (Ok(tsa_url), Ok(tsa_anchors_path)) = (
+            std::env::var("C2PA_TSA_TEST_URL"),
+            std::env::var("C2PA_TSA_TEST_ANCHORS"),
+        ) else {
+            eprintln!("SKIPPED: C2PA_TSA_TEST_URL / C2PA_TSA_TEST_ANCHORS not set");
+            return;
+        };
+        let tsa_anchors = usable_trust_anchors(
+            std::fs::read_to_string(tsa_anchors_path).unwrap(),
+            AnchorKind::Tsa,
+        );
+        assert!(
+            !tsa_anchors.is_empty(),
+            "TSA anchors must hold a certificate"
+        );
+
+        let expiry = time::OffsetDateTime::now_utc() + time::Duration::seconds(4);
+        let mut config = config_from_certs(generate_test_certs_until(Some(expiry)));
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+        let sign = |config: &C2paConfig| {
+            let (b64, _) = build_c2pa_manifest(config, &make_test_request(hash))
+                .expect("Signing should succeed");
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64).unwrap()
+        };
+        let untimestamped = sign(&config);
+        config.tsa_url = Some(tsa_url);
+        let timestamped = sign(&config);
+
+        while time::OffsetDateTime::now_utc() <= expiry + time::Duration::seconds(1) {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+
+        let check = |bytes: &[u8], tsa: &str| {
+            validate_c2pa_manifest(bytes, hash, &config.trust_anchors, tsa)
+                .expect("Validation should not error")
+        };
+        let expired = check(&untimestamped, &tsa_anchors);
+        assert!(
+            !expired.valid,
+            "Untimestamped manifest must expire: {:?}",
+            expired.errors
+        );
+
+        let with_tsa_root = check(&timestamped, &tsa_anchors);
+        assert!(
+            with_tsa_root.valid,
+            "Trusted timestamp must keep it valid: {:?}",
+            with_tsa_root.errors
+        );
+        assert!(with_tsa_root.signed_at.is_some());
+
+        let without_tsa_root = check(&timestamped, "");
+        assert!(
+            !without_tsa_root.valid,
+            "An untrusted timestamp must not extend validity"
+        );
     }
 
     /// Only the certificates after the end-entity become anchors.
@@ -1073,7 +1288,7 @@ mod tests {
         let invalid_bytes = b"this is not valid JUMBF data at all";
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
 
-        let result = validate_c2pa_manifest(invalid_bytes, hash, "");
+        let result = validate_c2pa_manifest(invalid_bytes, hash, "", "");
         assert!(result.is_err(), "Should fail to parse invalid JUMBF");
     }
 
@@ -1096,9 +1311,7 @@ mod tests {
         let req = make_test_request(hash);
 
         // Sign
-        let (manifest_b64, _) = build_c2pa_manifest(&config, &req)
-            .await
-            .expect("Signing should succeed");
+        let (manifest_b64, _) = build_c2pa_manifest(&config, &req).expect("Signing should succeed");
 
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
