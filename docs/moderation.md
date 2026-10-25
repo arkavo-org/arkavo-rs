@@ -134,7 +134,7 @@ The table is DynamoDB `prod-moderation-reports` in `us-east-1`.
 
 ### On this server: DynamoDB Local
 
-Production on the Arkavo server runs the table in a DynamoDB Local container, not in AWS. arks then needs no AWS credentials for moderation. `MODERATION_DYNAMODB_ENDPOINT` points only the moderation client at the container, with fixed placeholder credentials, so the S3 client's AWS credentials are not affected.
+Production on the Arkavo server runs the table in a DynamoDB Local container, not in AWS. arks then needs no AWS credentials for moderation. `MODERATION_DYNAMODB_ENDPOINT` points only the moderation client at the container, with fixed placeholder credentials, so the process's AWS credentials, used by C2PA KMS signing, are not affected.
 
 ```sh
 docker volume create arks-dynamodb-data
@@ -218,7 +218,7 @@ its index:
 }
 ```
 
-arks uses the default AWS credential chain, as the S3 client does. It runs
+arks uses the default AWS credential chain, as the C2PA KMS signer does. It runs
 under `sudo start.sh`, so check which credentials that chain finds there
 (`sudo sh -c 'echo $HOME'`), and prefer a dedicated IAM user's keys exported in
 `production/start.sh` over SSO credentials, which expire.

@@ -25,12 +25,11 @@ use crate::contracts::content_rating::content_rating::{
 };
 use crate::contracts::geo_fence_contract::geo_fence_contract::Geofence3D;
 use crate::contracts::{contract_simple_abac, geo_fence_contract};
-use crate::schemas::event_generated::arkavo::{Action, Event, EventData};
+use crate::schemas::event_generated::arkavo::{Event, EventData};
 use crate::schemas::metadata_generated::arkavo;
 use crate::schemas::metadata_generated::arkavo::{root_as_metadata, Metadata};
 use async_nats::Message as NatsMessage;
 use async_nats::{Client as NatsClient, PublishError};
-use aws_sdk_s3 as s3;
 use axum::extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::header::AUTHORIZATION;
@@ -1022,8 +1021,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let dynamodb = match &s.dynamodb_endpoint {
                 // DynamoDB Local ignores credentials but the SDK signs
                 // every request, so give it fixed placeholders here rather
-                // than in the process environment, where S3 would pick
-                // them up.
+                // than in the process environment, where the KMS signer
+                // would pick them up.
                 Some(endpoint) => {
                     info!("Moderation store: DynamoDB at {endpoint}");
                     let conf = aws_sdk_dynamodb::config::Builder::new()
@@ -2677,49 +2676,6 @@ async fn handle_event(
         println!("Event Timestamp: {:?}", event.timestamp());
         println!("Event Status: {:?}", event.status());
         println!("Event Data Type: {:?}", event.data_type());
-        // S3 store
-        match event.action() {
-            Action::store => {
-                if let Some(cache_event) = event.data_as_cache_event() {
-                    if let (Some(target_id), Some(target_payload)) =
-                        (cache_event.target_id(), cache_event.target_payload())
-                    {
-                        // Create S3 key using target_id
-                        let target_id_str = bs58::encode(target_id.bytes()).into_string();
-                        let s3_key = format!("{}/data", target_id_str);
-
-                        // Upload to S3
-                        return match server_state
-                            .s3_client
-                            .put_object()
-                            .bucket(&server_state.settings.s3_bucket)
-                            .key(&s3_key)
-                            .body(aws_sdk_s3::primitives::ByteStream::from(
-                                target_payload.bytes().to_vec(),
-                            ))
-                            .send()
-                            .await
-                        {
-                            Ok(_) => {
-                                info!("Successfully stored object in S3: {}", s3_key);
-                                let mut response = Vec::new();
-                                response.push(MessageType::Event as u8);
-                                response.extend_from_slice(b"Successfully stored");
-                                Some(Message::Binary(response))
-                            }
-                            Err(e) => {
-                                error!("Failed to store object in S3: {}", e);
-                                None
-                            }
-                        };
-                    }
-                }
-            }
-            _ => {
-                error!("Unhandled action: {:?}", event.action());
-                drop(None::<Message>);
-            }
-        }
         // redis connection
         let mut redis_conn = match server_state
             .redis_client
@@ -2952,7 +2908,6 @@ fn get_kas_private_key_bytes() -> Option<Vec<u8>> {
 struct ServerState {
     settings: ServerSettings,
     redis_client: RedisClient,
-    s3_client: s3::Client,
     chain_validator: Option<Arc<dyn chain::SessionValidator>>,
 }
 
@@ -2970,17 +2925,9 @@ impl ServerState {
         redis_client: RedisClient,
         chain_validator: Option<Arc<dyn chain::SessionValidator>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Initialize AWS S3 client
-        info!("Loading AWS configuration...");
-        let config = aws_config::load_from_env().await;
-        info!("AWS configuration loaded successfully");
-        let s3_client = s3::Client::new(&config);
-        info!("S3 client initialized");
-
         Ok(ServerState {
             settings,
             redis_client,
-            s3_client,
             chain_validator,
         })
     }
@@ -2999,7 +2946,6 @@ struct ServerSettings {
     redis_url: String,
     jwt_validation_disabled: bool,
     jwt_public_key_path: Option<String>,
-    s3_bucket: String,
     /// Chain RPC URL for blockchain connectivity (optional - disables chain validation if not set)
     chain_rpc_url: Option<String>,
     /// Expected audience for NTDF token validation
@@ -3052,7 +2998,6 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
             .parse()
             .unwrap_or(true),
         jwt_public_key_path: env::var("JWT_PUBLIC_KEY_PATH").ok(),
-        s3_bucket: env::var("S3_BUCKET").unwrap_or_else(|_| "default-bucket".to_string()),
         chain_rpc_url: env::var("CHAIN_RPC_URL").ok(),
         ntdf_expected_audience: env::var("NTDF_EXPECTED_AUDIENCE")
             .unwrap_or_else(|_| "https://platform.arkavo.net".to_string()),
@@ -3125,11 +3070,6 @@ fn validate_config(settings: &ServerSettings) -> Result<(), Box<dyn std::error::
         if !std::path::Path::new(jwt_key_path).exists() {
             return Err(format!("JWT public key file not found: {}", jwt_key_path).into());
         }
-    }
-
-    // Validate S3 bucket name
-    if settings.s3_bucket.is_empty() {
-        return Err("S3_BUCKET must not be empty".into());
     }
 
     // Validate Chain RPC URL format (only if configured)
