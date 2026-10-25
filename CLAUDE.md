@@ -253,6 +253,7 @@ export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert.pem
 export C2PA_REQUIRE_VALIDATION=true                # Enforce C2PA manifest validation
 export C2PA_ALLOWED_CREATORS=creator1@example.com,creator2@example.com  # Optional creator whitelist
 export C2PA_TRUST_ANCHORS_PATH=/path/to/c2pa_trust_anchors.pem  # Optional; PEM bundle /c2pa/v1/validate trusts (default: the CA certs in C2PA_SIGNING_CERT_PATH)
+export C2PA_SIGN_LIMIT_PER_HOUR=120                     # /c2pa/v1/sign per token subject (needs a passkey CWT; one uuid exclusion = manifest box)
 export C2PA_TSA_URL=http://timestamp.digicert.com      # Optional RFC 3161 TSA; when set, a TSA failure fails the sign request (15 s bound)
 export C2PA_TSA_TRUST_ANCHORS_PATH=/path/to/tsa_roots.pem  # Optional; TSA roots /c2pa/v1/validate trusts for timestamps only (docs/c2pa_video_drm.md "Timestamps")
 

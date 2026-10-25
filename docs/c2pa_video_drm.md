@@ -105,21 +105,27 @@ This document describes the integration of C2PA (Coalition for Content Provenanc
 
 Sign a C2PA manifest with a pre-computed content hash.
 
+**Who may sign:** only a signed-in person. The request needs `Authorization: Bearer <passkey CWT>`, the identity.arkavo.net token, verified the same way as `/media/v1`: `aud` must contain `arkavo` and `MEDIA_PLATFORM_AUDIENCE`, the `sub` must be person-shaped, and agent tokens are refused. A missing or invalid token gets 401, and a non-person token 403. The manifest's author (`stds.schema-org.CreativeWork`) is the token's `sub`; `metadata.creator` is ignored. `C2PA_ALLOWED_CREATORS`, if set, filters on `sub`. Each subject may make `C2PA_SIGN_LIMIT_PER_HOUR` requests per hour (default 120); over the limit gets 429 with `Retry-After`. Every request is logged with its `sub`, content hash and exclusion range. These rules close GHSA-5rfq-r96w-c7mf.
+
+**Exclusion rule:** `exclusion_ranges` must be exactly one range with `box_type: "uuid"`, and its length must equal the C2PA manifest box the client will embed: 45 bytes of box header (size, type, UUID, version/flags, `manifest\0`, Merkle offset) plus the JUMBF length. That way only the manifest box itself is unhashed, and no media bytes are.
+
+The server signs, then checks the length. On a mismatch it discards the manifest and returns `422` with `required_exclusion_length`. The client repeats the request with that length; this usually settles on the second pass. Any other shape of `exclusion_ranges` gets `400`.
+
 **Request:**
 ```json
 {
-  "content_hash": "a1b2c3d4...hex64chars", // SHA-256 hash of video
+  "content_hash": "a1b2c3d4...hex64chars", // SHA-256 of the file with the manifest box excluded
   "exclusion_ranges": [
     {
-      "start": 100,
-      "end": 500,
-      "box_type": "uuid" // Optional ISOBMFF box type
+      "start": 7375,      // where the manifest box will sit (e.g. appended at end of file)
+      "end": 11420,       // start + 45 + JUMBF length
+      "box_type": "uuid"  // required
     }
   ],
   "container_format": "mp4", // or "mov", "avi"
   "metadata": {
     "title": "My Video",
-    "creator": "user@example.com",
+    "creator": "ignored",       // the token's sub is the author
     "description": "Optional description",
     "timestamp": "2025-10-26T00:00:00Z", // ISO 8601
     "ai_generated": false,
