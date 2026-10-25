@@ -28,6 +28,8 @@ use std::sync::Arc;
 /// Arkavo's assertion for the request's creator and description. It replaces
 /// `stds.schema-org.CreativeWork`, which spec 2.2 deprecates (arkavo-rs#115).
 const RECORDING_LABEL: &str = "org.arkavo.recording";
+/// Where manifests signed before arkavo-rs#115 carry the creator, as the author
+const LEGACY_CREATIVE_WORK_LABEL: &str = "stds.schema-org.CreativeWork";
 /// The product that generates the claims, named in `claim_generator_info`
 const PRODUCT_NAME: &str = "Arkavo Creator";
 /// The C2PA specification version the claims follow: c2pa-rs 0.91 generates spec 2.2
@@ -898,6 +900,13 @@ fn validate_c2pa_manifest(
                 .get("creator")
                 .and_then(|n| n.as_str())
                 .map(String::from);
+        } else if let Ok(work) =
+            manifest.find_assertion::<serde_json::Value>(LEGACY_CREATIVE_WORK_LABEL)
+        {
+            creator = work
+                .pointer("/author/0/name")
+                .and_then(|n| n.as_str())
+                .map(String::from);
         }
 
         if let Ok(actions) = manifest.find_assertion::<Actions>(Actions::LABEL) {
@@ -1151,6 +1160,59 @@ mod tests {
         );
         assert_eq!(assertions[RECORDING_LABEL]["creator"], "test@example.com");
         assert_eq!(assertions[RECORDING_LABEL]["description"], "A test video");
+    }
+
+    /// Manifests signed before arkavo-rs#115 carry the creator in the deprecated
+    /// `stds.schema-org.CreativeWork` author; /c2pa/v1/validate still reports it.
+    #[test]
+    fn test_c2pa_validate_reads_the_creator_of_older_manifests() {
+        let config = make_test_config();
+        let SigningKey::File(ref key_path) = config.signing_key else {
+            unreachable!("test config signs with a key file")
+        };
+        let cert_chain = std::fs::read(&config.signing_cert_path).unwrap();
+        let key = signing_key_pkcs8_pem(&std::fs::read(key_path).unwrap()).unwrap();
+        let signer =
+            c2pa::create_signer::from_keys(&cert_chain, key.as_bytes(), SigningAlg::Es256, None)
+                .unwrap();
+
+        // The pre-#115 manifest: a gathered actions assertion and a CreativeWork author
+        let mut builder = Builder::from_context(Context::new().with_signer(signer));
+        builder.definition.instance_id = "xmp:iid:older".to_string();
+        builder
+            .add_action(
+                Action::new(c2pa_action::CREATED)
+                    .set_source_type(DigitalSourceType::DigitalCapture),
+            )
+            .unwrap();
+        builder
+            .add_assertion_json(
+                "stds.schema-org.CreativeWork",
+                &serde_json::json!({
+                    "@context": "https://schema.org",
+                    "@type": "CreativeWork",
+                    "author": [{ "@type": "Person", "name": "arkavo:older-subject" }],
+                }),
+            )
+            .unwrap();
+        builder
+            .add_assertion(
+                "org.arkavo.c2pa.content_hash",
+                &serde_json::json!({ "hash": RUBRIC_HASH, "algorithm": "sha256" }),
+            )
+            .unwrap();
+        let mut data_hash = c2pa::assertions::DataHash::new("jumbf manifest", "sha256");
+        data_hash.set_hash(hex::decode(RUBRIC_HASH).unwrap());
+        data_hash.add_exclusion(HashRange::new(100, 400));
+        builder
+            .add_assertion(c2pa::assertions::DataHash::LABEL, &data_hash)
+            .unwrap();
+        let bytes = builder.sign_embeddable("c2pa").unwrap();
+
+        let result =
+            validate_c2pa_manifest(&bytes, RUBRIC_HASH, &config.trust_anchors, "").unwrap();
+        assert!(result.valid, "{:?}", result.errors);
+        assert_eq!(result.creator.as_deref(), Some("arkavo:older-subject"));
     }
 
     /// The claim generator is the product, with the spec version the claim follows
