@@ -200,7 +200,7 @@ Validate a C2PA manifest against a content hash.
 export C2PA_SIGNER=kms                        # required: kms (production) or file (development)
 export C2PA_KMS_KEY_ID=arn:aws:kms:us-east-1:<account>:key/<id>   # with C2PA_SIGNER=kms
 export C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem        # with C2PA_SIGNER=file
-export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert.pem
+export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert_chain.pem      # signer certificate, then the CA
 export C2PA_REQUIRE_VALIDATION=true  # Enforce C2PA in media policy
 export C2PA_ALLOWED_CREATORS=arkavo:<uuid-1>,arkavo:<uuid-2>  # token subjects (sub), not emails
 # Optional: PEM bundle /c2pa/v1/validate trusts. Default: the certificates after the
@@ -210,6 +210,12 @@ export C2PA_TRUST_ANCHORS_PATH=/path/to/c2pa_trust_anchors.pem
 export C2PA_TSA_URL=http://timestamp.digicert.com
 # Optional: PEM roots of that TSA, trusted by /c2pa/v1/validate for timestamps only.
 export C2PA_TSA_TRUST_ANCHORS_PATH=/path/to/tsa_roots.pem
+
+# Existing Media DRM Configuration
+export MAX_CONCURRENT_STREAMS=5
+export ENABLE_MEDIA_ANALYTICS=true
+export MEDIA_METRICS_SUBJECT=media.metrics
+```
 
 ### Signing key in AWS KMS
 
@@ -233,9 +239,12 @@ openssl x509 -new -force_pubkey c2pa_kms_pub.pem \
   -CA c2pa_ca_cert.pem -CAkey c2pa_ca_key.pem -days 365 \
   -set_serial 0x$(openssl rand -hex 16) -extfile ee.cnf -out c2pa_cert.pem
 cat c2pa_cert.pem c2pa_ca_cert.pem > c2pa_cert_chain.pem
+export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert_chain.pem
 ```
 
-`openssl` here is an operator tool (OpenSSL 3); it is not linked into arks. A CA on the C2PA trust list will instead want a CSR signed by the KMS key.
+Point `C2PA_SIGNING_CERT_PATH` at the chain, not `c2pa_cert.pem`: the CA after the signer certificate is what `/c2pa/v1/validate` trusts by default.
+
+`openssl` here is an operator tool (OpenSSL 3); C2PA signing does not use it. A CA on the C2PA trust list will instead want a CSR signed by the KMS key.
 
 ### Timestamps
 
@@ -257,17 +266,11 @@ Without a trusted timestamp, a verifier checks the signer certificate against th
   - Our signer chains to a private CA, so third-party verifiers already need the Arkavo CA as an anchor. A C2PA-listed TSA becomes worthwhile once the signer certificate also comes from a C2PA-listed CA.
 - Latency: one DigiCert timestamp added about 270 ms to signing (measured 2026-10-24).
 
-# Existing Media DRM Configuration
-export MAX_CONCURRENT_STREAMS=5
-export ENABLE_MEDIA_ANALYTICS=true
-export MEDIA_METRICS_SUBJECT=media.metrics
-```
-
 ### Generating C2PA Signing Certificates
 
 C2PA uses ES256 (ECDSA with SHA-256) for signing. **Important:** c2pa-rs rejects self-signed certificates. You must generate a CA + end-entity certificate chain with the `emailProtection` Extended Key Usage.
 
-arks signs with c2pa-rs's pure-Rust crypto backend (`rust_native_crypto`, RustCrypto `p256`). OpenSSL is not linked into the server. The backend only reads PKCS#8 keys, so arks converts a SEC1 `EC PRIVATE KEY` (what `openssl ecparam` writes) to PKCS#8 when it loads the key. Either format works for `C2PA_SIGNING_KEY_PATH`.
+arks signs with c2pa-rs's pure-Rust crypto backend (`rust_native_crypto`, RustCrypto `p256`), so C2PA signing uses no OpenSSL. (On Linux the binary still links OpenSSL through `reqwest`'s default `native-tls`.) The backend only reads PKCS#8 keys, so arks converts a SEC1 `EC PRIVATE KEY` (what `openssl ecparam` writes) to PKCS#8 when it loads the key. Either format works for `C2PA_SIGNING_KEY_PATH`.
 
 ```bash
 # 1. Generate CA key and self-signed CA certificate
@@ -663,13 +666,13 @@ The `/c2pa/v1/sign` endpoint returns a **base64-encoded JUMBF** (JPEG Universal 
 
 ### C2PA Signing Disabled
 
-**Symptom:** Server logs: `C2PA signing disabled: C2PA_SIGNER not set`, or a KMS error.
+**Symptom:** Server logs `C2PA signing disabled: ...`, for example `C2PA_SIGNING_CERT_PATH not set`, `C2PA_SIGNER not set` (a key-file setup from before `C2PA_SIGNER` existed), `KMS GetPublicKey failed` or `The KMS key does not match the signer certificate's public key`. See [Signing key in AWS KMS](#signing-key-in-aws-kms) for the KMS cases.
 
 **Solution:**
 ```bash
 export C2PA_SIGNER=kms C2PA_KMS_KEY_ID=<key arn>     # production
 # or, for development: export C2PA_SIGNER=file C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem
-export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert.pem
+export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert_chain.pem
 ```
 
 ### Creator Not Authorized
