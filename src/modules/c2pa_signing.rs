@@ -1238,18 +1238,18 @@ mod tests {
             expired.errors
         );
 
-        let trusted = check(&timestamped, &tsa_anchors);
+        let with_tsa_root = check(&timestamped, &tsa_anchors);
         assert!(
-            trusted.valid,
+            with_tsa_root.valid,
             "Trusted timestamp must keep it valid: {:?}",
-            trusted.errors
+            with_tsa_root.errors
         );
-        assert!(trusted.signed_at.is_some());
+        assert!(with_tsa_root.signed_at.is_some());
 
-        let untrusted_tsa = check(&timestamped, "");
-        eprintln!(
-            "timestamp without TSA anchors: valid={} errors={:?}",
-            untrusted_tsa.valid, untrusted_tsa.errors
+        let without_tsa_root = check(&timestamped, "");
+        assert!(
+            !without_tsa_root.valid,
+            "An untrusted timestamp must not extend validity"
         );
     }
 
