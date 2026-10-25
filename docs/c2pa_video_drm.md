@@ -176,9 +176,12 @@ Validate a C2PA manifest against a content hash.
 ```json
 {
   "manifest": "base64_encoded_jumbf_data",
-  "content_hash": "a1b2c3d4...hex64chars"
+  "content_hash": "a1b2c3d4...hex64chars",
+  "exclusion_ranges": [{ "start": 7375, "end": 21457, "box_type": "uuid" }] // optional
 }
 ```
+
+`exclusion_ranges` is where the client found the manifest box. Send it: when given, it must equal the exclusion the manifest was signed with, or the response is `valid: false` with an `Exclusion mismatch` error. Without it, a box that grew or moved after signing leaves the hash of the other bytes unchanged while the media offsets point at different bytes, and validation can't tell.
 
 **Response:**
 ```json
