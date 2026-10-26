@@ -282,7 +282,7 @@ impl ModerationState {
                     "creatorSubject": r.creator_subject,
                     // The account key, as in the lift event and the stored
                     // suspension: enforcers pair a suspend with its lift on it.
-                    "account": r.creator_subject.as_deref().and_then(account_key),
+                    "account": r.creator_subject.as_deref().and_then(account_id),
                     "contentId": r.content_id,
                     "moderator": r.moderator_subject,
                     // The moderator's note, which is a suspend's reason
@@ -457,9 +457,9 @@ pub async fn update_report(
     };
     // A moderator never decides a report they filed, or one about their own
     // account, whatever the response.
-    let me = account_key(&moderator).unwrap_or_else(|| moderator.clone());
-    let reporter = account_key(&current.reporter_subject);
-    let creator = current.creator_subject.as_deref().and_then(account_key);
+    let me = account_id(&moderator).unwrap_or_else(|| moderator.clone());
+    let reporter = account_id(&current.reporter_subject);
+    let creator = current.creator_subject.as_deref().and_then(account_id);
     if reporter.as_deref() == Some(me.as_str()) || creator.as_deref() == Some(me.as_str()) {
         return err_json(
             StatusCode::FORBIDDEN,
@@ -566,7 +566,7 @@ pub async fn update_report(
 /// the same account. `None` when the subject fails the report identifier rules
 /// (empty, over 256 bytes, whitespace or control characters) or is only the
 /// prefix.
-fn account_key(subject: &str) -> Option<String> {
+fn account_id(subject: &str) -> Option<String> {
     let subject = identifier(Some(subject.to_string()), "invalid subject")
         .ok()
         .flatten()?;
@@ -618,7 +618,7 @@ pub async fn get_suspension(
         }
         Err(e) => return auth_fail(e),
     }
-    let Some(key) = account_key(&subject) else {
+    let Some(key) = account_id(&subject) else {
         return err_json(StatusCode::BAD_REQUEST, "invalid subject");
     };
     match state.suspensions.get(&key).await {
@@ -653,10 +653,10 @@ pub async fn lift_suspension(
         Ok(m) => m,
         Err(e) => return auth_fail(e),
     };
-    let Some(key) = account_key(&subject) else {
+    let Some(account) = account_id(&subject) else {
         return err_json(StatusCode::BAD_REQUEST, "invalid subject");
     };
-    if Some(key.as_str()) == account_key(&moderator).as_deref() {
+    if Some(account.as_str()) == account_id(&moderator).as_deref() {
         return err_json(
             StatusCode::FORBIDDEN,
             "a moderator can't lift their own suspension",
@@ -679,7 +679,7 @@ pub async fn lift_suspension(
     // store write failed) can still be undone. The stored lift then applies only
     // to the suspension version read here: if another moderator changed it in
     // between, 409, and a retry announces again.
-    let current = match state.suspensions.history(&key).await {
+    let current = match state.suspensions.history(&account).await {
         Ok(h) => h.filter(|(h, _)| h.current.is_active()),
         Err(e) => return suspension_fail(e),
     };
@@ -687,14 +687,14 @@ pub async fn lift_suspension(
         "type": "suspension.lift",
         "action": "lift",
         "creatorSubject": subject,
-        "account": key,
+        "account": account,
         "reportId": current.as_ref().map(|(h, _)| h.current.report_id.clone()),
         "moderator": moderator,
         "reason": lift.reason,
         "at": rfc3339(lift.at),
     });
     if let Err(e) = state.try_publish("actions.lift", event).await {
-        error!("moderation lift for {key}: {e}; suspension unchanged");
+        error!("moderation lift for {account}: {e}; suspension unchanged");
         return err_json(
             StatusCode::SERVICE_UNAVAILABLE,
             "lift not delivered; the suspension is unchanged, try again",
@@ -707,7 +707,7 @@ pub async fn lift_suspension(
     if let Err(e) = state.suspensions.lift(history, version, &lift).await {
         return suspension_fail(e);
     }
-    info!("moderation suspension lifted for {key} by {moderator}");
+    info!("moderation suspension lifted for {account} by {moderator}");
     Json(json!({ "subject": subject, "suspended": false, "lifted": true })).into_response()
 }
 
@@ -2030,17 +2030,17 @@ mod tests {
 
     #[test]
     fn only_hyphenated_uuids_fold_case() {
-        let uuid = "5f0c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b";
+        let id = "5f0c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b";
         assert_eq!(
-            account_key(&format!("arkavo:{}", uuid.to_uppercase())).as_deref(),
-            Some(uuid)
+            account_id(&format!("arkavo:{}", id.to_uppercase())).as_deref(),
+            Some(id)
         );
-        for other in [
-            format!("urn:uuid:{uuid}"),
-            format!("{{{uuid}}}"),
-            uuid.replace('-', ""),
+        for spelling in [
+            format!("urn:uuid:{id}"),
+            format!("{{{id}}}"),
+            id.replace('-', ""),
         ] {
-            assert_ne!(account_key(&other).as_deref(), Some(uuid), "{other}");
+            assert_ne!(account_id(&spelling).as_deref(), Some(id));
         }
     }
 
