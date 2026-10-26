@@ -92,12 +92,14 @@ impl SessionVerifier {
     }
 }
 
+/// The non-empty, trimmed entries of a comma-separated list.
+fn list(raw: &str) -> impl Iterator<Item = &str> {
+    raw.split(',').map(str::trim).filter(|s| !s.is_empty())
+}
+
 /// Client IDs from a comma-separated list.
 pub fn parse_client_ids(raw: &str) -> HashSet<String> {
-    raw.split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
+    list(raw).map(str::to_string).collect()
 }
 
 /// The account ID of a person's passkey session, or `None` for any other
@@ -131,9 +133,10 @@ pub fn person_subject(claims: &DecodedClaims) -> Option<String> {
 /// Moderator account IDs, from a comma-separated list. Entries may carry the
 /// `arkavo:` prefix.
 pub fn parse_moderators(raw: &str) -> HashSet<String> {
-    raw.split(',')
-        .map(|s| subject_id_bind(s.trim()).to_string())
+    list(raw)
+        .map(subject_id_bind)
         .filter(|s| !s.is_empty())
+        .map(str::to_string)
         .collect()
 }
 

@@ -17,7 +17,9 @@ pub struct Settings {
     /// Service clients that may read suspensions (the platform's
     /// `constraints.publishing_status`).
     pub suspension_readers: HashSet<String>,
-    /// Required in a suspension reader's token `aud`: this server.
+    /// Required in a suspension reader's token `aud`: this server, the same
+    /// platform audience the media routes use (`MEDIA_PLATFORM_AUDIENCE`), so a
+    /// hostname change re-pins one setting.
     pub suspension_reader_audience: String,
     pub status_index: String,
     pub issuer: String,
@@ -70,7 +72,7 @@ pub fn settings_from(get: impl Fn(&str) -> Option<String>) -> Result<Option<Sett
         suspension_readers: get("MODERATION_SUSPENSION_READER_IDS")
             .map(|v| auth::parse_client_ids(&v))
             .unwrap_or_default(),
-        suspension_reader_audience: get("MODERATION_SUSPENSION_READER_AUD")
+        suspension_reader_audience: get("MEDIA_PLATFORM_AUDIENCE")
             .unwrap_or_else(|| "https://platform.arkavo.net".into()),
         status_index: get("MODERATION_STATUS_INDEX").unwrap_or_else(|| DEFAULT_STATUS_INDEX.into()),
         issuer,

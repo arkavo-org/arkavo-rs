@@ -4,7 +4,6 @@
 
 use super::LicenseError;
 use crate::modules::authzen::cose_keys::CoseKeyCache;
-use crate::modules::authzen::cwt_subject::Aud;
 use crate::modules::authzen::cwt_verify::{
     header_kid, verify_header_token, VerifyError, VerifyOpts,
 };
@@ -37,13 +36,6 @@ pub fn is_person_sub(sub: &str) -> bool {
         }
     }
     uuid::Uuid::parse_str(sub).is_ok()
-}
-
-fn aud_contains(aud: &Aud, want: &str) -> bool {
-    match aud {
-        Aud::One(s) => s == want,
-        Aud::Many(v) => v.iter().any(|s| s == want),
-    }
 }
 
 impl PersonTokenVerifier {
@@ -86,7 +78,7 @@ impl PersonTokenVerifier {
             },
         )
         .map_err(|_| LicenseError::Unauthenticated("invalid token"))?;
-        if !aud_contains(&claims.aud, PASSKEY_AUD) {
+        if !claims.aud.contains(PASSKEY_AUD) {
             return Err(LicenseError::Forbidden("not a person token"));
         }
         if !is_person_sub(&claims.sub) {

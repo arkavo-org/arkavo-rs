@@ -21,7 +21,7 @@ use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -152,13 +152,13 @@ pub fn router(state: Arc<ModerationState>) -> Router {
         .with_state(state)
 }
 
-/// With the intake off, the suspension route answers 503 rather than 404, so a
-/// reader can tell "not configured" from "not suspended" (it fails closed on
-/// both).
+/// With the intake off, the suspension route answers 503 (any method) rather
+/// than 404, so a reader can tell "not configured" from "not suspended" (it
+/// fails closed on both).
 pub fn unconfigured_router() -> Router {
     Router::new().route(
         "/moderation/v1/suspensions/:subject",
-        get(|| async { err_json(StatusCode::SERVICE_UNAVAILABLE, "moderation not configured") }),
+        any(|| async { err_json(StatusCode::SERVICE_UNAVAILABLE, "moderation not configured") }),
     )
 }
 
@@ -279,9 +279,10 @@ impl ModerationState {
                     "type": "report.action",
                     "action": action,
                     "reportId": r.id,
+                    "creatorSubject": r.creator_subject,
                     // The account key, as in the lift event and the stored
-                    // suspension, so enforcers pair a suspend with its lift.
-                    "creatorSubject": r.creator_subject.as_deref().map(|c| account_key(c).unwrap_or_else(|| c.to_string())),
+                    // suspension: enforcers pair a suspend with its lift on it.
+                    "account": r.creator_subject.as_deref().and_then(account_key),
                     "contentId": r.content_id,
                     "moderator": r.moderator_subject,
                     "at": r.resolved_at.map(rfc3339),
@@ -290,26 +291,6 @@ impl ModerationState {
             .await?;
         }
         Ok(())
-    }
-
-    /// Withdraw a suspension this request recorded, when the report it belongs
-    /// to could not be actioned. Recorded as a lift; if even that fails the
-    /// account stays suspended (fail safe) and the error is logged.
-    async fn withdraw(&self, subject: Option<&str>, report_id: &str, moderator: &str, why: &str) {
-        let Some(subject) = subject else {
-            return;
-        };
-        let lift = Lift {
-            at: chrono::Utc::now().timestamp(),
-            moderator: moderator.to_string(),
-            reason: format!("withdrawn: report {report_id} was not actioned ({why})"),
-        };
-        match self.suspensions.lift(subject, &lift, Some(report_id)).await {
-            Ok(_) => warn!("moderation suspension for {subject} withdrawn: {why}"),
-            Err(e) => error!(
-                "moderation suspension for {subject} not withdrawn after {why}: {e:?}; it stays in force"
-            ),
-        }
     }
 
     async fn moderator(&self, headers: &HeaderMap) -> Result<String, AuthError> {
@@ -512,11 +493,10 @@ pub async fn update_report(
     if next.status.is_terminal() {
         next.expires_at = Some(now.saturating_add(state.retention_secs));
     }
-    // The suspension is recorded first: it is what the platform enforces. If a
-    // later step fails, a suspension this request recorded is withdrawn, so an
-    // account is never suspended by a report that wasn't actioned.
-    let mut recorded: Option<String> = None;
-    if suspending {
+    // A suspension is stored in the same atomic write as the actioned report,
+    // after the action events are delivered: an account is never suspended by
+    // a report that wasn't actioned, and a failed or raced PATCH changes nothing.
+    let suspension = if suspending {
         // `apply` already requires a creator; a subject that is only the
         // `arkavo:` prefix names no account, and suspending nothing must not pass.
         let Some(subject) = creator else {
@@ -525,67 +505,49 @@ pub async fn update_report(
                 "suspend requires a usable creator subject",
             );
         };
-        let suspension = Suspension {
+        Some(Suspension {
             subject,
             since: now,
             report_id: next.id.clone(),
             moderator: moderator.clone(),
             reason: reason.unwrap_or_default(),
             lifted: None,
-        };
-        match state.suspensions.suspend(&suspension).await {
-            Ok(created) => {
-                info!(
-                    "moderation suspension for {} (report {}): {}",
-                    suspension.subject,
-                    next.id,
-                    if created {
-                        "recorded"
-                    } else {
-                        "already suspended"
-                    }
-                );
-                if created {
-                    recorded = Some(suspension.subject);
-                }
-            }
-            Err(e) => {
-                error!(
-                    "moderation report {}: suspension not recorded: {e:?}",
-                    next.id
-                );
-                return err_json(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "suspension not recorded; the report is unchanged, try again",
-                );
-            }
-        }
-    }
+        })
+    } else {
+        None
+    };
     if let Err(e) = state.deliver_actions(&next).await {
         error!("moderation report {}: {e}; report left unchanged", next.id);
-        state
-            .withdraw(
-                recorded.as_deref(),
-                &next.id,
-                &moderator,
-                "action not delivered",
-            )
-            .await;
         return err_json(
             StatusCode::SERVICE_UNAVAILABLE,
             "action not delivered; the report is unchanged, try again",
         );
     }
-    if let Err(e) = state.store.update(&next, current.status).await {
-        state
-            .withdraw(
-                recorded.as_deref(),
-                &next.id,
-                &moderator,
-                "report not updated",
-            )
-            .await;
-        return store_fail(e);
+    let stored = match &suspension {
+        Some(s) => state
+            .suspensions
+            .suspend_with_report(s, &next, current.status)
+            .await
+            .map(Some),
+        None => state
+            .store
+            .update(&next, current.status)
+            .await
+            .map(|_| None),
+    };
+    match stored {
+        Ok(Some(created)) => info!(
+            "moderation suspension for {} (report {}): {}",
+            suspension.as_ref().map_or("", |s| s.subject.as_str()),
+            next.id,
+            if created {
+                "recorded"
+            } else {
+                "already suspended"
+            }
+        ),
+        Ok(None) => {}
+        Err(e) => return store_fail(e),
     }
     info!(
         "moderation report {} {} -> {}",
@@ -706,24 +668,38 @@ pub async fn lift_suspension(
         moderator: moderator.clone(),
         reason,
     };
-    let lifted = match state.suspensions.lift(&key, &lift, None).await {
+    // Only an active suspension can be lifted; its lift event goes out before
+    // the lift is stored, so a failed delivery changes nothing and a retry
+    // sends it again.
+    match state.suspensions.get(&key).await {
+        Ok(Some(s)) if s.is_active() => {}
+        Ok(_) => {
+            return Json(json!({ "subject": subject, "suspended": false, "lifted": false }))
+                .into_response()
+        }
+        Err(e) => return suspension_fail(e),
+    }
+    let event = json!({
+        "type": "suspension.lift",
+        "action": "lift",
+        "creatorSubject": key,
+        "account": key,
+        "moderator": moderator,
+        "at": rfc3339(lift.at),
+    });
+    if let Err(e) = state.try_publish("actions.lift", event).await {
+        error!("moderation lift for {key}: {e}; suspension unchanged");
+        return err_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "lift not delivered; the suspension is unchanged, try again",
+        );
+    }
+    let lifted = match state.suspensions.lift(&key, &lift).await {
         Ok(l) => l,
         Err(e) => return suspension_fail(e),
     };
     if lifted {
         info!("moderation suspension lifted for {key} by {moderator}");
-        state
-            .publish(
-                "actions.lift",
-                json!({
-                    "type": "suspension.lift",
-                    "action": "lift",
-                    "creatorSubject": key,
-                    "moderator": moderator,
-                    "at": rfc3339(lift.at),
-                }),
-            )
-            .await;
     }
     Json(json!({ "subject": subject, "suspended": false, "lifted": lifted })).into_response()
 }
@@ -798,7 +774,7 @@ mod tests {
         let store = Arc::new(MemoryReportStore::default());
         let notes = Arc::new(Recorder::default());
         let limiter = Arc::new(Counter::default());
-        let suspensions = Arc::new(MemorySuspensionStore::default());
+        let suspensions = Arc::new(MemorySuspensionStore::with_reports(store.clone()));
         let state = Arc::new(ModerationState {
             store: store.clone(),
             suspensions: suspensions.clone(),
@@ -1557,8 +1533,8 @@ mod tests {
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         let stored = h.store.records.lock().unwrap().get(&id).cloned().unwrap();
         assert_eq!(stored.status, Status::Received);
-        // No action event went out for an unrecorded suspension.
-        assert_eq!(h.notes.0.lock().unwrap().len(), 1);
+        // The action event went out first; a retry sends it again.
+        assert_eq!(h.notes.0.lock().unwrap().len(), 2);
         let (status, _) = read_suspension(&h, "creator-a").await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     }
@@ -1615,7 +1591,7 @@ mod tests {
         );
         let event = h.notes.0.lock().unwrap().last().cloned().unwrap();
         assert_eq!(event.0, "moderation.actions.lift");
-        assert_eq!(event.1["creatorSubject"], "creator-a");
+        assert_eq!(event.1["account"], "creator-a");
         assert_eq!(event.1["moderator"], MODERATOR);
 
         let (status, _, body) = call(&h.app, "DELETE", uri, Some(&token(MODERATOR)), reason).await;
@@ -1860,7 +1836,11 @@ mod tests {
         // The action event names the same account key the lift will.
         let suspend = h.notes.0.lock().unwrap().last().cloned().unwrap();
         assert_eq!(suspend.0, "moderation.actions.suspend");
-        assert_eq!(suspend.1["creatorSubject"], creator);
+        assert_eq!(
+            suspend.1["creatorSubject"],
+            format!("arkavo:{}", creator.to_uppercase())
+        );
+        assert_eq!(suspend.1["account"], creator);
     }
 
     #[tokio::test]
@@ -1881,7 +1861,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_suspend_withdraws_its_own_suspension() {
+    async fn a_failed_suspend_records_nothing_and_a_retry_succeeds() {
         let h = harness(20);
         submit(&h, VIEWER, REPORT_ID).await;
         *h.notes.1.lock().unwrap() = true;
@@ -1889,27 +1869,91 @@ mod tests {
             suspend_creator(&h, REPORT_ID).await,
             StatusCode::SERVICE_UNAVAILABLE
         );
-        let (_, body) = read_suspension(&h, "creator-a").await;
-        assert_eq!(body["suspended"], false);
-        let stored = h.suspensions.records.lock().unwrap()["creator-a"].clone();
-        let lift = stored.current.lifted.unwrap();
-        assert!(lift.reason.starts_with("withdrawn:"), "{}", lift.reason);
+        assert!(h.suspensions.records.lock().unwrap().is_empty());
         assert_eq!(
             h.store.records.lock().unwrap()[&REPORT_ID.to_lowercase()].status,
             Status::Received
         );
-
-        // With the bus back, the retry suspends; the withdrawn one is history.
         *h.notes.1.lock().unwrap() = false;
         assert_eq!(suspend_creator(&h, REPORT_ID).await, StatusCode::OK);
         let (_, body) = read_suspension(&h, "creator-a").await;
         assert_eq!(body["suspended"], true);
+    }
+
+    #[tokio::test]
+    async fn a_raced_report_records_no_suspension() {
+        let h = harness(20);
+        submit(&h, VIEWER, REPORT_ID).await;
+        let id = REPORT_ID.to_lowercase();
+        let current = h.store.records.lock().unwrap()[&id].clone();
+        // Another moderator dismissed it after this PATCH read it.
+        let mut dismissed = current.clone();
+        dismissed.status = Status::Dismissed;
+        let mut actioned = current.clone();
+        actioned.status = Status::Actioned;
+        h.store
+            .records
+            .lock()
+            .unwrap()
+            .insert(id.clone(), dismissed);
+        let suspension = Suspension {
+            subject: "creator-a".into(),
+            since: 1,
+            report_id: id.clone(),
+            moderator: MODERATOR.into(),
+            reason: "why".into(),
+            lifted: None,
+        };
         assert_eq!(
-            h.suspensions.records.lock().unwrap()["creator-a"]
-                .earlier
-                .len(),
-            1
+            h.suspensions
+                .suspend_with_report(&suspension, &actioned, Status::Received)
+                .await,
+            Err(StoreError::StatusChanged)
         );
+        assert!(h.suspensions.records.lock().unwrap().is_empty());
+        assert_eq!(
+            h.store.records.lock().unwrap()[&id].status,
+            Status::Dismissed
+        );
+    }
+
+    #[tokio::test]
+    async fn an_undelivered_lift_changes_nothing() {
+        let h = harness(20);
+        suspend_creator(&h, REPORT_ID).await;
+        *h.notes.1.lock().unwrap() = true;
+        let uri = "/moderation/v1/suspensions/creator-a";
+        let reason = Some(json!({"reason": "appeal upheld"}));
+        let (status, _, _) = call(
+            &h.app,
+            "DELETE",
+            uri,
+            Some(&token(MODERATOR)),
+            reason.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let (_, body) = read_suspension(&h, "creator-a").await;
+        assert_eq!(body["suspended"], true);
+        *h.notes.1.lock().unwrap() = false;
+        let (status, _, body) = call(&h.app, "DELETE", uri, Some(&token(MODERATOR)), reason).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["lifted"], true);
+    }
+
+    #[tokio::test]
+    async fn without_the_intake_every_suspension_method_is_503() {
+        for method in ["GET", "DELETE"] {
+            let (status, _, _) = call(
+                &unconfigured_router(),
+                method,
+                "/moderation/v1/suspensions/creator-a",
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{method}");
+        }
     }
 
     #[tokio::test]

@@ -107,13 +107,9 @@ impl SuspensionHistory {
         }
     }
 
-    /// The history after a lift, or `None` when nothing is suspended. With
-    /// `only_report`, only a suspension recorded by that report is lifted, so
-    /// a failed PATCH withdraws its own suspension and no one else's.
-    pub fn lifted(existing: Option<Self>, lift: &Lift, only_report: Option<&str>) -> Option<Self> {
-        let mut h = existing.filter(|h| {
-            h.current.is_active() && only_report.is_none_or(|id| h.current.report_id == id)
-        })?;
+    /// The history after a lift, or `None` when nothing is suspended.
+    pub fn lifted(existing: Option<Self>, lift: &Lift) -> Option<Self> {
+        let mut h = existing.filter(|h| h.current.is_active())?;
         h.current.lifted = Some(lift.clone());
         Some(h)
     }
@@ -121,19 +117,20 @@ impl SuspensionHistory {
 
 #[async_trait]
 pub trait SuspensionStore: Send + Sync {
-    /// Record a suspension, unless the account is already suspended; `true`
-    /// when this call recorded it.
-    async fn suspend(&self, suspension: &Suspension) -> Result<bool, StoreError>;
+    /// Store `report` (only while its stored status is still `expected`) and
+    /// record `suspension` in one atomic write, so an account is never
+    /// suspended by a report that wasn't actioned. An account already
+    /// suspended keeps its record. `true` when this recorded a new suspension.
+    async fn suspend_with_report(
+        &self,
+        suspension: &Suspension,
+        report: &ReportRecord,
+        expected: Status,
+    ) -> Result<bool, StoreError>;
     /// The account's current suspension, active or lifted.
     async fn get(&self, subject: &str) -> Result<Option<Suspension>, StoreError>;
-    /// Record a lift on the active suspension (only if `only_report` recorded
-    /// it, when given); `false` when there was none to lift.
-    async fn lift(
-        &self,
-        subject: &str,
-        lift: &Lift,
-        only_report: Option<&str>,
-    ) -> Result<bool, StoreError>;
+    /// Record a lift on the active suspension; `false` when there was none.
+    async fn lift(&self, subject: &str, lift: &Lift) -> Result<bool, StoreError>;
 }
 
 /// Suspensions share the reports table, one item per account under the key
@@ -184,19 +181,17 @@ impl DynamoSuspensionStore {
         Ok(Some((history, version)))
     }
 
-    /// Write `history` only if the item is still at `expected` (absent when
-    /// `None`). A concurrent write is `StatusChanged`.
-    async fn save(
+    /// The conditional put of `history`: only if the item is still at
+    /// `expected` (absent when `None`).
+    fn history_put(
         &self,
         history: &SuspensionHistory,
         expected: Option<i64>,
-    ) -> Result<(), StoreError> {
+    ) -> Result<aws_sdk_dynamodb::types::Put, StoreError> {
         let json = serde_json::to_string(history)
             .map_err(|e| StoreError::Unavailable(format!("encode: {e}")))?;
         let next = expected.map_or(1, |v| v + 1);
-        let put = self
-            .client
-            .put_item()
+        let put = aws_sdk_dynamodb::types::Put::builder()
             .table_name(&self.table)
             .item(
                 "report_id",
@@ -210,62 +205,120 @@ impl DynamoSuspensionStore {
                 .condition_expression("version = :v")
                 .expression_attribute_values(":v", AttributeValue::N(v.to_string())),
         };
-        match put.send().await {
-            Ok(_) => Ok(()),
-            Err(e)
-                if e.as_service_error()
-                    .is_some_and(|s| s.is_conditional_check_failed_exception()) =>
-            {
-                Err(StoreError::StatusChanged)
-            }
-            Err(e) => Err(unavailable(aws_sdk_dynamodb::error::DisplayErrorContext(e))),
-        }
+        put.build().map_err(unavailable)
     }
+}
 
-    /// Apply `change` to the stored history and save it, retrying when another
-    /// writer got there first. `Ok(false)` when `change` wants no write.
-    async fn update(
-        &self,
-        subject: &str,
-        change: impl Fn(Option<SuspensionHistory>) -> Option<SuspensionHistory> + Send + Sync,
-    ) -> Result<bool, StoreError> {
-        for _ in 0..SUSPENSION_WRITE_ATTEMPTS {
-            let loaded = self.load(subject).await?;
-            let version = loaded.as_ref().map(|(_, v)| *v);
-            let Some(next) = change(loaded.map(|(h, _)| h)) else {
-                return Ok(false);
-            };
-            match self.save(&next, version).await {
-                Ok(()) => return Ok(true),
-                Err(StoreError::StatusChanged) => continue,
-                Err(e) => return Err(e),
-            }
-        }
-        Err(StoreError::StatusChanged)
-    }
+/// Whether a cancelled transaction failed on the condition of its item at `index`.
+fn condition_failed(reasons: &[aws_sdk_dynamodb::types::CancellationReason], index: usize) -> bool {
+    reasons
+        .get(index)
+        .and_then(|r| r.code())
+        .is_some_and(|c| c == "ConditionalCheckFailed")
 }
 
 #[async_trait]
 impl SuspensionStore for DynamoSuspensionStore {
-    async fn suspend(&self, suspension: &Suspension) -> Result<bool, StoreError> {
-        self.update(&suspension.subject, |h| {
-            SuspensionHistory::suspended(h, suspension)
-        })
-        .await
+    async fn suspend_with_report(
+        &self,
+        suspension: &Suspension,
+        report: &ReportRecord,
+        expected: Status,
+    ) -> Result<bool, StoreError> {
+        use aws_sdk_dynamodb::types::{Put, TransactWriteItem};
+        let report_put = Put::builder()
+            .table_name(&self.table)
+            .set_item(Some(report_item(report)?))
+            .condition_expression("#s = :expected")
+            .expression_attribute_names("#s", "status")
+            .expression_attribute_values(":expected", AttributeValue::S(expected.as_str().into()))
+            .build()
+            .map_err(unavailable)?;
+        for _ in 0..SUSPENSION_WRITE_ATTEMPTS {
+            let loaded = self.load(&suspension.subject).await?;
+            let version = loaded.as_ref().map(|(_, v)| *v);
+            let existing = loaded.map(|(h, _)| h);
+            let next = SuspensionHistory::suspended(existing.clone(), suspension);
+            let created = next.is_some();
+            // Already suspended: rewrite the same history, so the version check
+            // still fails the transaction if a lift lands in between.
+            let Some(history) = next.or(existing) else {
+                return Err(StoreError::Unavailable("no suspension to write".into()));
+            };
+            let out = self
+                .client
+                .transact_write_items()
+                .transact_items(TransactWriteItem::builder().put(report_put.clone()).build())
+                .transact_items(
+                    TransactWriteItem::builder()
+                        .put(self.history_put(&history, version)?)
+                        .build(),
+                )
+                .send()
+                .await;
+            match out {
+                Ok(_) => return Ok(created),
+                Err(e) => {
+                    let reasons = e
+                        .as_service_error()
+                        .filter(|s| s.is_transaction_canceled_exception())
+                        .and_then(|s| match s {
+                            aws_sdk_dynamodb::operation::transact_write_items::TransactWriteItemsError::TransactionCanceledException(c) => {
+                                Some(c.cancellation_reasons().to_vec())
+                            }
+                            _ => None,
+                        });
+                    match reasons {
+                        Some(r) if condition_failed(&r, 0) => {
+                            return Err(StoreError::StatusChanged)
+                        }
+                        // Another writer changed the suspension: read it again.
+                        Some(r) if condition_failed(&r, 1) => continue,
+                        _ => {
+                            return Err(unavailable(aws_sdk_dynamodb::error::DisplayErrorContext(
+                                e,
+                            )))
+                        }
+                    }
+                }
+            }
+        }
+        Err(StoreError::StatusChanged)
     }
 
     async fn get(&self, subject: &str) -> Result<Option<Suspension>, StoreError> {
         Ok(self.load(subject).await?.map(|(h, _)| h.current))
     }
 
-    async fn lift(
-        &self,
-        subject: &str,
-        lift: &Lift,
-        only_report: Option<&str>,
-    ) -> Result<bool, StoreError> {
-        self.update(subject, |h| SuspensionHistory::lifted(h, lift, only_report))
-            .await
+    async fn lift(&self, subject: &str, lift: &Lift) -> Result<bool, StoreError> {
+        for _ in 0..SUSPENSION_WRITE_ATTEMPTS {
+            let loaded = self.load(subject).await?;
+            let version = loaded.as_ref().map(|(_, v)| *v);
+            let Some(next) = SuspensionHistory::lifted(loaded.map(|(h, _)| h), lift) else {
+                return Ok(false);
+            };
+            let put = self.history_put(&next, version)?;
+            let out = self
+                .client
+                .put_item()
+                .table_name(&self.table)
+                .set_item(Some(put.item().clone()))
+                .set_condition_expression(put.condition_expression().map(str::to_string))
+                .set_expression_attribute_values(put.expression_attribute_values().cloned())
+                .send()
+                .await;
+            match out {
+                Ok(_) => return Ok(true),
+                Err(e)
+                    if e.as_service_error()
+                        .is_some_and(|s| s.is_conditional_check_failed_exception()) =>
+                {
+                    continue
+                }
+                Err(e) => return Err(unavailable(aws_sdk_dynamodb::error::DisplayErrorContext(e))),
+            }
+        }
+        Err(StoreError::StatusChanged)
     }
 }
 
@@ -288,29 +341,36 @@ impl DynamoReportStore {
     }
 
     fn item(record: &ReportRecord) -> Result<HashMap<String, AttributeValue>, StoreError> {
-        let json = serde_json::to_string(record)
-            .map_err(|e| StoreError::Unavailable(format!("encode: {e}")))?;
-        let mut item = HashMap::from([
-            (
-                "report_id".to_string(),
-                AttributeValue::S(record.id.clone()),
-            ),
-            (
-                "status".to_string(),
-                AttributeValue::S(record.status.as_str().to_string()),
-            ),
-            (
-                "received_at".to_string(),
-                AttributeValue::N(record.received_at.to_string()),
-            ),
-            ("record".to_string(), AttributeValue::S(json)),
-        ]);
-        if let Some(t) = record.expires_at {
-            item.insert("expires_at".to_string(), AttributeValue::N(t.to_string()));
-        }
-        Ok(item)
+        report_item(record)
     }
+}
 
+/// The DynamoDB item for a report.
+fn report_item(record: &ReportRecord) -> Result<HashMap<String, AttributeValue>, StoreError> {
+    let json = serde_json::to_string(record)
+        .map_err(|e| StoreError::Unavailable(format!("encode: {e}")))?;
+    let mut item = HashMap::from([
+        (
+            "report_id".to_string(),
+            AttributeValue::S(record.id.clone()),
+        ),
+        (
+            "status".to_string(),
+            AttributeValue::S(record.status.as_str().to_string()),
+        ),
+        (
+            "received_at".to_string(),
+            AttributeValue::N(record.received_at.to_string()),
+        ),
+        ("record".to_string(), AttributeValue::S(json)),
+    ]);
+    if let Some(t) = record.expires_at {
+        item.insert("expires_at".to_string(), AttributeValue::N(t.to_string()));
+    }
+    Ok(item)
+}
+
+impl DynamoReportStore {
     fn record(item: &HashMap<String, AttributeValue>) -> Result<ReportRecord, StoreError> {
         let json = item
             .get("record")
@@ -443,13 +503,23 @@ pub mod memory {
     use super::*;
     use std::sync::Mutex;
 
-    #[derive(Default)]
+    /// Shares the report store, as the DynamoDB tables do, so a suspend and
+    /// its report update apply together.
     pub struct MemorySuspensionStore {
         pub records: Mutex<HashMap<String, SuspensionHistory>>,
         pub fail: Mutex<bool>,
+        pub reports: std::sync::Arc<MemoryReportStore>,
     }
 
     impl MemorySuspensionStore {
+        pub fn with_reports(reports: std::sync::Arc<MemoryReportStore>) -> Self {
+            Self {
+                records: Mutex::default(),
+                fail: Mutex::default(),
+                reports,
+            }
+        }
+
         fn check(&self) -> Result<(), StoreError> {
             if *self.fail.lock().unwrap() {
                 Err(StoreError::Unavailable("down".into()))
@@ -461,17 +531,29 @@ pub mod memory {
 
     #[async_trait]
     impl SuspensionStore for MemorySuspensionStore {
-        async fn suspend(&self, suspension: &Suspension) -> Result<bool, StoreError> {
+        async fn suspend_with_report(
+            &self,
+            suspension: &Suspension,
+            report: &ReportRecord,
+            expected: Status,
+        ) -> Result<bool, StoreError> {
             self.check()?;
+            self.reports.check()?;
+            let mut reports = self.reports.records.lock().unwrap();
             let mut m = self.records.lock().unwrap();
+            if reports.get(&report.id).map(|r| r.status) != Some(expected) {
+                return Err(StoreError::StatusChanged);
+            }
             let existing = m.get(&suspension.subject).cloned();
-            match SuspensionHistory::suspended(existing, suspension) {
+            let created = match SuspensionHistory::suspended(existing, suspension) {
                 Some(next) => {
                     m.insert(suspension.subject.clone(), next);
-                    Ok(true)
+                    true
                 }
-                None => Ok(false),
-            }
+                None => false,
+            };
+            reports.insert(report.id.clone(), report.clone());
+            Ok(created)
         }
 
         async fn get(&self, subject: &str) -> Result<Option<Suspension>, StoreError> {
@@ -484,16 +566,11 @@ pub mod memory {
                 .map(|h| h.current.clone()))
         }
 
-        async fn lift(
-            &self,
-            subject: &str,
-            lift: &Lift,
-            only_report: Option<&str>,
-        ) -> Result<bool, StoreError> {
+        async fn lift(&self, subject: &str, lift: &Lift) -> Result<bool, StoreError> {
             self.check()?;
             let mut m = self.records.lock().unwrap();
             let existing = m.get(subject).cloned();
-            match SuspensionHistory::lifted(existing, lift, only_report) {
+            match SuspensionHistory::lifted(existing, lift) {
                 Some(next) => {
                     m.insert(subject.to_string(), next);
                     Ok(true)
@@ -769,43 +846,70 @@ mod dynamodb_local {
         let reports = DynamoReportStore::new(client.clone(), table.clone(), INDEX.into());
         let store = DynamoSuspensionStore::new(client.clone(), table.clone());
 
-        let first = Suspension {
+        // Two received reports about the same creator.
+        let (r1, r2) = (report(100), report(200));
+        reports.insert(&r1).await.unwrap();
+        reports.insert(&r2).await.unwrap();
+        let actioned = |r: &ReportRecord| {
+            let mut a = r.clone();
+            a.status = Status::Actioned;
+            a
+        };
+        let suspension = |r: &ReportRecord, since: i64| Suspension {
             subject: "creator-a".into(),
-            since: 100,
-            report_id: "r1".into(),
+            since,
+            report_id: r.id.clone(),
             moderator: "m1".into(),
-            reason: "first".into(),
+            reason: "why".into(),
             lifted: None,
         };
+        let first = suspension(&r1, 100);
         assert_eq!(store.get("creator-a").await.unwrap(), None);
-        assert!(store.suspend(&first).await.unwrap());
-        // A second suspension while active keeps the first record.
-        let mut second = first.clone();
-        second.since = 200;
-        second.report_id = "r2".into();
-        assert!(!store.suspend(&second).await.unwrap());
+
+        // A report whose status moved on fails the whole write: nothing recorded.
+        assert_eq!(
+            store
+                .suspend_with_report(&first, &actioned(&r1), Status::Reviewing)
+                .await,
+            Err(StoreError::StatusChanged)
+        );
+        assert_eq!(store.get("creator-a").await.unwrap(), None);
+        assert_eq!(
+            reports.get(&r1.id).await.unwrap().unwrap().status,
+            Status::Received
+        );
+
+        // Together: the report is actioned and the account suspended.
+        assert!(store
+            .suspend_with_report(&first, &actioned(&r1), Status::Received)
+            .await
+            .unwrap());
+        assert_eq!(
+            reports.get(&r1.id).await.unwrap().unwrap().status,
+            Status::Actioned
+        );
         assert_eq!(store.get("creator-a").await.unwrap(), Some(first.clone()));
-        // The item stays out of the moderators' queues.
-        for status in [Status::Received, Status::Actioned] {
-            assert!(reports.list(status, 10, None).await.unwrap().0.is_empty());
-        }
+        // A second report while suspended keeps the first record.
+        assert!(!store
+            .suspend_with_report(&suspension(&r2, 200), &actioned(&r2), Status::Received)
+            .await
+            .unwrap());
+        assert_eq!(store.get("creator-a").await.unwrap(), Some(first.clone()));
+        // The suspension item stays out of the moderators' queues.
+        let (queue, _) = reports.list(Status::Actioned, 10, None).await.unwrap();
+        assert_eq!(queue.len(), 2);
 
         let lift = Lift {
             at: 300,
             moderator: "m2".into(),
             reason: "appeal upheld".into(),
         };
-        assert!(!store.lift("creator-a", &lift, Some("r2")).await.unwrap());
-        assert!(store.lift("creator-a", &lift, Some("r1")).await.unwrap());
-        assert!(!store.lift("creator-a", &lift, None).await.unwrap());
+        assert!(store.lift("creator-a", &lift).await.unwrap());
+        assert!(!store.lift("creator-a", &lift).await.unwrap());
         let lifted = store.get("creator-a").await.unwrap().unwrap();
         assert_eq!(lifted.lifted, Some(lift));
-
-        // Suspended again: the lifted record moves to the history.
-        store.suspend(&second).await.unwrap();
-        assert_eq!(store.get("creator-a").await.unwrap(), Some(second));
         let (history, version) = store.load("creator-a").await.unwrap().unwrap();
-        assert_eq!(history.earlier, vec![lifted]);
+        assert!(history.earlier.is_empty());
         assert_eq!(version, 3);
 
         client
@@ -852,34 +956,21 @@ mod suspension_history {
 
     #[test]
     fn a_lift_is_recorded_and_a_new_suspension_keeps_it() {
-        assert_eq!(SuspensionHistory::lifted(None, &lift(), None), None);
+        assert_eq!(SuspensionHistory::lifted(None, &lift()), None);
         let h = SuspensionHistory::suspended(None, &suspension("r1")).unwrap();
-        let h = SuspensionHistory::lifted(Some(h), &lift(), None).unwrap();
+        let h = SuspensionHistory::lifted(Some(h), &lift()).unwrap();
         assert!(!h.current.is_active());
-        assert_eq!(
-            SuspensionHistory::lifted(Some(h.clone()), &lift(), None),
-            None
-        );
+        assert_eq!(SuspensionHistory::lifted(Some(h.clone()), &lift()), None);
         let again = SuspensionHistory::suspended(Some(h.clone()), &suspension("r2")).unwrap();
         assert_eq!(again.current.report_id, "r2");
         assert_eq!(again.earlier, vec![h.current]);
     }
 
     #[test]
-    fn a_withdrawal_lifts_only_the_named_reports_suspension() {
-        let h = SuspensionHistory::suspended(None, &suspension("r1")).unwrap();
-        assert_eq!(
-            SuspensionHistory::lifted(Some(h.clone()), &lift(), Some("r2")),
-            None
-        );
-        assert!(SuspensionHistory::lifted(Some(h), &lift(), Some("r1")).is_some());
-    }
-
-    #[test]
     fn history_is_bounded() {
         let mut h = SuspensionHistory::suspended(None, &suspension("r0")).unwrap();
         for i in 1..=(MAX_EARLIER_SUSPENSIONS + 5) {
-            h = SuspensionHistory::lifted(Some(h), &lift(), None).unwrap();
+            h = SuspensionHistory::lifted(Some(h), &lift()).unwrap();
             h = SuspensionHistory::suspended(Some(h), &suspension(&format!("r{i}"))).unwrap();
         }
         assert_eq!(h.earlier.len(), MAX_EARLIER_SUSPENSIONS);

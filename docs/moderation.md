@@ -115,18 +115,19 @@ curl -s -X PATCH -H "Authorization: Bearer $CWT" -H 'content-type: application/j
 
 ## Suspensions
 
-`PATCH … {"status":"actioned","actions":["suspend"],"note":"…"}` records a
-suspension for the report's creator, with the note as its reason, before it
-publishes the action events. If the record
-can't be written, the PATCH returns 503 and the report is unchanged. A creator
-subject that is only the `arkavo:` prefix names no account, and gets 400. If a
-later step fails (an action event not delivered, or the report changed
-meanwhile), a suspension this request recorded is withdrawn, recorded as a lift
-with a `withdrawn:` reason, so no account stays suspended by a report that
-wasn't actioned. If the withdrawal itself fails, the suspension stays in force
-and the error is logged. An account
-already suspended keeps its first record, so `since` and `reportId` name the
-original action.
+`PATCH … {"status":"actioned","actions":["suspend"],"note":"…"}` publishes the
+action events, then stores the actioned report and the suspension (with the
+note as its reason) in one atomic DynamoDB transaction. So an account is never
+suspended by a report that wasn't actioned:
+- **Events not delivered:** 503, and nothing is stored.
+- **Report changed meanwhile** (another moderator responded): 409, and neither
+  is stored.
+- **Store unavailable:** 503, and neither is stored.
+
+A retry sends the events again, so enforcers treat them as idempotent. A creator
+subject that is only the `arkavo:` prefix names no account, and gets 400. An
+account already suspended keeps its first record, so `since` and `reportId` name
+the original action.
 
 Nothing is deleted. A lift is recorded on the suspension (who, when, why), and
 a later suspension of the same account keeps the lifted ones as its history
@@ -146,8 +147,8 @@ percent-encoded as one path segment.
 - **Credential:** `Authorization: Bearer <service CWT>` from identity's
   `client_credentials`. `iss` must be `OIDC_ISSUER`, `sub` `client:<id>`,
   `arkavo_roles` must include `service-account`, `aud` must contain `<id>` and
-  this server (`MODERATION_SUSPENSION_READER_AUD`, default
-  `https://platform.arkavo.net`), and `<id>` must be in
+  this server (`MEDIA_PLATFORM_AUDIENCE`, the media routes' platform audience,
+  default `https://platform.arkavo.net`), and `<id>` must be in
   `MODERATION_SUSPENSION_READER_IDS`. These are the AuthZEN facade's PEP rules,
   from the same helper.
 
@@ -177,8 +178,9 @@ A moderator, with their own session CWT, lifts the suspension. The body,
 and no other keys (400 otherwise). The lift is recorded on the suspension, not
 deleted. The response is `200 {"subject","suspended":false,"lifted"}`, where
 `lifted` is false if nothing was suspended. It is idempotent; a concurrent
-change returns 409. A lift publishes `moderation.actions.lift` on a best-effort
-basis.
+change returns 409. The `moderation.actions.lift` event is published before the
+lift is stored: if it can't be delivered, the response is 503 and the
+suspension is unchanged, so a retry sends it again.
 
 ```sh
 curl -s -X DELETE -H "Authorization: Bearer $CWT" -H 'content-type: application/json' \
@@ -191,12 +193,12 @@ curl -s -X DELETE -H "Authorization: Bearer $CWT" -H 'content-type: application/
 | Subject | When | Body |
 |---|---|---|
 | `moderation.reports.received` | A new report is stored | `type`, `id`, `reasons`, `creatorSubject`, `contentId`, `receivedAt` |
-| `moderation.actions.takedown` | A report is actioned with `takedown` | `type`, `action`, `reportId`, `creatorSubject`, `contentId`, `moderator`, `at` |
+| `moderation.actions.takedown` | A report is actioned with `takedown` | `type`, `action`, `reportId`, `creatorSubject`, `account`, `contentId`, `moderator`, `at` |
 | `moderation.actions.suspend` | A report is actioned with `suspend` | same |
-| `moderation.actions.lift` | A moderator lifts a suspension | `type`, `action`, `creatorSubject`, `moderator`, `at` |
+| `moderation.actions.lift` | A moderator lifts a suspension | `type`, `action`, `creatorSubject`, `account`, `moderator`, `at` |
 
-`creatorSubject` in the action events is the account key (see
-[Suspensions](#suspensions)), so a suspend and its lift name the same account.
+`creatorSubject` is the subject as reported. `account` is the account key (see
+[Suspensions](#suspensions)): pair a suspend with its lift on `account`.
 
 `MODERATION_NATS_PREFIX` changes the `moderation` prefix. Each publish is
 flushed to the NATS server within 2 seconds.
@@ -298,7 +300,9 @@ What DynamoDB Local does not give you:
 ### Credentials
 
 The arks host needs `dynamodb:PutItem`, `GetItem` and `Query` on the table and
-its index. It never deletes anything:
+its index. A suspend writes the report and the suspension with
+`TransactWriteItems`, which IAM authorises as the `PutItem` of each item. arks
+never deletes anything:
 
 ```json
 {
@@ -326,7 +330,7 @@ signer does: `production/start.sh` exports `AWS_PROFILE=arks-prod`,
 MODERATION_INTAKE=on                              # off (default) | on
 MODERATION_REPORTS_TABLE=prod-moderation-reports  # required when on
 MODERATION_SUSPENSION_READER_IDS=opentdf-platform  # service clients that may read suspensions; empty = none
-MODERATION_SUSPENSION_READER_AUD=https://platform.arkavo.net  # default shown; required in the reader token's aud
+MEDIA_PLATFORM_AUDIENCE=https://platform.arkavo.net  # default shown; also required in a suspension reader token's aud
 MODERATION_STATUS_INDEX=status-received_at-index  # default shown
 MODERATION_MODERATORS=<account-uuid>,<account-uuid>  # who may read and respond; `arkavo:` prefix optional
 MODERATION_EXPECTED_AUD=arkavo                    # default shown
