@@ -117,7 +117,7 @@ Sign a C2PA manifest with a pre-computed content hash.
 
 **Exclusion rule:** `exclusion_ranges` must be exactly one range with `box_type: "uuid"`, and its length must equal the C2PA manifest box the client will embed: 45 bytes of box header (size, type, UUID, version/flags, `manifest\0`, Merkle offset) plus the JUMBF length. That way only the manifest box itself is unhashed, and no media bytes are.
 
-The server signs, then checks the length. On a mismatch it discards the manifest and returns `422` with `required_exclusion_length`. The client repeats the request with that length; this usually settles on the second pass. Any other shape of `exclusion_ranges` gets `400`.
+The server first measures the manifest box without signing it: a sizing pass with a stand-in signature of the reserved size and no timestamp (c2pa pads every signature to that reserve, so the length is exact). On a mismatch it returns `422` with `required_exclusion_length`, having spent no KMS signature and no timestamp. The client repeats the request with that length; this usually settles on the second pass, but the exclusion offsets are part of the manifest, so it can take one more. Only the request at the settled length is signed and timestamped, so each file costs one timestamp (arkavo-rs#119). Any other shape of `exclusion_ranges` gets `400`. When `metadata.timestamp` is absent, the server uses the current time in whole seconds, so the length doesn't shift between passes.
 
 **Request:**
 ```json
@@ -276,7 +276,7 @@ Without a trusted timestamp, a verifier checks the signer certificate against th
 
 - `C2PA_TSA_TRUST_ANCHORS_PATH` is a trust list separate from the manifest anchors, so a TSA root never vouches for a signing certificate.
 - Choosing a TSA: use one on the [C2PA TSA trust list](https://github.com/c2pa-org/conformance-public/tree/main/trust-list). The C2PA conformance checks need a trusted timestamp, and so does a manifest outliving its signer certificate for third-party verifiers.
-  - SSL.com's `https://ts-c2pa.ssl.com` chains to "SSL.com C2PA ECC Root CA 2025", which is on the list. On 2026-10-25 it issued timestamps without an API key, and manifests signed with it passed the conformance rubrics with `timeStamp.trusted`. Its plans meter timestamps (the free C2PA tier lists 2,500 a year), so confirm the account's terms before production uses it.
+  - SSL.com's `https://ts-c2pa.ssl.com` chains to "SSL.com C2PA ECC Root CA 2025", which is on the list. On 2026-10-25 it issued timestamps without an API key, and manifests signed with it passed the conformance rubrics with `timeStamp.trusted`. Its plans meter timestamps (the free C2PA tier lists 2,500 a year); each signed file uses one. Production uses it since 2026-10-26.
   - DigiCert's public TSA (`http://timestamp.digicert.com`) is free and needs no account, but it chains to "DigiCert Trusted Root G4", which is **not** on the C2PA TSA trust list. `c2patool` and other C2PA validators report `timeStamp.untrusted` for it. DigiCert's C2PA TSA hierarchy is on the list, but has no public endpoint.
 - Latency: one DigiCert timestamp added about 270 ms to signing (measured 2026-10-24).
 
