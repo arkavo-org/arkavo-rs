@@ -108,7 +108,8 @@ curl -s -X PATCH -H "Authorization: Bearer $CWT" -H 'content-type: application/j
 
 `PATCH … {"status":"actioned","actions":["suspend"]}` records a suspension for
 the report's creator before it publishes the action events. If the record
-can't be written, the PATCH returns 503 and the report is unchanged. If a later
+can't be written, the PATCH returns 503 and the report is unchanged. A creator
+subject that is only the `arkavo:` prefix names no account, and gets 400. If a later
 step fails, the account stays suspended and a retry is idempotent. An account
 already suspended keeps its first record, so `since` and `reportId` name the
 original action.
@@ -167,7 +168,7 @@ curl -s -X DELETE -H "Authorization: Bearer $CWT" \
 | `moderation.reports.received` | A new report is stored | `type`, `id`, `reasons`, `creatorSubject`, `contentId`, `receivedAt` |
 | `moderation.actions.takedown` | A report is actioned with `takedown` | `type`, `action`, `reportId`, `creatorSubject`, `contentId`, `moderator`, `at` |
 | `moderation.actions.suspend` | A report is actioned with `suspend` | same |
-| `moderation.actions.lift` | A moderator lifts a suspension | `type`, `action`, `creatorSubject`, `moderator`, `at` |
+| `moderation.actions.lift` | A moderator lifts a suspension | `type`, `action`, `creatorSubject`, `moderator`, `at`. Here `creatorSubject` is the stored key, without any `arkavo:` prefix; the other action events carry the subject as reported. |
 
 `MODERATION_NATS_PREFIX` changes the `moderation` prefix. Each publish is
 flushed to the NATS server within 2 seconds.
@@ -177,8 +178,9 @@ flushed to the NATS server within 2 seconds.
 - The action subjects are the hand-off to the enforcing services. A successful
   publish means the NATS server has the event, not that a subscriber took it:
   core NATS keeps nothing for a subscriber that is down. Until the enforcing
-  services subscribe, a moderator must also carry out the takedown or
-  suspension by hand.
+  services subscribe, a moderator must also carry out the takedown, and the
+  node's catalog block for a suspension, by hand. The publishing refusal
+  itself comes from the suspension record (see [Suspensions](#suspensions)).
 
 ## Storage
 

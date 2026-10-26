@@ -449,28 +449,34 @@ pub async fn update_report(
     // The suspension is recorded first: it is what the platform enforces. If a
     // later step fails, the account stays suspended and a retry is idempotent.
     if next.actions.contains(&Action::Suspend) {
-        if let Some(subject) = next.creator_subject.as_deref().and_then(suspension_key) {
-            let suspension = Suspension {
-                subject,
-                since: now,
-                report_id: next.id.clone(),
-                moderator: moderator.clone(),
-            };
-            if let Err(e) = state.suspensions.suspend(&suspension).await {
-                error!(
-                    "moderation report {}: suspension not recorded: {e:?}",
-                    next.id
-                );
-                return err_json(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "suspension not recorded; the report is unchanged, try again",
-                );
-            }
-            info!(
-                "moderation suspension recorded for {} (report {})",
-                suspension.subject, next.id
+        // `apply` already requires a creator; a subject that is only the
+        // `arkavo:` prefix names no account, and suspending nothing must not pass.
+        let Some(subject) = next.creator_subject.as_deref().and_then(suspension_key) else {
+            return err_json(
+                StatusCode::BAD_REQUEST,
+                "suspend requires a usable creator subject",
+            );
+        };
+        let suspension = Suspension {
+            subject,
+            since: now,
+            report_id: next.id.clone(),
+            moderator: moderator.clone(),
+        };
+        if let Err(e) = state.suspensions.suspend(&suspension).await {
+            error!(
+                "moderation report {}: suspension not recorded: {e:?}",
+                next.id
+            );
+            return err_json(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "suspension not recorded; the report is unchanged, try again",
             );
         }
+        info!(
+            "moderation suspension recorded for {} (report {})",
+            suspension.subject, next.id
+        );
     }
     if let Err(e) = state.deliver_actions(&next).await {
         error!("moderation report {}: {e}; report left unchanged", next.id);
@@ -1449,5 +1455,34 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body["error"], "moderation not configured");
+    }
+    #[tokio::test]
+    async fn suspending_a_prefix_only_subject_is_refused() {
+        let h = harness(20);
+        let mut p = payload(REPORT_ID);
+        p["blockedPublicID"] = json!("arkavo:");
+        let (status, _, _) = call(
+            &h.app,
+            "POST",
+            "/moderation/v1/reports",
+            Some(&token(VIEWER)),
+            Some(p),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let id = REPORT_ID.to_lowercase();
+        let (status, _, _) = call(
+            &h.app,
+            "PATCH",
+            &format!("/moderation/v1/reports/{id}"),
+            Some(&token(MODERATOR)),
+            Some(json!({"status": "actioned", "actions": ["suspend"]})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let stored = h.store.records.lock().unwrap().get(&id).cloned().unwrap();
+        assert_eq!(stored.status, Status::Received);
+        assert!(h.suspensions.records.lock().unwrap().is_empty());
+        assert_eq!(h.notes.0.lock().unwrap().len(), 1);
     }
 }
