@@ -215,9 +215,11 @@ and the suspensions.
 
 Production uses AWS DynamoDB in the Arkavo account (976193232136), reached with
 the `arks-prod` IAM user that also signs C2PA claims with KMS. Leave
-`MODERATION_DYNAMODB_ENDPOINT` unset. The table is created with the CLI, as in
-authnz-rs `docs/app-attest-gate-deployment.md`; nothing in `devsecops`
-provisions it. Create it with deletion protection on.
+`MODERATION_DYNAMODB_ENDPOINT` unset. The table was created with the CLI below,
+as in authnz-rs `docs/app-attest-gate-deployment.md`, with deletion protection
+on. devsecops defines it as `ModerationReportsTable` in `lambdas/template.yaml`;
+bring the existing table under that stack with a CloudFormation IMPORT change
+set, never by letting the stack create a new one.
 
 ```sh
 aws dynamodb create-table \
