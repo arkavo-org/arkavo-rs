@@ -88,8 +88,9 @@ from `received` straight to `actioned` or `dismissed`. `actioned` and
 `dismissed` are final (409).
 
 - `actioned` needs at least one action. `takedown` needs a reported `contentId`,
-  and `suspend` needs a reported creator and a `note`, which becomes the
-  suspension's reason. Other statuses take no actions.
+  and `suspend` needs a reported creator and a `note` of at most 1,024
+  characters, which becomes the suspension's reason (identity's
+  publishing-suspension API takes no longer reason). Other statuses take no actions.
 - The first change out of `received` records `firstResponseAt` and
   `responseSeconds`. This is the response-time measure for the committed
   response time ("Arkavo reviews reports within 24 hours").
@@ -163,7 +164,7 @@ suspended" is never a 404, so a missing route can't fail open.
 ### Lift: `DELETE /moderation/v1/suspensions/{subject}`
 
 A moderator, with their own session CWT, lifts the suspension. The body,
-`{"reason": "…"}`, is required: up to 2,000 characters, normalised like a note,
+`{"reason": "…"}`, is required: up to 1,024 characters, normalised like a note,
 and no other keys (400 otherwise). The lift is recorded on the suspension, not
 deleted. The response is `200 {"subject","suspended":false,"lifted"}`, where
 `lifted` is false if nothing was suspended. It is idempotent; a concurrent

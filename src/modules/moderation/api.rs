@@ -12,7 +12,7 @@
 use super::auth::{AuthError, SessionVerifier};
 use super::report::{
     normalised_note, Action, InvalidReport, ReportRecord, ReportSubmission, Status, StatusUpdate,
-    MAX_IDENTIFIER_LEN, MAX_RESOLUTION_NOTE_LEN,
+    MAX_IDENTIFIER_LEN,
 };
 use super::store::{Cursor, Inserted, Lift, ReportStore, StoreError, Suspension, SuspensionStore};
 use crate::modules::authzen::cwt_subject::subject_id_bind;
@@ -38,6 +38,9 @@ const MAX_BODY_BYTES: usize = 64 * 1024;
 const DEFAULT_PAGE: usize = 50;
 const MAX_PAGE: usize = 100;
 const NOTIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+/// Longest suspension reason: identity's publishing-suspension API refuses a
+/// longer `reason`, and the reason is sent to it unchanged (#93).
+const MAX_SUSPENSION_REASON_LEN: usize = 1_024;
 /// A limiter slower than this is treated as unavailable, so the report goes through.
 const LIMITER_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
@@ -476,6 +479,12 @@ pub async fn update_report(
         let Some(reason) = next.resolution_note.clone() else {
             return err_json(StatusCode::BAD_REQUEST, "suspend requires a note");
         };
+        if reason.chars().count() > MAX_SUSPENSION_REASON_LEN {
+            return err_json(
+                StatusCode::BAD_REQUEST,
+                "a suspend note is at most 1024 characters",
+            );
+        }
         let suspension = Suspension {
             subject,
             since: now,
@@ -616,7 +625,7 @@ pub async fn lift_suspension(
         Ok(r) => normalised_note(&r.reason),
         Err(_) => return err_json(StatusCode::BAD_REQUEST, "lift requires a reason"),
     };
-    if reason.is_empty() || reason.chars().count() > MAX_RESOLUTION_NOTE_LEN {
+    if reason.is_empty() || reason.chars().count() > MAX_SUSPENSION_REASON_LEN {
         return err_json(StatusCode::BAD_REQUEST, "lift requires a reason");
     }
     let lift = Lift {
@@ -1542,6 +1551,43 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn a_suspend_note_fits_identitys_reason_limit() {
+        let h = harness(20);
+        submit(&h, VIEWER, REPORT_ID).await;
+        let uri = format!("/moderation/v1/reports/{}", REPORT_ID.to_lowercase());
+        let patch =
+            |n: usize| json!({"status": "actioned", "actions": ["suspend"], "note": "é".repeat(n)});
+        let (status, _, _) = call(
+            &h.app,
+            "PATCH",
+            &uri,
+            Some(&token(MODERATOR)),
+            Some(patch(1_025)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _, _) = call(
+            &h.app,
+            "PATCH",
+            &uri,
+            Some(&token(MODERATOR)),
+            Some(patch(1_024)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let lift = "/moderation/v1/suspensions/creator-a";
+        let (status, _, _) = call(
+            &h.app,
+            "DELETE",
+            lift,
+            Some(&token(MODERATOR)),
+            Some(json!({"reason": "x".repeat(1_025)})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
