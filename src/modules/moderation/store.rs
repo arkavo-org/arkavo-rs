@@ -294,6 +294,9 @@ impl SuspensionStore for DynamoSuspensionStore {
             let out = self
                 .client
                 .transact_write_items()
+                // Idempotent if the SDK retries after a commit whose response was
+                // lost, instead of a spurious condition failure.
+                .client_request_token(uuid::Uuid::new_v4().to_string())
                 .transact_items(TransactWriteItem::builder().put(report_put.clone()).build())
                 .transact_items(
                     TransactWriteItem::builder()

@@ -137,7 +137,14 @@ The key is the account's token `sub` with any `arkavo:` prefix removed, and a
 hyphenated UUID lowercased, so `arkavo:<UUID>` and `<uuid>` name the same
 account. Other UUID spellings (braced, `urn:uuid:`, no hyphens) are kept as
 they are and name no account a token carries. A report's creator is the catalog subject, which is that same
-`sub`. The action events carry this key as `creatorSubject` too.
+`sub`. The action events carry this key as `account` (see [NATS events](#nats-events)).
+
+The stored suspension is authoritative: the platform reads it directly. The
+NATS action events are notifications, not enforcement, and under concurrent
+moderators they can lead or lag the store. Enforcement outside arks is #93
+phase 2: synchronous calls to identity and the node, with each outcome
+recorded on the report. One suspension record covers an account however many
+reports suspended it, and a lift clears it.
 
 ### Read: `GET /moderation/v1/suspensions/{subject}`
 
