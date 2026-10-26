@@ -694,7 +694,7 @@ pub async fn lift_suspension(
         "at": rfc3339(lift.at),
     });
     if let Err(e) = state.try_publish("actions.lift", event).await {
-        error!("moderation lift for {account}: {e}; suspension unchanged");
+        error!("moderation lift not delivered: {e}; suspension unchanged");
         return err_json(
             StatusCode::SERVICE_UNAVAILABLE,
             "lift not delivered; the suspension is unchanged, try again",
@@ -704,10 +704,13 @@ pub async fn lift_suspension(
         return Json(json!({ "subject": subject, "suspended": false, "lifted": false }))
             .into_response();
     };
+    // The lift itself (who, when, why) is the stored record; the log names the
+    // suspension by its report.
+    let report_id = history.current.report_id.clone();
     if let Err(e) = state.suspensions.lift(history, version, &lift).await {
         return suspension_fail(e);
     }
-    info!("moderation suspension lifted for {account} by {moderator}");
+    info!("moderation suspension from report {report_id} lifted by {moderator}");
     Json(json!({ "subject": subject, "suspended": false, "lifted": true })).into_response()
 }
 
