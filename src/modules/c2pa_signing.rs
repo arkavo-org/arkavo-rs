@@ -249,6 +249,11 @@ pub struct C2paMetadata {
     pub timestamp: Option<String>, // ISO 8601 format
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_generated: Option<bool>,
+    /// The `c2pa.created` action's digitalSourceType: an IPTC or C2PA term such as
+    /// `screenCapture`, or its full URI (arkavo-rs#129). Without it, `ai_generated` picks
+    /// trainedAlgorithmicMedia or digitalCapture, as for older clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digital_source_type: Option<DigitalSourceType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub software: Option<String>,
     /// Whether the actions describe the asset's whole history; false when absent
@@ -314,6 +319,9 @@ pub struct C2paValidateResponse {
     pub provenance_chain: Option<Vec<ProvenanceEntry>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_generated: Option<bool>,
+    /// The `c2pa.created` action's digitalSourceType, as the term a client sends
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digital_source_type: Option<String>,
     /// Trusted signing time from the RFC 3161 timestamp, if the manifest has one
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signed_at: Option<String>,
@@ -447,6 +455,10 @@ pub async fn sign_manifest(
             "Invalid content hash format (expected 64 hex chars)",
             serde_json::json!({}),
         );
+    }
+    if let Err(e) = created_source_type(&req.metadata) {
+        warn!("C2PA signing refused: {}", e);
+        return sign_error(StatusCode::BAD_REQUEST, &e, serde_json::json!({}));
     }
 
     if let Err(retry_after) = state.admit(&person.sub) {
@@ -587,6 +599,7 @@ pub async fn validate_manifest(
                         creator: None,
                         provenance_chain: None,
                         ai_generated: None,
+                        digital_source_type: None,
                         signed_at: None,
                     }),
                 )
@@ -620,6 +633,7 @@ pub async fn validate_manifest(
                     creator: None,
                     provenance_chain: None,
                     ai_generated: None,
+                    digital_source_type: None,
                     signed_at: None,
                 }),
             )
@@ -734,11 +748,7 @@ fn build_c2pa_manifest(
         req.metadata.timestamp.clone().unwrap_or_else(|| {
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         });
-    let source_type = if req.metadata.ai_generated == Some(true) {
-        DigitalSourceType::TrainedAlgorithmicMedia
-    } else {
-        DigitalSourceType::DigitalCapture
-    };
+    let source_type = created_source_type(&req.metadata)?;
     let mut created = Action::new(c2pa_action::CREATED)
         .set_when(when)
         .set_source_type(source_type);
@@ -844,6 +854,46 @@ fn build_c2pa_manifest(
     let manifest_hash = hex::encode(hasher.finalize());
 
     Ok((manifest_b64, manifest_hash))
+}
+
+/// Whether a source type is generative AI output, as `ai_generated` reports it
+fn is_ai_generated(source_type: &DigitalSourceType) -> bool {
+    matches!(
+        source_type,
+        DigitalSourceType::TrainedAlgorithmicMedia
+            | DigitalSourceType::CompositeWithTrainedAlgorithmicMedia
+            | DigitalSourceType::TrainedAlgorithmicData
+    )
+}
+
+/// A source type as a client names it: the last segment of its URI, e.g. `screenCapture`
+fn source_term(source_type: &DigitalSourceType) -> String {
+    let uri = source_type.to_string();
+    uri.rsplit('/').next().unwrap_or(&uri).to_string()
+}
+
+/// The `c2pa.created` action's digitalSourceType (arkavo-rs#129). A client's term must be
+/// one c2pa-rs knows, since it reads any other string as `Other`, and must agree with
+/// `ai_generated` when both are sent. Without a term, `ai_generated` picks between
+/// trainedAlgorithmicMedia and digitalCapture, as for older clients.
+fn created_source_type(metadata: &C2paMetadata) -> Result<DigitalSourceType, String> {
+    let ai_flag = metadata.ai_generated;
+    match &metadata.digital_source_type {
+        None if ai_flag == Some(true) => Ok(DigitalSourceType::TrainedAlgorithmicMedia),
+        None => Ok(DigitalSourceType::DigitalCapture),
+        Some(DigitalSourceType::Other(term)) => Err(format!(
+            "unknown digital_source_type {:?}: expected an IPTC term such as \"screenCapture\"",
+            term
+        )),
+        Some(source_type) => match ai_flag {
+            Some(ai_generated) if ai_generated != is_ai_generated(source_type) => Err(format!(
+                "ai_generated {} contradicts digital_source_type \"{}\"",
+                ai_generated,
+                source_term(source_type)
+            )),
+            _ => Ok(source_type.clone()),
+        },
+    }
 }
 
 /// The claim generator is the product, Arkavo Creator, with its version when the request's
@@ -1009,6 +1059,7 @@ fn validate_c2pa_manifest(
     let mut errors = Vec::new();
     let mut creator = None;
     let mut ai_generated = None;
+    let mut digital_source_type = None;
     let mut signed_at = None;
     let mut provenance_chain = Vec::new();
 
@@ -1045,10 +1096,8 @@ fn validate_c2pa_manifest(
         if let Ok(actions) = manifest.find_assertion::<Actions>(Actions::LABEL) {
             for action in actions.actions() {
                 if action.action() == c2pa_action::CREATED {
-                    ai_generated = Some(matches!(
-                        action.source_type(),
-                        Some(DigitalSourceType::TrainedAlgorithmicMedia)
-                    ));
+                    ai_generated = Some(action.source_type().is_some_and(is_ai_generated));
+                    digital_source_type = action.source_type().map(source_term);
                 }
                 let software = match action.software_agent() {
                     Some(SoftwareAgent::ClaimGeneratorInfo(info)) => Some(info.name.clone()),
@@ -1123,6 +1172,7 @@ fn validate_c2pa_manifest(
         creator,
         provenance_chain: chain,
         ai_generated,
+        digital_source_type,
         signed_at,
     })
 }
@@ -1169,6 +1219,7 @@ mod tests {
             description: None,
             timestamp: Some("2025-10-26T00:00:00Z".to_string()),
             ai_generated: Some(true),
+            digital_source_type: None,
             software: Some("Arkavo KAS".to_string()),
             all_actions_included: None,
         };
@@ -1277,6 +1328,7 @@ mod tests {
                 description: Some("A test video".to_string()),
                 timestamp: Some("2025-10-26T12:00:00Z".to_string()),
                 ai_generated: Some(false),
+                digital_source_type: None,
                 software: Some("Arkavo Test Suite".to_string()),
                 all_actions_included: None,
             },
@@ -1701,6 +1753,81 @@ mod tests {
             first.source_type(),
             Some(c2pa::assertions::DigitalSourceType::DigitalCapture)
         ));
+    }
+
+    /// The test request with `metadata` merged in, as a client sends it on the wire
+    fn request_with_metadata(metadata: serde_json::Value) -> C2paSignRequest {
+        let mut req = make_test_request(RUBRIC_HASH);
+        let mut merged = serde_json::to_value(&req.metadata).unwrap();
+        merged
+            .as_object_mut()
+            .unwrap()
+            .extend(metadata.as_object().unwrap().clone());
+        req.metadata = serde_json::from_value(merged).unwrap();
+        req
+    }
+
+    /// The client names the source type (arkavo-rs#129): a screen recording isn't a camera
+    /// capture. Short IPTC terms and full URIs are both accepted.
+    #[test]
+    fn test_c2pa_created_action_carries_the_requested_source_type() {
+        const IPTC: &str = "http://cv.iptc.org/newscodes/digitalsourcetype/";
+        for (term, ai_generated, expected) in [
+            ("screenCapture", false, "screenCapture"),
+            ("virtualRecording", false, "virtualRecording"),
+            (
+                "http://cv.iptc.org/newscodes/digitalsourcetype/compositeSynthetic",
+                false,
+                "compositeSynthetic",
+            ),
+            (
+                "compositeWithTrainedAlgorithmicMedia",
+                true,
+                "compositeWithTrainedAlgorithmicMedia",
+            ),
+        ] {
+            let req = request_with_metadata(serde_json::json!({
+                "digital_source_type": term,
+                "ai_generated": ai_generated,
+            }));
+            let crjson = signed_crjson(&req);
+            let created =
+                &crjson["manifests"][0]["assertions"][Actions::LABEL_VERSIONED]["actions"][0];
+            assert_eq!(
+                created["digitalSourceType"],
+                format!("{IPTC}{expected}"),
+                "{term}: {created}"
+            );
+        }
+    }
+
+    /// `/c2pa/v1/validate` reports the source type as the term a client sends, and
+    /// `ai_generated` covers every trained-algorithm type (arkavo-rs#129)
+    #[test]
+    fn test_c2pa_validate_reports_the_source_type() {
+        let config = make_test_config();
+        for (term, ai_generated) in [
+            ("digitalCapture", false),
+            ("screenCapture", false),
+            ("trainedAlgorithmicMedia", true),
+            ("compositeWithTrainedAlgorithmicMedia", true),
+        ] {
+            let req = request_with_metadata(serde_json::json!({
+                "digital_source_type": term,
+                "ai_generated": ai_generated,
+            }));
+            let (manifest_b64, _) =
+                build_c2pa_manifest(&config, &req, SignPass::Sign).expect("signs");
+            let bytes =
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
+                    .unwrap();
+            let result =
+                validate_c2pa_manifest(&bytes, RUBRIC_HASH, &config.trust_anchors, "", None)
+                    .expect("validates");
+            let json = serde_json::to_value(&result).unwrap();
+            assert_eq!(json["digital_source_type"], term, "{json}");
+            assert_eq!(result.ai_generated, Some(ai_generated), "{term}");
+        }
     }
 
     /// A manifest signed with our own chain validates with no errors once its CA is a
@@ -2377,6 +2504,59 @@ mod sign_endpoint_tests {
             StatusCode::UNPROCESSABLE_ENTITY,
             "quota must be intact"
         );
+    }
+
+    /// An unknown source type is refused before it counts against the quota: c2pa-rs would
+    /// otherwise accept any string as `DigitalSourceType::Other` (arkavo-rs#129)
+    #[tokio::test]
+    async fn test_sign_refuses_an_unknown_source_type_without_using_quota() {
+        let state = state(1);
+        let mut bad = body(uuid_range(0, 1));
+        bad["metadata"]["digital_source_type"] = serde_json::json!("selfie");
+        let (status, json, _) = sign(&state, Some(&token(SUB)), bad).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+        let (status, _, _) = sign(&state, Some(&token(SUB)), body(uuid_range(0, 1))).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "quota must be intact"
+        );
+    }
+
+    /// Clients send `ai_generated` with the source type so older servers keep the AI flag;
+    /// a flag that contradicts the type is refused (arkavo-rs#129)
+    #[tokio::test]
+    async fn test_sign_refuses_an_ai_flag_that_contradicts_the_source_type() {
+        let state = state(10);
+        let request = |term: &str, ai_generated: bool| {
+            let mut req = body(uuid_range(0, 1));
+            req["metadata"]["digital_source_type"] = serde_json::json!(term);
+            req["metadata"]["ai_generated"] = serde_json::json!(ai_generated);
+            req
+        };
+        for (term, ai_generated) in [
+            ("screenCapture", true),
+            ("trainedAlgorithmicMedia", false),
+            ("compositeWithTrainedAlgorithmicMedia", false),
+        ] {
+            let (status, json, _) =
+                sign(&state, Some(&token(SUB)), request(term, ai_generated)).await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "{term} with ai_generated {ai_generated}: {json}"
+            );
+        }
+        // Agreeing values get past the check, to the box-length negotiation
+        for (term, ai_generated) in [("screenCapture", false), ("trainedAlgorithmicMedia", true)] {
+            let (status, json, _) =
+                sign(&state, Some(&token(SUB)), request(term, ai_generated)).await;
+            assert_eq!(
+                status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{term} with ai_generated {ai_generated}: {json}"
+            );
+        }
     }
 
     /// With C2PA_REQUIRE_ENTITLEMENT, only a creator member may sign: the token must carry
