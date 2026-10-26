@@ -21,6 +21,30 @@ pub enum Aud {
     Many(Vec<String>),
 }
 
+impl Aud {
+    pub fn contains(&self, want: &str) -> bool {
+        match self {
+            Aud::One(s) => s == want,
+            Aud::Many(v) => v.iter().any(|s| s == want),
+        }
+    }
+}
+
+/// The client ID of a service account's `client_credentials` token: `sub`
+/// `client:<id>`, role `service-account`, and `<id>` in `aud`. `None` for any
+/// other kind of token. Shared by every service-credential check.
+pub fn service_client_id(claims: &DecodedClaims) -> Option<&str> {
+    let id = claims
+        .sub
+        .strip_prefix("client:")
+        .filter(|s| !s.is_empty())?;
+    let service = claims
+        .arkavo_roles
+        .as_ref()
+        .is_some_and(|r| r.iter().any(|x| x == "service-account"));
+    (service && claims.aud.contains(id)).then_some(id)
+}
+
 /// Already-verified CWT claims. Mapping only — no COSE verify here.
 #[derive(Debug, Clone)]
 pub struct DecodedClaims {

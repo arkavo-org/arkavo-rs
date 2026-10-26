@@ -1,7 +1,7 @@
 //! AuthZEN HTTPS JSON facade: PEP service-CWT authn + OpenTDF v2 client.
 
 use crate::modules::authzen::cose_keys::CoseKeyCache;
-use crate::modules::authzen::cwt_subject::{Aud, DecodedClaims};
+use crate::modules::authzen::cwt_subject::{service_client_id, DecodedClaims};
 use crate::modules::authzen::cwt_verify::{
     header_kid, verify_header_token, VerifyError, VerifyOpts,
 };
@@ -236,29 +236,11 @@ async fn authenticate_pep(
         },
     )
     .map_err(|_| PepAuth::Unauthorized)?;
-    let Some(client_id) = claims.sub.strip_prefix("client:").filter(|s| !s.is_empty()) else {
+    let Some(client_id) = service_client_id(&claims) else {
         return Err(PepAuth::Unauthorized);
     };
-    let has_role = claims
-        .arkavo_roles
-        .as_ref()
-        .is_some_and(|r| r.iter().any(|x| x == "service-account"));
-    if !has_role {
-        return Err(PepAuth::Unauthorized);
-    }
-    let aud_ok = match &claims.aud {
-        Aud::One(s) => s == client_id,
-        Aud::Many(v) => v.iter().any(|s| s == client_id),
-    };
-    if !aud_ok {
-        return Err(PepAuth::Unauthorized);
-    }
     if let Some(want) = &state.expected_aud {
-        let bound = match &claims.aud {
-            Aud::One(s) => s == want,
-            Aud::Many(v) => v.iter().any(|s| s == want),
-        };
-        if !bound {
+        if !claims.aud.contains(want) {
             return Err(PepAuth::Unauthorized);
         }
     }

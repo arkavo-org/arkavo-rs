@@ -107,9 +107,13 @@ impl SuspensionHistory {
         }
     }
 
-    /// The history after a lift, or `None` when nothing is suspended.
-    pub fn lifted(existing: Option<Self>, lift: &Lift) -> Option<Self> {
-        let mut h = existing.filter(|h| h.current.is_active())?;
+    /// The history after a lift, or `None` when nothing is suspended. With
+    /// `only_report`, only a suspension recorded by that report is lifted, so
+    /// a failed PATCH withdraws its own suspension and no one else's.
+    pub fn lifted(existing: Option<Self>, lift: &Lift, only_report: Option<&str>) -> Option<Self> {
+        let mut h = existing.filter(|h| {
+            h.current.is_active() && only_report.is_none_or(|id| h.current.report_id == id)
+        })?;
         h.current.lifted = Some(lift.clone());
         Some(h)
     }
@@ -117,12 +121,19 @@ impl SuspensionHistory {
 
 #[async_trait]
 pub trait SuspensionStore: Send + Sync {
-    /// Record a suspension, unless the account is already suspended.
-    async fn suspend(&self, suspension: &Suspension) -> Result<(), StoreError>;
+    /// Record a suspension, unless the account is already suspended; `true`
+    /// when this call recorded it.
+    async fn suspend(&self, suspension: &Suspension) -> Result<bool, StoreError>;
     /// The account's current suspension, active or lifted.
     async fn get(&self, subject: &str) -> Result<Option<Suspension>, StoreError>;
-    /// Record a lift on the active suspension; `false` when there was none.
-    async fn lift(&self, subject: &str, lift: &Lift) -> Result<bool, StoreError>;
+    /// Record a lift on the active suspension (only if `only_report` recorded
+    /// it, when given); `false` when there was none to lift.
+    async fn lift(
+        &self,
+        subject: &str,
+        lift: &Lift,
+        only_report: Option<&str>,
+    ) -> Result<bool, StoreError>;
 }
 
 /// Suspensions share the reports table, one item per account under the key
@@ -236,20 +247,24 @@ impl DynamoSuspensionStore {
 
 #[async_trait]
 impl SuspensionStore for DynamoSuspensionStore {
-    async fn suspend(&self, suspension: &Suspension) -> Result<(), StoreError> {
+    async fn suspend(&self, suspension: &Suspension) -> Result<bool, StoreError> {
         self.update(&suspension.subject, |h| {
             SuspensionHistory::suspended(h, suspension)
         })
         .await
-        .map(|_| ())
     }
 
     async fn get(&self, subject: &str) -> Result<Option<Suspension>, StoreError> {
         Ok(self.load(subject).await?.map(|(h, _)| h.current))
     }
 
-    async fn lift(&self, subject: &str, lift: &Lift) -> Result<bool, StoreError> {
-        self.update(subject, |h| SuspensionHistory::lifted(h, lift))
+    async fn lift(
+        &self,
+        subject: &str,
+        lift: &Lift,
+        only_report: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        self.update(subject, |h| SuspensionHistory::lifted(h, lift, only_report))
             .await
     }
 }
@@ -446,14 +461,17 @@ pub mod memory {
 
     #[async_trait]
     impl SuspensionStore for MemorySuspensionStore {
-        async fn suspend(&self, suspension: &Suspension) -> Result<(), StoreError> {
+        async fn suspend(&self, suspension: &Suspension) -> Result<bool, StoreError> {
             self.check()?;
             let mut m = self.records.lock().unwrap();
             let existing = m.get(&suspension.subject).cloned();
-            if let Some(next) = SuspensionHistory::suspended(existing, suspension) {
-                m.insert(suspension.subject.clone(), next);
+            match SuspensionHistory::suspended(existing, suspension) {
+                Some(next) => {
+                    m.insert(suspension.subject.clone(), next);
+                    Ok(true)
+                }
+                None => Ok(false),
             }
-            Ok(())
         }
 
         async fn get(&self, subject: &str) -> Result<Option<Suspension>, StoreError> {
@@ -466,11 +484,16 @@ pub mod memory {
                 .map(|h| h.current.clone()))
         }
 
-        async fn lift(&self, subject: &str, lift: &Lift) -> Result<bool, StoreError> {
+        async fn lift(
+            &self,
+            subject: &str,
+            lift: &Lift,
+            only_report: Option<&str>,
+        ) -> Result<bool, StoreError> {
             self.check()?;
             let mut m = self.records.lock().unwrap();
             let existing = m.get(subject).cloned();
-            match SuspensionHistory::lifted(existing, lift) {
+            match SuspensionHistory::lifted(existing, lift, only_report) {
                 Some(next) => {
                     m.insert(subject.to_string(), next);
                     Ok(true)
@@ -755,12 +778,12 @@ mod dynamodb_local {
             lifted: None,
         };
         assert_eq!(store.get("creator-a").await.unwrap(), None);
-        store.suspend(&first).await.unwrap();
+        assert!(store.suspend(&first).await.unwrap());
         // A second suspension while active keeps the first record.
         let mut second = first.clone();
         second.since = 200;
         second.report_id = "r2".into();
-        store.suspend(&second).await.unwrap();
+        assert!(!store.suspend(&second).await.unwrap());
         assert_eq!(store.get("creator-a").await.unwrap(), Some(first.clone()));
         // The item stays out of the moderators' queues.
         for status in [Status::Received, Status::Actioned] {
@@ -772,8 +795,9 @@ mod dynamodb_local {
             moderator: "m2".into(),
             reason: "appeal upheld".into(),
         };
-        assert!(store.lift("creator-a", &lift).await.unwrap());
-        assert!(!store.lift("creator-a", &lift).await.unwrap());
+        assert!(!store.lift("creator-a", &lift, Some("r2")).await.unwrap());
+        assert!(store.lift("creator-a", &lift, Some("r1")).await.unwrap());
+        assert!(!store.lift("creator-a", &lift, None).await.unwrap());
         let lifted = store.get("creator-a").await.unwrap().unwrap();
         assert_eq!(lifted.lifted, Some(lift));
 
@@ -828,21 +852,34 @@ mod suspension_history {
 
     #[test]
     fn a_lift_is_recorded_and_a_new_suspension_keeps_it() {
-        assert_eq!(SuspensionHistory::lifted(None, &lift()), None);
+        assert_eq!(SuspensionHistory::lifted(None, &lift(), None), None);
         let h = SuspensionHistory::suspended(None, &suspension("r1")).unwrap();
-        let h = SuspensionHistory::lifted(Some(h), &lift()).unwrap();
+        let h = SuspensionHistory::lifted(Some(h), &lift(), None).unwrap();
         assert!(!h.current.is_active());
-        assert_eq!(SuspensionHistory::lifted(Some(h.clone()), &lift()), None);
+        assert_eq!(
+            SuspensionHistory::lifted(Some(h.clone()), &lift(), None),
+            None
+        );
         let again = SuspensionHistory::suspended(Some(h.clone()), &suspension("r2")).unwrap();
         assert_eq!(again.current.report_id, "r2");
         assert_eq!(again.earlier, vec![h.current]);
     }
 
     #[test]
+    fn a_withdrawal_lifts_only_the_named_reports_suspension() {
+        let h = SuspensionHistory::suspended(None, &suspension("r1")).unwrap();
+        assert_eq!(
+            SuspensionHistory::lifted(Some(h.clone()), &lift(), Some("r2")),
+            None
+        );
+        assert!(SuspensionHistory::lifted(Some(h), &lift(), Some("r1")).is_some());
+    }
+
+    #[test]
     fn history_is_bounded() {
         let mut h = SuspensionHistory::suspended(None, &suspension("r0")).unwrap();
         for i in 1..=(MAX_EARLIER_SUSPENSIONS + 5) {
-            h = SuspensionHistory::lifted(Some(h), &lift()).unwrap();
+            h = SuspensionHistory::lifted(Some(h), &lift(), None).unwrap();
             h = SuspensionHistory::suspended(Some(h), &suspension(&format!("r{i}"))).unwrap();
         }
         assert_eq!(h.earlier.len(), MAX_EARLIER_SUSPENSIONS);

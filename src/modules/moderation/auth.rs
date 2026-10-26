@@ -3,7 +3,7 @@
 //! from its `client_credentials` CWT.
 
 use crate::modules::authzen::cose_keys::CoseKeyCache;
-use crate::modules::authzen::cwt_subject::{subject_id_bind, Aud, DecodedClaims};
+use crate::modules::authzen::cwt_subject::{service_client_id, subject_id_bind, DecodedClaims};
 use crate::modules::authzen::cwt_verify::{
     header_kid, verify_header_token, VerifyError, VerifyOpts,
 };
@@ -39,13 +39,16 @@ impl SessionVerifier {
 
     /// The service client behind a `client_credentials` token, if it is one of
     /// `allowed`. The same rules as the AuthZEN facade's PEP check: `sub`
-    /// `client:<id>`, role `service-account`, and `<id>` in `aud`.
+    /// `client:<id>`, role `service-account`, `<id>` in `aud`, and `aud` also
+    /// naming `audience` (this server), so a token minted for another
+    /// resource server is refused.
     pub async fn service_client(
         &self,
         headers: &HeaderMap,
         allowed: &HashSet<String>,
+        audience: &str,
     ) -> Result<String, AuthError> {
-        let claims = self.verified(headers, None).await?;
+        let claims = self.verified(headers, Some(audience)).await?;
         let id = service_client_id(&claims).ok_or(AuthError::Unauthenticated)?;
         if allowed.contains(id) {
             Ok(id.to_string())
@@ -87,24 +90,6 @@ impl SessionVerifier {
         )
         .map_err(|_| AuthError::Unauthenticated)
     }
-}
-
-/// The client ID of a service account's `client_credentials` token, or `None`
-/// for any other kind of token.
-pub fn service_client_id(claims: &DecodedClaims) -> Option<&str> {
-    let id = claims
-        .sub
-        .strip_prefix("client:")
-        .filter(|s| !s.is_empty())?;
-    let service = claims
-        .arkavo_roles
-        .as_ref()
-        .is_some_and(|r| r.iter().any(|x| x == "service-account"));
-    let bound = match &claims.aud {
-        Aud::One(s) => s == id,
-        Aud::Many(v) => v.iter().any(|s| s == id),
-    };
-    (service && bound).then_some(id)
 }
 
 /// Client IDs from a comma-separated list.

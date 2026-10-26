@@ -73,8 +73,9 @@ They authenticate with their own session CWT, the same way a reporter does.
 Agent tokens are refused here as everywhere in the intake; letting AI agents
 moderate needs its own credential decision first.
 
-A moderator never acts for themselves (403): they can't respond to a report
-they filed, and can't suspend or lift their own account.
+A moderator never acts for themselves (403): they can't respond in any way to
+a report they filed or one about their own account, and can't lift their own
+suspension.
 
 - `GET /moderation/v1/reports?status=received&limit=50&cursor=…` lists a status
   queue, oldest first. `limit` is at most 100. Pass `nextCursor` as `cursor` to
@@ -88,9 +89,10 @@ from `received` straight to `actioned` or `dismissed`. `actioned` and
 `dismissed` are final (409).
 
 - `actioned` needs at least one action. `takedown` needs a reported `contentId`,
-  and `suspend` needs a reported creator and a `note` of at most 1,024
-  characters, which becomes the suspension's reason (identity's
-  publishing-suspension API takes no longer reason). Other statuses take no actions.
+  and `suspend` needs a reported creator and a `note` in the same request, of
+  at most 1,024 characters, which becomes the suspension's reason (identity's
+  publishing-suspension API takes no longer reason). A note left by an earlier
+  response doesn't count. Other statuses take no actions.
 - The first change out of `received` records `firstResponseAt` and
   `responseSeconds`. This is the response-time measure for the committed
   response time ("Arkavo reviews reports within 24 hours").
@@ -117,8 +119,12 @@ curl -s -X PATCH -H "Authorization: Bearer $CWT" -H 'content-type: application/j
 suspension for the report's creator, with the note as its reason, before it
 publishes the action events. If the record
 can't be written, the PATCH returns 503 and the report is unchanged. A creator
-subject that is only the `arkavo:` prefix names no account, and gets 400. If a later
-step fails, the account stays suspended and a retry is idempotent. An account
+subject that is only the `arkavo:` prefix names no account, and gets 400. If a
+later step fails (an action event not delivered, or the report changed
+meanwhile), a suspension this request recorded is withdrawn, recorded as a lift
+with a `withdrawn:` reason, so no account stays suspended by a report that
+wasn't actioned. If the withdrawal itself fails, the suspension stays in force
+and the error is logged. An account
 already suspended keeps its first record, so `since` and `reportId` name the
 original action.
 
@@ -126,9 +132,10 @@ Nothing is deleted. A lift is recorded on the suspension (who, when, why), and
 a later suspension of the same account keeps the lifted ones as its history
 (the last 20).
 
-The key is the account's token `sub` with any `arkavo:` prefix removed, so
-`arkavo:<uuid>` and `<uuid>` name the same account. A report's creator is the
-catalog subject, which is that same `sub`.
+The key is the account's token `sub` with any `arkavo:` prefix removed and a
+UUID in lowercase hyphenated form, so `arkavo:<UUID>` and `<uuid>` name the
+same account. A report's creator is the catalog subject, which is that same
+`sub`. The action events carry this key as `creatorSubject` too.
 
 ### Read: `GET /moderation/v1/suspensions/{subject}`
 
@@ -138,16 +145,18 @@ percent-encoded as one path segment.
 
 - **Credential:** `Authorization: Bearer <service CWT>` from identity's
   `client_credentials`. `iss` must be `OIDC_ISSUER`, `sub` `client:<id>`,
-  `arkavo_roles` must include `service-account`, `aud` must contain `<id>`, and
-  `<id>` must be in `MODERATION_SUSPENSION_READER_IDS`. These are the same rules
-  as the AuthZEN facade's PEP check.
+  `arkavo_roles` must include `service-account`, `aud` must contain `<id>` and
+  this server (`MODERATION_SUSPENSION_READER_AUD`, default
+  `https://platform.arkavo.net`), and `<id>` must be in
+  `MODERATION_SUSPENSION_READER_IDS`. These are the AuthZEN facade's PEP rules,
+  from the same helper.
 
 | Response | Meaning |
 |---|---|
 | `200 {"subject","suspended":true,"since","reportId"}` | Suspended. `since` is RFC 3339. |
 | `200 {"subject","suspended":false}` | Not suspended. |
 | `400` | Malformed subject: empty, over 256 bytes, or holding whitespace or control characters. |
-| `401` | Missing or invalid service CWT, or a person's token. |
+| `401` | Missing or invalid service CWT, one not minted for this server, or a person's token. |
 | `403` | The client isn't in `MODERATION_SUSPENSION_READER_IDS`. |
 | `503` | The suspension store or key set is unavailable, or the intake is off. |
 
@@ -184,7 +193,10 @@ curl -s -X DELETE -H "Authorization: Bearer $CWT" -H 'content-type: application/
 | `moderation.reports.received` | A new report is stored | `type`, `id`, `reasons`, `creatorSubject`, `contentId`, `receivedAt` |
 | `moderation.actions.takedown` | A report is actioned with `takedown` | `type`, `action`, `reportId`, `creatorSubject`, `contentId`, `moderator`, `at` |
 | `moderation.actions.suspend` | A report is actioned with `suspend` | same |
-| `moderation.actions.lift` | A moderator lifts a suspension | `type`, `action`, `creatorSubject`, `moderator`, `at`. Here `creatorSubject` is the stored key, without any `arkavo:` prefix; the other action events carry the subject as reported. |
+| `moderation.actions.lift` | A moderator lifts a suspension | `type`, `action`, `creatorSubject`, `moderator`, `at` |
+
+`creatorSubject` in the action events is the account key (see
+[Suspensions](#suspensions)), so a suspend and its lift name the same account.
 
 `MODERATION_NATS_PREFIX` changes the `moderation` prefix. Each publish is
 flushed to the NATS server within 2 seconds.
@@ -314,6 +326,7 @@ signer does: `production/start.sh` exports `AWS_PROFILE=arks-prod`,
 MODERATION_INTAKE=on                              # off (default) | on
 MODERATION_REPORTS_TABLE=prod-moderation-reports  # required when on
 MODERATION_SUSPENSION_READER_IDS=opentdf-platform  # service clients that may read suspensions; empty = none
+MODERATION_SUSPENSION_READER_AUD=https://platform.arkavo.net  # default shown; required in the reader token's aud
 MODERATION_STATUS_INDEX=status-received_at-index  # default shown
 MODERATION_MODERATORS=<account-uuid>,<account-uuid>  # who may read and respond; `arkavo:` prefix optional
 MODERATION_EXPECTED_AUD=arkavo                    # default shown

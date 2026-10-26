@@ -17,6 +17,8 @@ pub struct Settings {
     /// Service clients that may read suspensions (the platform's
     /// `constraints.publishing_status`).
     pub suspension_readers: HashSet<String>,
+    /// Required in a suspension reader's token `aud`: this server.
+    pub suspension_reader_audience: String,
     pub status_index: String,
     pub issuer: String,
     pub cose_keys_url: String,
@@ -68,6 +70,8 @@ pub fn settings_from(get: impl Fn(&str) -> Option<String>) -> Result<Option<Sett
         suspension_readers: get("MODERATION_SUSPENSION_READER_IDS")
             .map(|v| auth::parse_client_ids(&v))
             .unwrap_or_default(),
+        suspension_reader_audience: get("MODERATION_SUSPENSION_READER_AUD")
+            .unwrap_or_else(|| "https://platform.arkavo.net".into()),
         status_index: get("MODERATION_STATUS_INDEX").unwrap_or_else(|| DEFAULT_STATUS_INDEX.into()),
         issuer,
         cose_keys_url,
@@ -119,6 +123,7 @@ mod tests {
         .unwrap();
         assert_eq!(s.table, "prod-moderation-reports");
         assert!(s.suspension_readers.is_empty());
+        assert_eq!(s.suspension_reader_audience, "https://platform.arkavo.net");
         assert_eq!(s.status_index, DEFAULT_STATUS_INDEX);
         assert_eq!(s.issuer, "https://identity.arkavo.net");
         assert_eq!(

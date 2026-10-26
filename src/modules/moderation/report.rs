@@ -189,7 +189,10 @@ impl ReportSubmission {
 
 /// Subjects and content IDs: null is absent; a present value must be non-empty,
 /// bounded, and free of whitespace and control characters.
-fn identifier(v: Option<String>, err: &'static str) -> Result<Option<String>, InvalidReport> {
+pub(crate) fn identifier(
+    v: Option<String>,
+    err: &'static str,
+) -> Result<Option<String>, InvalidReport> {
     match v {
         None => Ok(None),
         Some(s) => {

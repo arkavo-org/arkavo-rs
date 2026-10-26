@@ -1064,6 +1064,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 store: Arc::new(store),
                 suspensions: Arc::new(suspensions),
                 suspension_readers: s.suspension_readers,
+                suspension_reader_audience: s.suspension_reader_audience,
                 verifier: moderation::auth::SessionVerifier {
                     issuer: s.issuer,
                     audience: s.audience,
