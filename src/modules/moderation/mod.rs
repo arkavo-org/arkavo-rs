@@ -12,7 +12,15 @@ use std::collections::HashSet;
 /// Settings read from the environment when `MODERATION_INTAKE=on`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
+    /// Reports, and per-account publishing suspensions (arkavo-rs#93).
     pub table: String,
+    /// Service clients that may read suspensions (the platform's
+    /// `constraints.publishing_status`).
+    pub suspension_readers: HashSet<String>,
+    /// Required in a suspension reader's token `aud`: this server, the same
+    /// platform audience the media routes use (`MEDIA_PLATFORM_AUDIENCE`), so a
+    /// hostname change re-pins one setting.
+    pub suspension_reader_audience: String,
     pub status_index: String,
     pub issuer: String,
     pub cose_keys_url: String,
@@ -61,6 +69,11 @@ pub fn settings_from(get: impl Fn(&str) -> Option<String>) -> Result<Option<Sett
     }
     Ok(Some(Settings {
         table,
+        suspension_readers: get("MODERATION_SUSPENSION_READER_IDS")
+            .map(|v| auth::parse_client_ids(&v))
+            .unwrap_or_default(),
+        suspension_reader_audience: get("MEDIA_PLATFORM_AUDIENCE")
+            .unwrap_or_else(|| crate::modules::license::config::DEFAULT_PLATFORM_AUDIENCE.into()),
         status_index: get("MODERATION_STATUS_INDEX").unwrap_or_else(|| DEFAULT_STATUS_INDEX.into()),
         issuer,
         cose_keys_url,
@@ -111,6 +124,8 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(s.table, "prod-moderation-reports");
+        assert!(s.suspension_readers.is_empty());
+        assert_eq!(s.suspension_reader_audience, "https://platform.arkavo.net");
         assert_eq!(s.status_index, DEFAULT_STATUS_INDEX);
         assert_eq!(s.issuer, "https://identity.arkavo.net");
         assert_eq!(
@@ -131,12 +146,17 @@ mod tests {
             ("MODERATION_INTAKE", "on"),
             ("MODERATION_REPORTS_TABLE", "prod-moderation-reports"),
             ("MODERATION_DYNAMODB_ENDPOINT", "http://127.0.0.1:8000"),
+            ("MODERATION_SUSPENSION_READER_IDS", "opentdf-platform"),
         ])
         .unwrap()
         .unwrap();
         assert_eq!(
             s.dynamodb_endpoint.as_deref(),
             Some("http://127.0.0.1:8000")
+        );
+        assert_eq!(
+            s.suspension_readers,
+            HashSet::from(["opentdf-platform".to_string()])
         );
     }
 

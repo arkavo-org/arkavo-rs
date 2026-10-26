@@ -278,9 +278,10 @@ export H3_BIND_HOST=0.0.0.0                            # QUIC bind address; pin 
 
 # Moderation intake (arkavo-rs#77) — see docs/moderation.md for the rest
 export MODERATION_INTAKE=on                            # off (default) | on
-export MODERATION_REPORTS_TABLE=prod-moderation-reports  # DynamoDB table, required when on
+export MODERATION_REPORTS_TABLE=prod-moderation-reports  # DynamoDB table (reports and suspensions), required when on
+export MODERATION_SUSPENSION_READER_IDS=opentdf-platform  # service clients that may GET suspensions (platform publishing_status); their token aud must also contain MEDIA_PLATFORM_AUDIENCE
 export MODERATION_MODERATORS=<account-uuid>,...        # accounts that may read and respond to reports
-export MODERATION_DYNAMODB_ENDPOINT=http://127.0.0.1:8000  # optional: DynamoDB Local container (see docs/moderation.md)
+export MODERATION_DYNAMODB_ENDPOINT=http://127.0.0.1:8000  # development only: DynamoDB Local; production uses AWS DynamoDB via arks-prod (docs/moderation.md)
 ```
 
 **Note:** For RSA key support (Standard TDF / OpenTDFKit compatibility):
@@ -382,6 +383,8 @@ The server implements a TDF3-based DRM system for HLS/DASH streaming media. Each
 **Moderation Endpoints** (`MODERATION_INTAKE=on`, see `docs/moderation.md`):
 - `POST /moderation/v1/reports` - Signed-in viewer files a report (session CWT bearer)
 - `GET /moderation/v1/reports` / `GET|PATCH /moderation/v1/reports/:id` - Moderator queue and response
+- `GET /moderation/v1/suspensions/:subject` - Platform reads an account's publishing suspension (service CWT; 200 `suspended` true/false, never 404; 503 when the intake is off)
+- `DELETE /moderation/v1/suspensions/:subject` - Moderator lifts a suspension (`{"reason"}` required; recorded, never deleted; never their own account)
 
 **Media DRM Endpoints:**
 - `POST /media/v1/session/start` - Initialize playback session

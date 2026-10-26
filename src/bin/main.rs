@@ -1042,10 +1042,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None => aws_sdk_dynamodb::Client::new(&aws_config::load_from_env().await),
             };
             let store = moderation::store::DynamoReportStore::new(
-                dynamodb,
+                dynamodb.clone(),
                 s.table.clone(),
                 s.status_index.clone(),
             );
+            let suspensions =
+                moderation::store::DynamoSuspensionStore::new(dynamodb, s.table.clone());
+            if s.suspension_readers.is_empty() {
+                warn!("MODERATION_SUSPENSION_READER_IDS is empty: no service can read suspensions");
+            }
             if s.moderators.is_empty() {
                 warn!(
                     "MODERATION_MODERATORS is empty: reports are accepted but no one can read them"
@@ -1057,6 +1062,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             moderation::api::router(Arc::new(moderation::api::ModerationState {
                 store: Arc::new(store),
+                suspensions: Arc::new(suspensions),
+                suspension_readers: s.suspension_readers,
+                suspension_reader_audience: s.suspension_reader_audience,
                 verifier: moderation::auth::SessionVerifier {
                     issuer: s.issuer,
                     audience: s.audience,
@@ -1073,7 +1081,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 subject_prefix: s.subject_prefix,
             }))
         }
-        None => Router::new(),
+        None => moderation::api::unconfigured_router(),
     };
 
     // Media DRM router
