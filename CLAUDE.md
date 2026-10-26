@@ -282,7 +282,7 @@ export MODERATION_REPORTS_TABLE=prod-moderation-reports  # DynamoDB table, requi
 export MODERATION_SUSPENSIONS_TABLE=prod-moderation-suspensions  # DynamoDB table (hash key subject), required when on
 export MODERATION_SUSPENSION_READER_IDS=opentdf-platform  # service clients that may GET suspensions (platform publishing_status)
 export MODERATION_MODERATORS=<account-uuid>,...        # accounts that may read and respond to reports
-export MODERATION_DYNAMODB_ENDPOINT=http://127.0.0.1:8000  # optional: DynamoDB Local container (see docs/moderation.md)
+export MODERATION_DYNAMODB_ENDPOINT=http://127.0.0.1:8000  # development only: DynamoDB Local; production uses AWS DynamoDB via arks-prod (docs/moderation.md)
 ```
 
 **Note:** For RSA key support (Standard TDF / OpenTDFKit compatibility):

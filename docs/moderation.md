@@ -197,9 +197,58 @@ Reports table:
 | `expires_at` (N) | TTL (retention); written only when the report is resolved |
 | `record` (S) | The full record as JSON |
 
-### On this server: DynamoDB Local
+### Production: AWS DynamoDB
 
-Production on the Arkavo server runs the table in a DynamoDB Local container, not in AWS. arks then needs no AWS credentials for moderation. `MODERATION_DYNAMODB_ENDPOINT` points only the moderation client at the container, with fixed placeholder credentials, so the process's AWS credentials, used by C2PA KMS signing, are not affected.
+Production uses AWS DynamoDB in the Arkavo account (976193232136), reached with
+the `arks-prod` IAM user that also signs C2PA claims with KMS. Leave
+`MODERATION_DYNAMODB_ENDPOINT` unset. The tables are created with the CLI, as in
+authnz-rs `docs/app-attest-gate-deployment.md`; nothing in `devsecops`
+provisions them. Create them with deletion protection on.
+
+```sh
+aws dynamodb create-table \
+    --region us-east-1 \
+    --table-name prod-moderation-reports \
+    --attribute-definitions \
+        AttributeName=report_id,AttributeType=S \
+        AttributeName=status,AttributeType=S \
+        AttributeName=received_at,AttributeType=N \
+    --key-schema AttributeName=report_id,KeyType=HASH \
+    --global-secondary-indexes \
+        'IndexName=status-received_at-index,KeySchema=[{AttributeName=status,KeyType=HASH},{AttributeName=received_at,KeyType=RANGE}],Projection={ProjectionType=ALL}' \
+    --billing-mode PAY_PER_REQUEST \
+    --sse-specification Enabled=true \
+    --deletion-protection-enabled
+aws dynamodb wait table-exists --region us-east-1 --table-name prod-moderation-reports
+
+# Retention.
+aws dynamodb update-time-to-live --region us-east-1 \
+    --table-name prod-moderation-reports \
+    --time-to-live-specification Enabled=true,AttributeName=expires_at
+
+# Point-in-time recovery is off by default. These records are the evidence of
+# timely responses, so turn it on.
+aws dynamodb update-continuous-backups --region us-east-1 \
+    --table-name prod-moderation-reports \
+    --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true
+
+aws dynamodb create-table \
+    --region us-east-1 \
+    --table-name prod-moderation-suspensions \
+    --attribute-definitions AttributeName=subject,AttributeType=S \
+    --key-schema AttributeName=subject,KeyType=HASH \
+    --billing-mode PAY_PER_REQUEST \
+    --sse-specification Enabled=true \
+    --deletion-protection-enabled
+aws dynamodb wait table-exists --region us-east-1 --table-name prod-moderation-suspensions
+aws dynamodb update-continuous-backups --region us-east-1 \
+    --table-name prod-moderation-suspensions \
+    --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true
+```
+
+### Development: DynamoDB Local
+
+For development, the tables can run in a DynamoDB Local container instead of AWS. arks then needs no AWS credentials for moderation. `MODERATION_DYNAMODB_ENDPOINT` points only the moderation client at the container, with fixed placeholder credentials, so the process's AWS credentials, used by C2PA KMS signing, are not affected.
 
 ```sh
 docker volume create arks-dynamodb-data
@@ -232,49 +281,8 @@ ddb dynamodb create-table --table-name prod-moderation-suspensions \
 What DynamoDB Local does not give you:
 
 - **Backups.** There is no point-in-time recovery. The data is one SQLite file in the `arks-dynamodb-data` volume. Back it up, for example nightly with `docker run --rm -v arks-dynamodb-data:/d -v "$PWD":/b alpine tar czf /b/arks-dynamodb-$(date +%F).tgz -C /d .`. These records are the evidence of timely responses.
-- **Availability while Docker is down.** The container restarts with Docker, so Docker Desktop must start at login. While it is down, intake returns 503.
-- **A service AWS supports for production use.** AWS supports DynamoDB Local for development only. To move to AWS later, use the next section and unset `MODERATION_DYNAMODB_ENDPOINT`.
-
-### Create the table (AWS)
-
-Production tables are created with the CLI, as in authnz-rs
-`docs/app-attest-gate-deployment.md`; nothing in `devsecops` provisions this
-one.
-
-```sh
-aws dynamodb create-table \
-    --region us-east-1 \
-    --table-name prod-moderation-reports \
-    --attribute-definitions \
-        AttributeName=report_id,AttributeType=S \
-        AttributeName=status,AttributeType=S \
-        AttributeName=received_at,AttributeType=N \
-    --key-schema AttributeName=report_id,KeyType=HASH \
-    --global-secondary-indexes \
-        'IndexName=status-received_at-index,KeySchema=[{AttributeName=status,KeyType=HASH},{AttributeName=received_at,KeyType=RANGE}],Projection={ProjectionType=ALL}' \
-    --billing-mode PAY_PER_REQUEST \
-    --sse-specification Enabled=true
-aws dynamodb wait table-exists --region us-east-1 --table-name prod-moderation-reports
-
-# Retention.
-aws dynamodb update-time-to-live --region us-east-1 \
-    --table-name prod-moderation-reports \
-    --time-to-live-specification Enabled=true,AttributeName=expires_at
-
-# Point-in-time recovery is off by default. These records are the evidence of
-# timely responses, so turn it on.
-aws dynamodb update-continuous-backups --region us-east-1 \
-    --table-name prod-moderation-reports \
-    --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true
-
-aws dynamodb create-table \
-    --region us-east-1 \
-    --table-name prod-moderation-suspensions \
-    --attribute-definitions AttributeName=subject,AttributeType=S \
-    --key-schema AttributeName=subject,KeyType=HASH \
-    --billing-mode PAY_PER_REQUEST \
-    --sse-specification Enabled=true
-```
+- **Availability while Docker is down.** The container restarts with Docker. While Docker is down, intake returns 503.
+- **A service AWS supports for production use.** AWS supports DynamoDB Local for development only, which is why production uses AWS.
 
 ### Credentials
 
@@ -300,10 +308,11 @@ suspensions table:
 }
 ```
 
-arks uses the default AWS credential chain, as the C2PA KMS signer does. It runs
-under `sudo start.sh`, so check which credentials that chain finds there
-(`sudo sh -c 'echo $HOME'`), and prefer a dedicated IAM user's keys exported in
-`production/start.sh` over SSO credentials, which expire.
+Production attaches this as the inline policy `arks-moderation-dynamodb` on the
+`arks-prod` IAM user. arks uses the default AWS credential chain, as the C2PA KMS
+signer does: `production/start.sh` exports `AWS_PROFILE=arks-prod`,
+`AWS_SHARED_CREDENTIALS_FILE` and `AWS_REGION=us-east-1`, which also works under
+`sudo`. Prefer that IAM user's keys over SSO credentials, which expire.
 
 ## Configuration
 
@@ -322,7 +331,7 @@ MODERATION_RATE_LIMIT_HOURLY=10                   # 0 disables
 MODERATION_RATE_LIMIT_DAILY=50                    # 0 disables
 MODERATION_NATS_PREFIX=moderation
 AWS_REGION=us-east-1                              # for DynamoDB, if not already set
-MODERATION_DYNAMODB_ENDPOINT=http://127.0.0.1:8000 # optional: DynamoDB Local instead of AWS
+MODERATION_DYNAMODB_ENDPOINT=http://127.0.0.1:8000 # development only: DynamoDB Local instead of AWS; unset in production
 ```
 
 ## Privacy
