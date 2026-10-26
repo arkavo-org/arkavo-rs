@@ -30,6 +30,15 @@ impl Aud {
     }
 }
 
+/// Service client IDs from a comma-separated list: trimmed, empty entries dropped.
+pub fn parse_client_ids(raw: &str) -> std::collections::HashSet<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// The client ID of a service account's `client_credentials` token: `sub`
 /// `client:<id>`, role `service-account`, and `<id>` in `aud`. `None` for any
 /// other kind of token. Shared by every service-credential check.

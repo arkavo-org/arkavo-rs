@@ -133,9 +133,10 @@ Nothing is deleted. A lift is recorded on the suspension (who, when, why), and
 a later suspension of the same account keeps the lifted ones as its history
 (the last 20).
 
-The key is the account's token `sub` with any `arkavo:` prefix removed and a
-UUID in lowercase hyphenated form, so `arkavo:<UUID>` and `<uuid>` name the
-same account. A report's creator is the catalog subject, which is that same
+The key is the account's token `sub` with any `arkavo:` prefix removed, and a
+hyphenated UUID lowercased, so `arkavo:<UUID>` and `<uuid>` name the same
+account. Other UUID spellings (braced, `urn:uuid:`, no hyphens) are kept as
+they are and name no account a token carries. A report's creator is the catalog subject, which is that same
 `sub`. The action events carry this key as `creatorSubject` too.
 
 ### Read: `GET /moderation/v1/suspensions/{subject}`
@@ -180,7 +181,11 @@ deleted. The response is `200 {"subject","suspended":false,"lifted"}`, where
 `lifted` is false if nothing was suspended. It is idempotent; a concurrent
 change returns 409. The `moderation.actions.lift` event is published before the
 lift is stored: if it can't be delivered, the response is 503 and the
-suspension is unchanged, so a retry sends it again.
+suspension is unchanged, so a retry sends it again. It is published even when
+no suspension is stored, so an enforcer that acted on a suspend event whose
+store write then failed can still be told to lift. The stored lift applies only
+to the suspension version read before the event went out; if another moderator
+changed it in between, the response is 409 and a retry announces again.
 
 ```sh
 curl -s -X DELETE -H "Authorization: Bearer $CWT" -H 'content-type: application/json' \
@@ -193,12 +198,14 @@ curl -s -X DELETE -H "Authorization: Bearer $CWT" -H 'content-type: application/
 | Subject | When | Body |
 |---|---|---|
 | `moderation.reports.received` | A new report is stored | `type`, `id`, `reasons`, `creatorSubject`, `contentId`, `receivedAt` |
-| `moderation.actions.takedown` | A report is actioned with `takedown` | `type`, `action`, `reportId`, `creatorSubject`, `account`, `contentId`, `moderator`, `at` |
+| `moderation.actions.takedown` | A report is actioned with `takedown` | `type`, `action`, `reportId`, `creatorSubject`, `account`, `contentId`, `moderator`, `reason`, `at` |
 | `moderation.actions.suspend` | A report is actioned with `suspend` | same |
-| `moderation.actions.lift` | A moderator lifts a suspension | `type`, `action`, `creatorSubject`, `account`, `moderator`, `at` |
+| `moderation.actions.lift` | A moderator lifts a suspension | `type`, `action`, `creatorSubject`, `account`, `reportId` (the lifted suspension's, if one was stored), `moderator`, `reason`, `at` |
 
-`creatorSubject` is the subject as reported. `account` is the account key (see
-[Suspensions](#suspensions)): pair a suspend with its lift on `account`.
+`creatorSubject` is the subject as reported (for a lift, as given in the path).
+`account` is the account key (see [Suspensions](#suspensions)): pair a suspend
+with its lift on `account`. `reason` is the moderator's note: a suspend's or a
+lift's reason, which #93 sends on to identity's publishing-suspension API.
 
 `MODERATION_NATS_PREFIX` changes the `moderation` prefix. Each publish is
 flushed to the NATS server within 2 seconds.

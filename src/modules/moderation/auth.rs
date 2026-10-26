@@ -92,15 +92,7 @@ impl SessionVerifier {
     }
 }
 
-/// The non-empty, trimmed entries of a comma-separated list.
-fn list(raw: &str) -> impl Iterator<Item = &str> {
-    raw.split(',').map(str::trim).filter(|s| !s.is_empty())
-}
-
-/// Client IDs from a comma-separated list.
-pub fn parse_client_ids(raw: &str) -> HashSet<String> {
-    list(raw).map(str::to_string).collect()
-}
+pub use crate::modules::authzen::cwt_subject::parse_client_ids;
 
 /// The account ID of a person's passkey session, or `None` for any other
 /// kind of token. The `arkavo:` prefix is dropped so both subject forms
@@ -133,10 +125,10 @@ pub fn person_subject(claims: &DecodedClaims) -> Option<String> {
 /// Moderator account IDs, from a comma-separated list. Entries may carry the
 /// `arkavo:` prefix.
 pub fn parse_moderators(raw: &str) -> HashSet<String> {
-    list(raw)
-        .map(subject_id_bind)
+    parse_client_ids(raw)
+        .iter()
+        .map(|s| subject_id_bind(s).to_string())
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
         .collect()
 }
 

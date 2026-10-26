@@ -73,7 +73,7 @@ pub fn settings_from(get: impl Fn(&str) -> Option<String>) -> Result<Option<Sett
             .map(|v| auth::parse_client_ids(&v))
             .unwrap_or_default(),
         suspension_reader_audience: get("MEDIA_PLATFORM_AUDIENCE")
-            .unwrap_or_else(|| "https://platform.arkavo.net".into()),
+            .unwrap_or_else(|| crate::modules::license::config::DEFAULT_PLATFORM_AUDIENCE.into()),
         status_index: get("MODERATION_STATUS_INDEX").unwrap_or_else(|| DEFAULT_STATUS_INDEX.into()),
         issuer,
         cose_keys_url,

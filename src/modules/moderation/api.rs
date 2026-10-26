@@ -39,7 +39,7 @@ const DEFAULT_PAGE: usize = 50;
 const MAX_PAGE: usize = 100;
 const NOTIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 /// Longest suspension reason: identity's publishing-suspension API refuses a
-/// longer `reason`, and the reason is sent to it unchanged (#93).
+/// longer `reason`, and #93's identity call sends the stored reason unchanged.
 const MAX_SUSPENSION_REASON_LEN: usize = 1_024;
 /// A limiter slower than this is treated as unavailable, so the report goes through.
 const LIMITER_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
@@ -285,6 +285,8 @@ impl ModerationState {
                     "account": r.creator_subject.as_deref().and_then(account_key),
                     "contentId": r.content_id,
                     "moderator": r.moderator_subject,
+                    // The moderator's note, which is a suspend's reason
+                    "reason": r.resolution_note,
                     "at": r.resolved_at.map(rfc3339),
                 }),
             )
@@ -466,7 +468,8 @@ pub async fn update_report(
     }
     // A suspend carries its own reason in this request; a note left by an
     // earlier response doesn't count.
-    let suspending = update.actions.contains(&Action::Suspend);
+    // Only an actioned response takes actions; `apply` reports any other misuse.
+    let suspending = update.status == Status::Actioned && update.actions.contains(&Action::Suspend);
     let reason = update
         .note
         .as_deref()
@@ -571,11 +574,14 @@ fn account_key(subject: &str) -> Option<String> {
     if key.is_empty() {
         return None;
     }
-    Some(
-        Uuid::parse_str(key)
-            .map(|u| u.to_string())
-            .unwrap_or_else(|_| key.to_string()),
-    )
+    // Only the hyphenated form folds case; braced, URN and simple spellings stay
+    // as they are, distinct from the account they resemble.
+    let hyphenated = key.len() == 36 && Uuid::parse_str(key).is_ok();
+    Some(if hyphenated {
+        key.to_ascii_lowercase()
+    } else {
+        key.to_string()
+    })
 }
 
 fn suspension_fail(e: StoreError) -> Response {
@@ -668,23 +674,23 @@ pub async fn lift_suspension(
         moderator: moderator.clone(),
         reason,
     };
-    // Only an active suspension can be lifted; its lift event goes out before
-    // the lift is stored, so a failed delivery changes nothing and a retry
-    // sends it again.
-    match state.suspensions.get(&key).await {
-        Ok(Some(s)) if s.is_active() => {}
-        Ok(_) => {
-            return Json(json!({ "subject": subject, "suspended": false, "lifted": false }))
-                .into_response()
-        }
+    // The lift event always goes out first, even with nothing stored to lift, so
+    // a suspension an enforcer holds without an arks record (a suspend whose
+    // store write failed) can still be undone. The stored lift then applies only
+    // to the suspension version read here: if another moderator changed it in
+    // between, 409, and a retry announces again.
+    let current = match state.suspensions.history(&key).await {
+        Ok(h) => h.filter(|(h, _)| h.current.is_active()),
         Err(e) => return suspension_fail(e),
-    }
+    };
     let event = json!({
         "type": "suspension.lift",
         "action": "lift",
-        "creatorSubject": key,
+        "creatorSubject": subject,
         "account": key,
+        "reportId": current.as_ref().map(|(h, _)| h.current.report_id.clone()),
         "moderator": moderator,
+        "reason": lift.reason,
         "at": rfc3339(lift.at),
     });
     if let Err(e) = state.try_publish("actions.lift", event).await {
@@ -694,14 +700,15 @@ pub async fn lift_suspension(
             "lift not delivered; the suspension is unchanged, try again",
         );
     }
-    let lifted = match state.suspensions.lift(&key, &lift).await {
-        Ok(l) => l,
-        Err(e) => return suspension_fail(e),
+    let Some((history, version)) = current else {
+        return Json(json!({ "subject": subject, "suspended": false, "lifted": false }))
+            .into_response();
     };
-    if lifted {
-        info!("moderation suspension lifted for {key} by {moderator}");
+    if let Err(e) = state.suspensions.lift(history, version, &lift).await {
+        return suspension_fail(e);
     }
-    Json(json!({ "subject": subject, "suspended": false, "lifted": lifted })).into_response()
+    info!("moderation suspension lifted for {key} by {moderator}");
+    Json(json!({ "subject": subject, "suspended": false, "lifted": true })).into_response()
 }
 
 #[cfg(test)]
@@ -1970,5 +1977,86 @@ mod tests {
         let (_, body) = read_suspension(&h, "creator-a").await;
         assert_eq!(body["suspended"], true);
         assert_eq!(body["reportId"], REPORT_ID.to_lowercase());
+    }
+    #[tokio::test]
+    async fn a_lift_with_nothing_stored_still_announces_it() {
+        let h = harness(20);
+        let (status, _, body) = call(
+            &h.app,
+            "DELETE",
+            "/moderation/v1/suspensions/arkavo:creator-a",
+            Some(&token(MODERATOR)),
+            Some(json!({"reason": "suspend event without a record"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["lifted"], false);
+        let event = h.notes.0.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(event.0, "moderation.actions.lift");
+        assert_eq!(event.1["creatorSubject"], "arkavo:creator-a");
+        assert_eq!(event.1["account"], "creator-a");
+        assert_eq!(event.1["reason"], "suspend event without a record");
+    }
+
+    #[tokio::test]
+    async fn a_lift_applies_only_to_the_version_it_read() {
+        let h = harness(20);
+        suspend_creator(&h, REPORT_ID).await;
+        let (history, version) = h.suspensions.history("creator-a").await.unwrap().unwrap();
+        // Another report's suspend lands in between (the account stays suspended).
+        let second = "7A9619FF-8B86-D011-B42D-00C04FC964FF";
+        assert_eq!(suspend_creator(&h, second).await, StatusCode::OK);
+        let lift = Lift {
+            at: 1,
+            moderator: MODERATOR.into(),
+            reason: "late".into(),
+        };
+        assert_eq!(
+            h.suspensions.lift(history, version, &lift).await,
+            Err(StoreError::StatusChanged)
+        );
+        let (_, body) = read_suspension(&h, "creator-a").await;
+        assert_eq!(body["suspended"], true);
+    }
+
+    #[tokio::test]
+    async fn the_suspend_event_carries_its_reason() {
+        let h = harness(20);
+        suspend_creator(&h, REPORT_ID).await;
+        let event = h.notes.0.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(event.0, "moderation.actions.suspend");
+        assert_eq!(event.1["reason"], "harassment");
+    }
+
+    #[test]
+    fn only_hyphenated_uuids_fold_case() {
+        let uuid = "5f0c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b";
+        assert_eq!(
+            account_key(&format!("arkavo:{}", uuid.to_uppercase())).as_deref(),
+            Some(uuid)
+        );
+        for other in [
+            format!("urn:uuid:{uuid}"),
+            format!("{{{uuid}}}"),
+            uuid.replace('-', ""),
+        ] {
+            assert_ne!(account_key(&other).as_deref(), Some(uuid), "{other}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_suspend_outside_actioned_gets_the_status_error() {
+        let h = harness(20);
+        submit(&h, VIEWER, REPORT_ID).await;
+        let (status, _, body) = call(
+            &h.app,
+            "PATCH",
+            &format!("/moderation/v1/reports/{}", REPORT_ID.to_lowercase()),
+            Some(&token(MODERATOR)),
+            Some(json!({"status": "reviewing", "actions": ["suspend"]})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "actions are only allowed with actioned");
     }
 }

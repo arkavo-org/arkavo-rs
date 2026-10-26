@@ -1,7 +1,7 @@
 //! AuthZEN HTTPS JSON facade: PEP service-CWT authn + OpenTDF v2 client.
 
 use crate::modules::authzen::cose_keys::CoseKeyCache;
-use crate::modules::authzen::cwt_subject::{service_client_id, DecodedClaims};
+use crate::modules::authzen::cwt_subject::{parse_client_ids, service_client_id, DecodedClaims};
 use crate::modules::authzen::cwt_verify::{
     header_kid, verify_header_token, VerifyError, VerifyOpts,
 };
@@ -69,11 +69,7 @@ impl FacadeState {
         let keys_url = std::env::var("AUTHZEN_COSE_KEYS_URL")
             .unwrap_or_else(|_| format!("{}/.well-known/cose-keys", issuer.trim_end_matches('/')));
         let pep_client_ids = std::env::var("AUTHZEN_PEP_CLIENT_IDS").ok().and_then(|s| {
-            let set: HashSet<String> = s
-                .split(',')
-                .map(|x| x.trim().to_string())
-                .filter(|x| !x.is_empty())
-                .collect();
+            let set = parse_client_ids(&s);
             if set.is_empty() {
                 None
             } else {
