@@ -257,7 +257,7 @@ pub struct C2paMetadata {
 }
 
 /// C2PA signing request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct C2paSignRequest {
     /// SHA-256 hash of the content (hex-encoded)
     pub content_hash: String,
@@ -468,11 +468,40 @@ pub async fn sign_manifest(
         person.sub, req.content_hash, exclusion.start, exclusion.end, req.container_format
     );
 
+    // Measure the manifest box first, without a KMS signature or a timestamp: a
+    // length mismatch is answered without spending a (metered) timestamp, so a
+    // file costs one timestamp, not two (arkavo-rs#119).
+    let sizing_state = state.clone();
+    let sizing_req = req.clone();
+    let sized = tokio::task::spawn_blocking(move || {
+        build_c2pa_manifest(&sizing_state.config, &sizing_req, SignPass::Size)
+            .and_then(|(manifest, _)| manifest_box_len(&manifest))
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Sizing task failed: {}", e)));
+    match sized {
+        Ok(box_len) if exclusion.end - exclusion.start != box_len => {
+            info!(
+                "C2PA manifest not signed: exclusion length {} != manifest box {}",
+                exclusion.end - exclusion.start,
+                box_len
+            );
+            return sign_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "exclusion range length must equal the C2PA manifest box length",
+                serde_json::json!({ "required_exclusion_length": box_len }),
+            );
+        }
+        Ok(_) => {}
+        Err(e) => return signing_failed_response(&e),
+    }
+
     // Signing is blocking: with a TSA it waits on an HTTP round trip, and c2pa's HTTP
     // client has no timeout of its own, so bound the request here.
     let signing_state = state.clone();
-    let signing =
-        tokio::task::spawn_blocking(move || build_c2pa_manifest(&signing_state.config, &req));
+    let signing = tokio::task::spawn_blocking(move || {
+        build_c2pa_manifest(&signing_state.config, &req, SignPass::Sign)
+    });
     let signed = match tokio::time::timeout(SIGNING_TIMEOUT, signing).await {
         Ok(joined) => joined.unwrap_or_else(|e| Err(format!("Signing task failed: {}", e))),
         Err(_) => {
@@ -488,14 +517,11 @@ pub async fn sign_manifest(
         }
     };
     // Only the manifest box itself may be unhashed: the excluded range must be exactly
-    // as long as the box that will carry this manifest. Otherwise discard it and tell
-    // the client the length to request.
+    // as long as the box that will carry this manifest. The sizing pass matched; check
+    // the signed manifest too, and discard it if it ever differs.
     let signed = signed.and_then(|(manifest, manifest_hash)| {
-        let jumbf_len =
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest)
-                .map(|bytes| bytes.len() as u64)
-                .map_err(|e| format!("Signed manifest is not base64: {}", e))?;
-        Ok((manifest, manifest_hash, MANIFEST_BOX_OVERHEAD + jumbf_len))
+        let box_len = manifest_box_len(&manifest)?;
+        Ok((manifest, manifest_hash, box_len))
     });
     match signed {
         Ok((_, _, box_len)) if exclusion.end - exclusion.start != box_len => {
@@ -604,6 +630,56 @@ pub async fn validate_manifest(
 
 // ==================== C2PA Implementation ====================
 
+/// Which pass of a sign request builds the manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SignPass {
+    /// Measure the manifest: no KMS signature, no timestamp (arkavo-rs#119).
+    Size,
+    /// Sign it for real.
+    Sign,
+}
+
+/// Stands in for the real signer while the manifest is measured. It reports the
+/// same certificates and reserved signature size, and c2pa pads every signature to
+/// exactly that reserve, so the manifest comes out the same length as the signed
+/// one. It signs with zeros and asks for no timestamp.
+struct SizingSigner(c2pa::BoxedSigner);
+
+impl c2pa::Signer for SizingSigner {
+    fn sign(&self, _data: &[u8]) -> c2pa::Result<Vec<u8>> {
+        // An ES256 signature is r || s, 64 bytes
+        Ok(vec![0; 64])
+    }
+
+    fn alg(&self) -> SigningAlg {
+        self.0.alg()
+    }
+
+    fn certs(&self) -> c2pa::Result<Vec<Vec<u8>>> {
+        self.0.certs()
+    }
+
+    fn reserve_size(&self) -> usize {
+        self.0.reserve_size()
+    }
+
+    fn time_authority_url(&self) -> Option<String> {
+        None
+    }
+
+    fn send_timestamp_request(&self, _message: &[u8]) -> Option<c2pa::Result<Vec<u8>>> {
+        None
+    }
+}
+
+/// The length of the box that carries `manifest` (base64 JUMBF): the JUMBF plus
+/// the box header.
+fn manifest_box_len(manifest: &str) -> Result<u64, String> {
+    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, manifest)
+        .map(|bytes| MANIFEST_BOX_OVERHEAD + bytes.len() as u64)
+        .map_err(|e| format!("Signed manifest is not base64: {}", e))
+}
+
 /// Build and sign a C2PA manifest using the hashed-data signing workflow.
 ///
 /// The client computes a content hash with exclusion ranges and sends it to the server.
@@ -612,6 +688,7 @@ pub async fn validate_manifest(
 fn build_c2pa_manifest(
     config: &C2paConfig,
     req: &C2paSignRequest,
+    pass: SignPass,
 ) -> Result<(String, String), String> {
     info!("Loading C2PA signing credentials...");
 
@@ -650,11 +727,13 @@ fn build_c2pa_manifest(
         )?),
     };
 
-    let when = req
-        .metadata
-        .timestamp
-        .clone()
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    // A default time with whole seconds, so its length (and the manifest's) doesn't
+    // depend on the clock's fractional digits between the sizing pass, the signing
+    // pass and the client's retry.
+    let when =
+        req.metadata.timestamp.clone().unwrap_or_else(|| {
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        });
     let source_type = if req.metadata.ai_generated == Some(true) {
         DigitalSourceType::TrainedAlgorithmicMedia
     } else {
@@ -698,7 +777,16 @@ fn build_c2pa_manifest(
     if !req.metadata.title.is_empty() {
         definition["title"] = serde_json::json!(req.metadata.title);
     }
-    let mut builder = Builder::from_context(Context::new().with_signer(signer))
+    let mut context = Context::new();
+    let signer: c2pa::BoxedSigner = match pass {
+        SignPass::Sign => signer,
+        SignPass::Size => {
+            // The stand-in signature doesn't verify, and isn't meant to.
+            context.settings_mut().verify.verify_after_sign = false;
+            Box::new(SizingSigner(signer))
+        }
+    };
+    let mut builder = Builder::from_context(context.with_signer(signer))
         .with_definition(definition.to_string())
         .map_err(|e| format!("Failed to build manifest definition: {}", e))?;
     builder.definition.claim_generator_info =
@@ -1197,8 +1285,8 @@ mod tests {
 
     /// The signed manifest as crJSON, the form the C2PA conformance rubrics evaluate
     fn signed_crjson(req: &C2paSignRequest) -> serde_json::Value {
-        let (manifest_b64, _) =
-            build_c2pa_manifest(&make_test_config(), req).expect("Signing should succeed");
+        let (manifest_b64, _) = build_c2pa_manifest(&make_test_config(), req, SignPass::Sign)
+            .expect("Signing should succeed");
         let bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
@@ -1343,8 +1431,9 @@ mod tests {
     #[test]
     fn test_c2pa_validate_checks_the_signed_exclusion() {
         let config = make_test_config();
-        let (manifest_b64, _) = build_c2pa_manifest(&config, &make_test_request(RUBRIC_HASH))
-            .expect("Signing should succeed");
+        let (manifest_b64, _) =
+            build_c2pa_manifest(&config, &make_test_request(RUBRIC_HASH), SignPass::Sign)
+                .expect("Signing should succeed");
         let bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
@@ -1431,7 +1520,7 @@ mod tests {
 
         // Sign
         let (manifest_b64, manifest_hash) =
-            build_c2pa_manifest(&config, &req).expect("Signing should succeed");
+            build_c2pa_manifest(&config, &req, SignPass::Sign).expect("Signing should succeed");
 
         // Manifest should be non-empty base64
         assert!(!manifest_b64.is_empty(), "Manifest should not be empty");
@@ -1484,7 +1573,8 @@ mod tests {
         let req = make_test_request(hash);
 
         // Sign with one hash
-        let (manifest_b64, _) = build_c2pa_manifest(&config, &req).expect("Signing should succeed");
+        let (manifest_b64, _) =
+            build_c2pa_manifest(&config, &req, SignPass::Sign).expect("Signing should succeed");
 
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
@@ -1510,7 +1600,8 @@ mod tests {
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
         let req = make_test_request(hash);
 
-        let (manifest_b64, _) = build_c2pa_manifest(&config, &req).expect("Signing should succeed");
+        let (manifest_b64, _) =
+            build_c2pa_manifest(&config, &req, SignPass::Sign).expect("Signing should succeed");
 
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
@@ -1537,7 +1628,8 @@ mod tests {
         let mut req = make_test_request(hash);
         req.metadata.ai_generated = Some(true);
 
-        let (manifest_b64, _) = build_c2pa_manifest(&config, &req).expect("Signing should succeed");
+        let (manifest_b64, _) =
+            build_c2pa_manifest(&config, &req, SignPass::Sign).expect("Signing should succeed");
 
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
@@ -1561,7 +1653,8 @@ mod tests {
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
         let req = make_test_request(hash);
 
-        let (manifest_b64, _) = build_c2pa_manifest(&config, &req).expect("Signing should succeed");
+        let (manifest_b64, _) =
+            build_c2pa_manifest(&config, &req, SignPass::Sign).expect("Signing should succeed");
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
@@ -1617,7 +1710,8 @@ mod tests {
         let config = make_test_config();
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
         let (manifest_b64, _) =
-            build_c2pa_manifest(&config, &make_test_request(hash)).expect("Signing should succeed");
+            build_c2pa_manifest(&config, &make_test_request(hash), SignPass::Sign)
+                .expect("Signing should succeed");
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
@@ -1640,7 +1734,8 @@ mod tests {
         let theirs = make_test_config();
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
         let (manifest_b64, _) =
-            build_c2pa_manifest(&theirs, &make_test_request(hash)).expect("Signing should succeed");
+            build_c2pa_manifest(&theirs, &make_test_request(hash), SignPass::Sign)
+                .expect("Signing should succeed");
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
@@ -1706,10 +1801,58 @@ mod tests {
         let mut config = make_test_config();
         config.tsa_url = Some("http://127.0.0.1:9/".to_string());
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
-        let result = build_c2pa_manifest(&config, &make_test_request(hash));
+        let result = build_c2pa_manifest(&config, &make_test_request(hash), SignPass::Sign);
         assert!(
             result.is_err(),
             "Signing must fail when the TSA is unreachable"
+        );
+    }
+
+    /// The sizing pass measures the manifest the signing pass produces, without a
+    /// signature or a timestamp (arkavo-rs#119). With a TSA configured it reserves the
+    /// timestamp's room without contacting the TSA, so even an unreachable one sizes.
+    #[test]
+    fn test_c2pa_sizing_pass_matches_the_signed_length() {
+        let config = make_test_config();
+        let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
+        let len = |config: &C2paConfig, req: &C2paSignRequest, pass| {
+            let (b64, _) = build_c2pa_manifest(config, req, pass).expect("build should succeed");
+            manifest_box_len(&b64).unwrap()
+        };
+        let mut req = make_test_request(hash);
+        assert_eq!(
+            len(&config, &req, SignPass::Size),
+            len(&config, &req, SignPass::Sign)
+        );
+        // The default `when` has a fixed length, so passes a moment apart still agree.
+        req.metadata.timestamp = None;
+        assert_eq!(
+            len(&config, &req, SignPass::Size),
+            len(&config, &req, SignPass::Sign)
+        );
+
+        let mut with_tsa = make_test_config();
+        with_tsa.tsa_url = Some("http://127.0.0.1:9/".to_string());
+        assert!(len(&with_tsa, &req, SignPass::Size) > len(&config, &req, SignPass::Size));
+    }
+
+    /// With a live TSA, the sizing pass's length equals the timestamped manifest's.
+    /// Runs only with C2PA_TSA_TEST_URL set; it spends one timestamp.
+    #[test]
+    fn test_c2pa_sizing_pass_matches_a_timestamped_length() {
+        let Ok(tsa_url) = std::env::var("C2PA_TSA_TEST_URL") else {
+            eprintln!("SKIPPED: C2PA_TSA_TEST_URL not set");
+            return;
+        };
+        let mut config = make_test_config();
+        config.tsa_url = Some(tsa_url);
+        let req =
+            make_test_request("a1b2c3d4e5f67890123456789012345678901234567890123456789012345678");
+        let (sized, _) = build_c2pa_manifest(&config, &req, SignPass::Size).unwrap();
+        let (signed, _) = build_c2pa_manifest(&config, &req, SignPass::Sign).unwrap();
+        assert_eq!(
+            manifest_box_len(&sized).unwrap(),
+            manifest_box_len(&signed).unwrap()
         );
     }
 
@@ -1719,7 +1862,8 @@ mod tests {
         let config = make_test_config();
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
         let (manifest_b64, _) =
-            build_c2pa_manifest(&config, &make_test_request(hash)).expect("Signing should succeed");
+            build_c2pa_manifest(&config, &make_test_request(hash), SignPass::Sign)
+                .expect("Signing should succeed");
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
@@ -1753,7 +1897,7 @@ mod tests {
         let mut config = config_from_certs(generate_test_certs_until(Some(expiry)));
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
         let sign = |config: &C2paConfig| {
-            let (b64, _) = build_c2pa_manifest(config, &make_test_request(hash))
+            let (b64, _) = build_c2pa_manifest(config, &make_test_request(hash), SignPass::Sign)
                 .expect("Signing should succeed");
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64).unwrap()
         };
@@ -1807,7 +1951,8 @@ mod tests {
 
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
         let (manifest_b64, _) =
-            build_c2pa_manifest(&config, &make_test_request(hash)).expect("Signing should succeed");
+            build_c2pa_manifest(&config, &make_test_request(hash), SignPass::Sign)
+                .expect("Signing should succeed");
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                 .unwrap();
@@ -1872,8 +2017,9 @@ mod tests {
         let config = make_test_config();
         let hash = "a1b2c3d4e5f67890123456789012345678901234567890123456789012345678";
         let instance_id = || {
-            let (manifest_b64, _) = build_c2pa_manifest(&config, &make_test_request(hash))
-                .expect("Signing should succeed");
+            let (manifest_b64, _) =
+                build_c2pa_manifest(&config, &make_test_request(hash), SignPass::Sign)
+                    .expect("Signing should succeed");
             let bytes =
                 base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
                     .unwrap();
@@ -1924,7 +2070,8 @@ mod tests {
         let req = make_test_request(hash);
 
         // Sign
-        let (manifest_b64, _) = build_c2pa_manifest(&config, &req).expect("Signing should succeed");
+        let (manifest_b64, _) =
+            build_c2pa_manifest(&config, &req, SignPass::Sign).expect("Signing should succeed");
 
         let manifest_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &manifest_b64)
@@ -2057,14 +2204,18 @@ mod sign_endpoint_tests {
     }
 
     fn state_with(limit: usize, require_entitlement: bool) -> Arc<C2paSigningState> {
+        let mut config = tests::make_test_config();
+        config.require_entitlement = require_entitlement;
+        state_from(limit, config)
+    }
+
+    fn state_from(limit: usize, config: C2paConfig) -> Arc<C2paSigningState> {
         let (_, vk) = keypair();
         let verifier = PersonTokenVerifier::new(
             CoseKeyCache::with_static_keys(vec![(KID.to_vec(), vk)]),
             ISS.into(),
             PLATFORM.into(),
         );
-        let mut config = tests::make_test_config();
-        config.require_entitlement = require_entitlement;
         let mut state = C2paSigningState::new(config, Arc::new(verifier));
         state.sign_limit_per_hour = limit;
         Arc::new(state)
@@ -2189,6 +2340,28 @@ mod sign_endpoint_tests {
             validate_c2pa_manifest(&bytes, HASH, &state.config.trust_anchors, "", None).unwrap();
         assert!(result.valid, "{:?}", result.errors);
         assert_eq!(result.creator.as_deref(), Some(SUB));
+    }
+
+    /// A length mismatch is answered without asking the TSA for a timestamp, so a file
+    /// costs one timestamp however many rounds the length takes to settle
+    /// (arkavo-rs#119). With an unreachable TSA every mismatch still gets its 422; only
+    /// the request at the settled length asks the TSA, and fails.
+    #[tokio::test]
+    async fn test_sign_length_mismatch_spends_no_timestamp() {
+        let mut config = tests::make_test_config();
+        config.tsa_url = Some("http://127.0.0.1:9/".to_string());
+        let state = state_from(10, config);
+        let t = token(SUB);
+        let mut len = 1;
+        for _ in 0..5 {
+            let (status, json, _) = sign(&state, Some(&t), body(uuid_range(7_375, len))).await;
+            if status == StatusCode::INTERNAL_SERVER_ERROR {
+                return;
+            }
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{json}");
+            len = json["required_exclusion_length"].as_u64().unwrap();
+        }
+        panic!("the length should settle and only then reach the TSA");
     }
 
     #[tokio::test]
