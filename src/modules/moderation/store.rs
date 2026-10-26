@@ -1,4 +1,5 @@
-//! Report storage. One item per report, keyed by the report ID.
+//! Report storage, one item per report keyed by the report ID, and the
+//! per-account publishing suspensions (arkavo-rs#93), one item per account.
 
 use super::report::{ReportRecord, Status};
 use async_trait::async_trait;
@@ -40,6 +41,102 @@ pub trait ReportStore: Send + Sync {
         limit: usize,
         after: Option<Cursor>,
     ) -> Result<(Vec<ReportRecord>, Option<Cursor>), StoreError>;
+}
+
+/// An account's publishing suspension, written when a report is actioned with
+/// `suspend` and deleted when a moderator lifts it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Suspension {
+    /// The account's token `sub`, without the `arkavo:` prefix.
+    pub subject: String,
+    pub since: i64,
+    pub report_id: String,
+    pub moderator: String,
+}
+
+#[async_trait]
+pub trait SuspensionStore: Send + Sync {
+    /// Record a suspension. An account already suspended keeps its first
+    /// record, so `since` and `reportId` name the original action.
+    async fn suspend(&self, suspension: &Suspension) -> Result<(), StoreError>;
+    async fn get(&self, subject: &str) -> Result<Option<Suspension>, StoreError>;
+    /// Remove the suspension; `false` when there was none.
+    async fn lift(&self, subject: &str) -> Result<bool, StoreError>;
+}
+
+/// DynamoDB table: hash key `subject`; the record is the JSON in `record`.
+pub struct DynamoSuspensionStore {
+    client: aws_sdk_dynamodb::Client,
+    table: String,
+}
+
+impl DynamoSuspensionStore {
+    pub fn new(client: aws_sdk_dynamodb::Client, table: String) -> Self {
+        Self { client, table }
+    }
+}
+
+#[async_trait]
+impl SuspensionStore for DynamoSuspensionStore {
+    async fn suspend(&self, suspension: &Suspension) -> Result<(), StoreError> {
+        let json = serde_json::to_string(suspension)
+            .map_err(|e| StoreError::Unavailable(format!("encode: {e}")))?;
+        let put = self
+            .client
+            .put_item()
+            .table_name(&self.table)
+            .item("subject", AttributeValue::S(suspension.subject.clone()))
+            .item("record", AttributeValue::S(json))
+            .condition_expression("attribute_not_exists(subject)")
+            .send()
+            .await;
+        match put {
+            Ok(_) => Ok(()),
+            Err(e)
+                if e.as_service_error()
+                    .is_some_and(|s| s.is_conditional_check_failed_exception()) =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(unavailable(aws_sdk_dynamodb::error::DisplayErrorContext(e))),
+        }
+    }
+
+    async fn get(&self, subject: &str) -> Result<Option<Suspension>, StoreError> {
+        let out = self
+            .client
+            .get_item()
+            .table_name(&self.table)
+            .key("subject", AttributeValue::S(subject.to_string()))
+            .consistent_read(true)
+            .send()
+            .await
+            .map_err(|e| unavailable(aws_sdk_dynamodb::error::DisplayErrorContext(e)))?;
+        out.item()
+            .map(|item| {
+                let json = item
+                    .get("record")
+                    .and_then(|v| v.as_s().ok())
+                    .ok_or_else(|| StoreError::Unavailable("item has no record".into()))?;
+                serde_json::from_str(json)
+                    .map_err(|e| StoreError::Unavailable(format!("decode: {e}")))
+            })
+            .transpose()
+    }
+
+    async fn lift(&self, subject: &str) -> Result<bool, StoreError> {
+        let out = self
+            .client
+            .delete_item()
+            .table_name(&self.table)
+            .key("subject", AttributeValue::S(subject.to_string()))
+            .return_values(aws_sdk_dynamodb::types::ReturnValue::AllOld)
+            .send()
+            .await
+            .map_err(|e| unavailable(aws_sdk_dynamodb::error::DisplayErrorContext(e)))?;
+        Ok(out.attributes().is_some_and(|a| !a.is_empty()))
+    }
 }
 
 /// DynamoDB table: hash key `report_id`; GSI (`status`, `received_at`);
@@ -215,6 +312,45 @@ impl ReportStore for DynamoReportStore {
 pub mod memory {
     use super::*;
     use std::sync::Mutex;
+
+    #[derive(Default)]
+    pub struct MemorySuspensionStore {
+        pub records: Mutex<HashMap<String, Suspension>>,
+        pub fail: Mutex<bool>,
+    }
+
+    impl MemorySuspensionStore {
+        fn check(&self) -> Result<(), StoreError> {
+            if *self.fail.lock().unwrap() {
+                Err(StoreError::Unavailable("down".into()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[async_trait]
+    impl SuspensionStore for MemorySuspensionStore {
+        async fn suspend(&self, suspension: &Suspension) -> Result<(), StoreError> {
+            self.check()?;
+            self.records
+                .lock()
+                .unwrap()
+                .entry(suspension.subject.clone())
+                .or_insert_with(|| suspension.clone());
+            Ok(())
+        }
+
+        async fn get(&self, subject: &str) -> Result<Option<Suspension>, StoreError> {
+            self.check()?;
+            Ok(self.records.lock().unwrap().get(subject).cloned())
+        }
+
+        async fn lift(&self, subject: &str) -> Result<bool, StoreError> {
+            self.check()?;
+            Ok(self.records.lock().unwrap().remove(subject).is_some())
+        }
+    }
 
     #[derive(Default)]
     pub struct MemoryReportStore {
@@ -437,6 +573,52 @@ mod dynamodb_local {
         );
         let (dismissed, _) = store.list(Status::Dismissed, 10, None).await.unwrap();
         assert_eq!(dismissed.len(), 1);
+
+        client
+            .delete_table()
+            .table_name(&table)
+            .send()
+            .await
+            .unwrap();
+    }
+    #[tokio::test]
+    #[ignore]
+    async fn dynamodb_local_suspension_round_trip() {
+        let endpoint = std::env::var("DYNAMODB_ENDPOINT").expect("DYNAMODB_ENDPOINT");
+        let shared = aws_config::load_from_env().await;
+        let conf = aws_sdk_dynamodb::config::Builder::from(&shared)
+            .endpoint_url(endpoint)
+            .build();
+        let client = aws_sdk_dynamodb::Client::from_conf(conf);
+        let table = format!("test-suspensions-{}", uuid::Uuid::new_v4());
+        client
+            .create_table()
+            .table_name(&table)
+            .attribute_definitions(attr("subject", ScalarAttributeType::S))
+            .key_schema(key("subject", KeyType::Hash))
+            .billing_mode(BillingMode::PayPerRequest)
+            .send()
+            .await
+            .expect("create table");
+        let store = DynamoSuspensionStore::new(client.clone(), table.clone());
+
+        let first = Suspension {
+            subject: "creator-a".into(),
+            since: 100,
+            report_id: "r1".into(),
+            moderator: "m1".into(),
+        };
+        assert_eq!(store.get("creator-a").await.unwrap(), None);
+        store.suspend(&first).await.unwrap();
+        // A second suspension keeps the first record.
+        let mut second = first.clone();
+        second.since = 200;
+        second.report_id = "r2".into();
+        store.suspend(&second).await.unwrap();
+        assert_eq!(store.get("creator-a").await.unwrap(), Some(first));
+        assert!(store.lift("creator-a").await.unwrap());
+        assert!(!store.lift("creator-a").await.unwrap());
+        assert_eq!(store.get("creator-a").await.unwrap(), None);
 
         client
             .delete_table()

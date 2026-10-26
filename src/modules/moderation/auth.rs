@@ -1,8 +1,9 @@
 //! Who is calling: a signed-in Arkavo account, from its `identity.arkavo.net`
-//! session CWT (`Authorization: Bearer <base64url CWT>`).
+//! session CWT (`Authorization: Bearer <base64url CWT>`), or a service client
+//! from its `client_credentials` CWT.
 
 use crate::modules::authzen::cose_keys::CoseKeyCache;
-use crate::modules::authzen::cwt_subject::{subject_id_bind, DecodedClaims};
+use crate::modules::authzen::cwt_subject::{subject_id_bind, Aud, DecodedClaims};
 use crate::modules::authzen::cwt_verify::{
     header_kid, verify_header_token, VerifyError, VerifyOpts,
 };
@@ -32,6 +33,32 @@ impl SessionVerifier {
     /// and OIDC access tokens are refused: a report comes from a person who
     /// signed in to the app.
     pub async fn person(&self, headers: &HeaderMap) -> Result<String, AuthError> {
+        let claims = self.verified(headers, Some(&self.audience)).await?;
+        person_subject(&claims).ok_or(AuthError::Unauthenticated)
+    }
+
+    /// The service client behind a `client_credentials` token, if it is one of
+    /// `allowed`. The same rules as the AuthZEN facade's PEP check: `sub`
+    /// `client:<id>`, role `service-account`, and `<id>` in `aud`.
+    pub async fn service_client(
+        &self,
+        headers: &HeaderMap,
+        allowed: &HashSet<String>,
+    ) -> Result<String, AuthError> {
+        let claims = self.verified(headers, None).await?;
+        let id = service_client_id(&claims).ok_or(AuthError::Unauthenticated)?;
+        if allowed.contains(id) {
+            Ok(id.to_string())
+        } else {
+            Err(AuthError::Forbidden)
+        }
+    }
+
+    async fn verified(
+        &self,
+        headers: &HeaderMap,
+        audience: Option<&str>,
+    ) -> Result<DecodedClaims, AuthError> {
         let token = headers
             .get(AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
@@ -48,19 +75,44 @@ impl SessionVerifier {
             Err(VerifyError::KeySet) => return Err(AuthError::KeySet),
             Err(_) => return Err(AuthError::Unauthenticated),
         };
-        let claims = verify_header_token(
+        verify_header_token(
             token,
             &key,
             VerifyOpts {
                 expected_iss: Some(&self.issuer),
-                expected_aud: Some(&self.audience),
+                expected_aud: audience,
                 expected_kid: Some(kid.as_slice()),
                 now: chrono::Utc::now().timestamp(),
             },
         )
-        .map_err(|_| AuthError::Unauthenticated)?;
-        person_subject(&claims).ok_or(AuthError::Unauthenticated)
+        .map_err(|_| AuthError::Unauthenticated)
     }
+}
+
+/// The client ID of a service account's `client_credentials` token, or `None`
+/// for any other kind of token.
+pub fn service_client_id(claims: &DecodedClaims) -> Option<&str> {
+    let id = claims
+        .sub
+        .strip_prefix("client:")
+        .filter(|s| !s.is_empty())?;
+    let service = claims
+        .arkavo_roles
+        .as_ref()
+        .is_some_and(|r| r.iter().any(|x| x == "service-account"));
+    let bound = match &claims.aud {
+        Aud::One(s) => s == id,
+        Aud::Many(v) => v.iter().any(|s| s == id),
+    };
+    (service && bound).then_some(id)
+}
+
+/// Client IDs from a comma-separated list.
+pub fn parse_client_ids(raw: &str) -> HashSet<String> {
+    raw.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// The account ID of a person's passkey session, or `None` for any other
@@ -161,6 +213,47 @@ mod tests {
             c.arkavo_roles = Some(vec!["member".into(), role.into()]);
             assert_eq!(person_subject(&c), None, "{role}");
         }
+    }
+
+    fn service(id: &str) -> DecodedClaims {
+        let mut c = person();
+        c.sub = format!("client:{id}");
+        c.aud = Aud::Many(vec![id.into()]);
+        c.arkavo_roles = Some(vec!["service-account".into()]);
+        c
+    }
+
+    #[test]
+    fn a_service_token_names_its_client() {
+        assert_eq!(
+            service_client_id(&service("opentdf-platform")),
+            Some("opentdf-platform")
+        );
+        let mut one = service("opentdf-platform");
+        one.aud = Aud::One("opentdf-platform".into());
+        assert_eq!(service_client_id(&one), Some("opentdf-platform"));
+    }
+
+    #[test]
+    fn other_tokens_are_not_service_clients() {
+        assert_eq!(service_client_id(&person()), None);
+        let mut c = service("opentdf-platform");
+        c.arkavo_roles = None;
+        assert_eq!(service_client_id(&c), None, "no service-account role");
+        let mut c = service("opentdf-platform");
+        c.aud = Aud::Many(vec!["catalog-node".into()]);
+        assert_eq!(service_client_id(&c), None, "aud not bound to the client");
+        let mut c = service("opentdf-platform");
+        c.sub = "client:".into();
+        assert_eq!(service_client_id(&c), None, "empty client id");
+    }
+
+    #[test]
+    fn client_ids_list_is_trimmed() {
+        assert_eq!(
+            parse_client_ids(" opentdf-platform , ,b"),
+            HashSet::from(["opentdf-platform".to_string(), "b".to_string()])
+        );
     }
 
     #[test]

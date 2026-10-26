@@ -9,7 +9,8 @@ responses to concerns". The viewer side is arkavo-ios ADR-0040 and ADR-0043
 (`specs/moderation.spec.yaml`, ARK-280..ARK-294).
 
 The intake is off unless `MODERATION_INTAKE=on`. When it is off, every route
-below returns 404.
+below returns 404, except the suspension read route, which returns 503 (see
+[Suspensions](#suspensions)).
 
 ## Decisions
 
@@ -23,6 +24,7 @@ below returns 404.
 | Abuse limits | 10 reports per account per hour and 50 per day, counted in Redis. Over a limit returns 429 with `Retry-After`. Only new reports are counted: a retry of a stored report, or a request that fails because the store is down, uses no quota. If Redis is unreachable, the report is accepted, because losing a report is worse than accepting one more. The body is capped at 64 KiB, which holds any note the viewer accepts. |
 | Retention | 365 days after the report is resolved (`MODERATION_RETENTION_DAYS`), enforced by DynamoDB TTL on `expires_at`. An open report never expires. |
 | Notification | NATS `moderation.reports.received`. The alert names the report and its target and carries neither the note nor the reporter. |
+| Suspensions | `suspend` also records a per-account suspension, read by the OpenTDF platform's `constraints.publishing_status` (opentdf-platform#59) and lifted by a moderator. See [Suspensions](#suspensions) (arkavo-rs#93). |
 | Actions | Takedown and suspend are published to NATS as `moderation.actions.takedown` and `moderation.actions.suspend` for the enforcing services (tdf-iroh-s3#17, authnz-rs#91). They are sent before the report is stored as actioned; if they cannot be delivered, the PATCH returns 503 and the report is unchanged. |
 
 ## Report payload (frozen contract)
@@ -102,6 +104,62 @@ curl -s -X PATCH -H "Authorization: Bearer $CWT" -H 'content-type: application/j
   https://platform.arkavo.net/moderation/v1/reports/<id>
 ```
 
+## Suspensions
+
+`PATCH … {"status":"actioned","actions":["suspend"]}` records a suspension for
+the report's creator before it publishes the action events. If the record
+can't be written, the PATCH returns 503 and the report is unchanged. If a later
+step fails, the account stays suspended and a retry is idempotent. An account
+already suspended keeps its first record, so `since` and `reportId` name the
+original action.
+
+The key is the account's token `sub` with any `arkavo:` prefix removed, so
+`arkavo:<uuid>` and `<uuid>` name the same account. A report's creator is the
+catalog subject, which is that same `sub`.
+
+### Read: `GET /moderation/v1/suspensions/{subject}`
+
+For the platform's `constraints.publishing_status`, which drops the
+`arkavo-creator` grants of a suspended account. `{subject}` is the token `sub`,
+percent-encoded as one path segment.
+
+- **Credential:** `Authorization: Bearer <service CWT>` from identity's
+  `client_credentials`. `iss` must be `OIDC_ISSUER`, `sub` `client:<id>`,
+  `arkavo_roles` must include `service-account`, `aud` must contain `<id>`, and
+  `<id>` must be in `MODERATION_SUSPENSION_READER_IDS`. These are the same rules
+  as the AuthZEN facade's PEP check.
+
+| Response | Meaning |
+|---|---|
+| `200 {"subject","suspended":true,"since","reportId"}` | Suspended. `since` is RFC 3339. |
+| `200 {"subject","suspended":false}` | Not suspended. |
+| `400` | Malformed subject: empty, over 256 bytes, or holding whitespace or control characters. |
+| `401` | Missing or invalid service CWT, or a person's token. |
+| `403` | The client isn't in `MODERATION_SUSPENSION_READER_IDS`. |
+| `503` | The suspension store or key set is unavailable, or the intake is off. |
+
+The reader must fail closed: anything other than a 200 with a boolean
+`suspended` counts as suspended, including 404, a timeout and a TLS error. "Not
+suspended" is never a 404, so a missing route can't fail open.
+
+- **Same host:** the platform runs on the same host and calls
+  `https://platform.arkavo.net` with its connection pinned to 127.0.0.1:443. arks
+  has no plaintext loopback listener.
+- **Public route:** it is reachable from outside, so the service CWT is the
+  only gate.
+
+### Lift: `DELETE /moderation/v1/suspensions/{subject}`
+
+A moderator, with their own session CWT, lifts the suspension. The response is
+`200 {"subject","suspended":false,"lifted"}`, where `lifted` is false if there
+was nothing to lift. It is idempotent. A lift publishes `moderation.actions.lift`
+on a best-effort basis.
+
+```sh
+curl -s -X DELETE -H "Authorization: Bearer $CWT" \
+  https://platform.arkavo.net/moderation/v1/suspensions/<subject>
+```
+
 ## NATS events
 
 | Subject | When | Body |
@@ -109,6 +167,7 @@ curl -s -X PATCH -H "Authorization: Bearer $CWT" -H 'content-type: application/j
 | `moderation.reports.received` | A new report is stored | `type`, `id`, `reasons`, `creatorSubject`, `contentId`, `receivedAt` |
 | `moderation.actions.takedown` | A report is actioned with `takedown` | `type`, `action`, `reportId`, `creatorSubject`, `contentId`, `moderator`, `at` |
 | `moderation.actions.suspend` | A report is actioned with `suspend` | same |
+| `moderation.actions.lift` | A moderator lifts a suspension | `type`, `action`, `creatorSubject`, `moderator`, `at` |
 
 `MODERATION_NATS_PREFIX` changes the `moderation` prefix. Each publish is
 flushed to the NATS server within 2 seconds.
@@ -123,7 +182,11 @@ flushed to the NATS server within 2 seconds.
 
 ## Storage
 
-The table is DynamoDB `prod-moderation-reports` in `us-east-1`.
+Two DynamoDB tables in `us-east-1`: reports in `prod-moderation-reports`, and
+suspensions in `prod-moderation-suspensions` (hash key `subject` (S), with the
+record as JSON in `record`; no index, no TTL).
+
+Reports table:
 
 | Attribute | Use |
 |---|---|
@@ -158,6 +221,10 @@ ddb dynamodb create-table --table-name prod-moderation-reports \
     --billing-mode PAY_PER_REQUEST
 ddb dynamodb update-time-to-live --table-name prod-moderation-reports \
     --time-to-live-specification Enabled=true,AttributeName=expires_at
+ddb dynamodb create-table --table-name prod-moderation-suspensions \
+    --attribute-definitions AttributeName=subject,AttributeType=S \
+    --key-schema AttributeName=subject,KeyType=HASH \
+    --billing-mode PAY_PER_REQUEST
 ```
 
 What DynamoDB Local does not give you:
@@ -197,12 +264,21 @@ aws dynamodb update-time-to-live --region us-east-1 \
 aws dynamodb update-continuous-backups --region us-east-1 \
     --table-name prod-moderation-reports \
     --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true
+
+aws dynamodb create-table \
+    --region us-east-1 \
+    --table-name prod-moderation-suspensions \
+    --attribute-definitions AttributeName=subject,AttributeType=S \
+    --key-schema AttributeName=subject,KeyType=HASH \
+    --billing-mode PAY_PER_REQUEST \
+    --sse-specification Enabled=true
 ```
 
 ### Credentials
 
-The arks host needs `dynamodb:PutItem`, `GetItem` and `Query` on the table and
-its index:
+The arks host needs `dynamodb:PutItem`, `GetItem` and `Query` on the reports
+table and its index, and `PutItem`, `GetItem` and `DeleteItem` on the
+suspensions table:
 
 ```json
 {
@@ -214,6 +290,10 @@ its index:
       "arn:aws:dynamodb:us-east-1:<account-id>:table/prod-moderation-reports",
       "arn:aws:dynamodb:us-east-1:<account-id>:table/prod-moderation-reports/index/*"
     ]
+  }, {
+    "Effect": "Allow",
+    "Action": ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:DeleteItem"],
+    "Resource": "arn:aws:dynamodb:us-east-1:<account-id>:table/prod-moderation-suspensions"
   }]
 }
 ```
@@ -228,6 +308,8 @@ under `sudo start.sh`, so check which credentials that chain finds there
 ```sh
 MODERATION_INTAKE=on                              # off (default) | on
 MODERATION_REPORTS_TABLE=prod-moderation-reports  # required when on
+MODERATION_SUSPENSIONS_TABLE=prod-moderation-suspensions  # required when on
+MODERATION_SUSPENSION_READER_IDS=opentdf-platform  # service clients that may read suspensions; empty = none
 MODERATION_STATUS_INDEX=status-received_at-index  # default shown
 MODERATION_MODERATORS=<account-uuid>,<account-uuid>  # who may read and respond; `arkavo:` prefix optional
 MODERATION_EXPECTED_AUD=arkavo                    # default shown

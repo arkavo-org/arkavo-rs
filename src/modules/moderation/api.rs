@@ -4,10 +4,16 @@
 //! - `GET   /moderation/v1/reports`      moderators list a status queue
 //! - `GET   /moderation/v1/reports/:id`  moderators read one report
 //! - `PATCH /moderation/v1/reports/:id`  moderators record a response
+//! - `GET    /moderation/v1/suspensions/:subject`  the platform reads an
+//!   account's publishing suspension (service CWT, arkavo-rs#93)
+//! - `DELETE /moderation/v1/suspensions/:subject`  moderators lift it
 
 use super::auth::{AuthError, SessionVerifier};
-use super::report::{InvalidReport, ReportRecord, ReportSubmission, Status, StatusUpdate};
-use super::store::{Cursor, Inserted, ReportStore, StoreError};
+use super::report::{
+    Action, InvalidReport, ReportRecord, ReportSubmission, Status, StatusUpdate, MAX_IDENTIFIER_LEN,
+};
+use super::store::{Cursor, Inserted, ReportStore, StoreError, Suspension, SuspensionStore};
+use crate::modules::authzen::cwt_subject::subject_id_bind;
 use async_trait::async_trait;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
@@ -104,7 +110,10 @@ impl RateLimiter for RedisRateLimiter {
 
 pub struct ModerationState {
     pub store: Arc<dyn ReportStore>,
+    pub suspensions: Arc<dyn SuspensionStore>,
     pub verifier: SessionVerifier,
+    /// Service clients that may read suspensions.
+    pub suspension_readers: HashSet<String>,
     pub limiter: Arc<dyn RateLimiter>,
     pub notifier: Arc<dyn Notifier>,
     pub moderators: HashSet<String>,
@@ -128,8 +137,22 @@ pub fn router(state: Arc<ModerationState>) -> Router {
             "/moderation/v1/reports/:id",
             get(get_report).patch(update_report),
         )
+        .route(
+            "/moderation/v1/suspensions/:subject",
+            get(get_suspension).delete(lift_suspension),
+        )
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
+}
+
+/// With the intake off, the suspension route answers 503 rather than 404, so a
+/// reader can tell "not configured" from "not suspended" (it fails closed on
+/// both).
+pub fn unconfigured_router() -> Router {
+    Router::new().route(
+        "/moderation/v1/suspensions/:subject",
+        get(|| async { err_json(StatusCode::SERVICE_UNAVAILABLE, "moderation not configured") }),
+    )
 }
 
 fn err_json(status: StatusCode, message: &str) -> Response {
@@ -423,6 +446,32 @@ pub async fn update_report(
     if next.status.is_terminal() {
         next.expires_at = Some(now.saturating_add(state.retention_secs));
     }
+    // The suspension is recorded first: it is what the platform enforces. If a
+    // later step fails, the account stays suspended and a retry is idempotent.
+    if next.actions.contains(&Action::Suspend) {
+        if let Some(subject) = next.creator_subject.as_deref().and_then(suspension_key) {
+            let suspension = Suspension {
+                subject,
+                since: now,
+                report_id: next.id.clone(),
+                moderator: moderator.clone(),
+            };
+            if let Err(e) = state.suspensions.suspend(&suspension).await {
+                error!(
+                    "moderation report {}: suspension not recorded: {e:?}",
+                    next.id
+                );
+                return err_json(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "suspension not recorded; the report is unchanged, try again",
+                );
+            }
+            info!(
+                "moderation suspension recorded for {} (report {})",
+                suspension.subject, next.id
+            );
+        }
+    }
     if let Err(e) = state.deliver_actions(&next).await {
         error!("moderation report {}: {e}; report left unchanged", next.id);
         return err_json(
@@ -442,12 +491,107 @@ pub async fn update_report(
     Json(next).into_response()
 }
 
+/// The stored key for an account: its token `sub` without the `arkavo:`
+/// prefix, so both subject forms name the same account. `None` when the
+/// subject is empty, too long, or holds whitespace or control characters.
+fn suspension_key(subject: &str) -> Option<String> {
+    if subject.len() > MAX_IDENTIFIER_LEN
+        || subject.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return None;
+    }
+    let key = subject_id_bind(subject);
+    (!key.is_empty()).then(|| key.to_string())
+}
+
+fn suspension_fail(e: StoreError) -> Response {
+    error!("moderation suspension store unavailable: {e:?}");
+    err_json(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "suspension store unavailable",
+    )
+}
+
+/// `GET /moderation/v1/suspensions/:subject`, for the platform's
+/// `constraints.publishing_status` (opentdf-platform#59). Not suspended is a
+/// 200 with `suspended: false`, never a 404.
+pub async fn get_suspension(
+    State(state): State<Arc<ModerationState>>,
+    headers: HeaderMap,
+    Path(subject): Path<String>,
+) -> Response {
+    match state
+        .verifier
+        .service_client(&headers, &state.suspension_readers)
+        .await
+    {
+        Ok(_) => {}
+        Err(AuthError::Unauthenticated) => {
+            return err_json(StatusCode::UNAUTHORIZED, "service credential required")
+        }
+        Err(AuthError::Forbidden) => {
+            return err_json(StatusCode::FORBIDDEN, "not a suspension reader")
+        }
+        Err(e) => return auth_fail(e),
+    }
+    let Some(key) = suspension_key(&subject) else {
+        return err_json(StatusCode::BAD_REQUEST, "invalid subject");
+    };
+    match state.suspensions.get(&key).await {
+        Ok(Some(s)) => Json(json!({
+            "subject": subject,
+            "suspended": true,
+            "since": rfc3339(s.since),
+            "reportId": s.report_id,
+        }))
+        .into_response(),
+        Ok(None) => Json(json!({ "subject": subject, "suspended": false })).into_response(),
+        Err(e) => suspension_fail(e),
+    }
+}
+
+/// `DELETE /moderation/v1/suspensions/:subject`: a moderator lifts an
+/// account's suspension. Idempotent; `lifted` says whether there was one.
+pub async fn lift_suspension(
+    State(state): State<Arc<ModerationState>>,
+    headers: HeaderMap,
+    Path(subject): Path<String>,
+) -> Response {
+    let moderator = match state.moderator(&headers).await {
+        Ok(m) => m,
+        Err(e) => return auth_fail(e),
+    };
+    let Some(key) = suspension_key(&subject) else {
+        return err_json(StatusCode::BAD_REQUEST, "invalid subject");
+    };
+    let lifted = match state.suspensions.lift(&key).await {
+        Ok(l) => l,
+        Err(e) => return suspension_fail(e),
+    };
+    if lifted {
+        info!("moderation suspension lifted for {key} by {moderator}");
+        state
+            .publish(
+                "actions.lift",
+                json!({
+                    "type": "suspension.lift",
+                    "action": "lift",
+                    "creatorSubject": key,
+                    "moderator": moderator,
+                    "at": rfc3339(chrono::Utc::now().timestamp()),
+                }),
+            )
+            .await;
+    }
+    Json(json!({ "subject": subject, "suspended": false, "lifted": lifted })).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::modules::authzen::cose_keys::CoseKeyCache;
     use crate::modules::authzen::cwt_verify::test_support::{keypair, mint, mint_map};
-    use crate::modules::moderation::store::memory::MemoryReportStore;
+    use crate::modules::moderation::store::memory::{MemoryReportStore, MemorySuspensionStore};
     use axum::body::Body;
     use axum::http::Request;
     use ciborium::value::Value as Cbor;
@@ -499,17 +643,23 @@ mod tests {
     struct Harness {
         app: Router,
         store: Arc<MemoryReportStore>,
+        suspensions: Arc<MemorySuspensionStore>,
         notes: Arc<Recorder>,
         limiter: Arc<Counter>,
     }
+
+    const READER: &str = "opentdf-platform";
 
     fn harness(hourly: u64) -> Harness {
         let (_, vk) = keypair();
         let store = Arc::new(MemoryReportStore::default());
         let notes = Arc::new(Recorder::default());
         let limiter = Arc::new(Counter::default());
+        let suspensions = Arc::new(MemorySuspensionStore::default());
         let state = Arc::new(ModerationState {
             store: store.clone(),
+            suspensions: suspensions.clone(),
+            suspension_readers: HashSet::from([READER.to_string()]),
             verifier: SessionVerifier {
                 issuer: ISS.into(),
                 audience: "arkavo".into(),
@@ -526,9 +676,61 @@ mod tests {
         Harness {
             app: router(state),
             store,
+            suspensions,
             notes,
             limiter,
         }
+    }
+
+    /// A `client_credentials` token for `client_id`, as identity mints it.
+    fn service_token(client_id: &str) -> String {
+        let (sk, _) = keypair();
+        let now = chrono::Utc::now().timestamp();
+        mint_map(
+            &sk,
+            KID,
+            vec![
+                (Cbor::Integer(1.into()), Cbor::Text(ISS.into())),
+                (
+                    Cbor::Integer(2.into()),
+                    Cbor::Text(format!("client:{client_id}")),
+                ),
+                (Cbor::Integer(3.into()), Cbor::Text(client_id.into())),
+                (Cbor::Integer(4.into()), Cbor::Integer((now + 3_600).into())),
+                (Cbor::Integer(6.into()), Cbor::Integer(now.into())),
+                (Cbor::Integer(7.into()), Cbor::Bytes(vec![9u8; 16])),
+                (
+                    Cbor::Text("arkavo_roles".into()),
+                    Cbor::Array(vec![Cbor::Text("service-account".into())]),
+                ),
+            ],
+        )
+    }
+
+    /// Submit the standard report (creator `creator-a`) and action it.
+    async fn suspend_creator(h: &Harness, report_id: &str) -> StatusCode {
+        submit(h, VIEWER, report_id).await;
+        call(
+            &h.app,
+            "PATCH",
+            &format!("/moderation/v1/reports/{}", report_id.to_lowercase()),
+            Some(&token(MODERATOR)),
+            Some(json!({"status": "actioned", "actions": ["suspend"]})),
+        )
+        .await
+        .0
+    }
+
+    async fn read_suspension(h: &Harness, subject: &str) -> (StatusCode, Value) {
+        let (status, _, body) = call(
+            &h.app,
+            "GET",
+            &format!("/moderation/v1/suspensions/{subject}"),
+            Some(&service_token(READER)),
+            None,
+        )
+        .await;
+        (status, body)
     }
 
     fn token(sub: &str) -> String {
@@ -1132,5 +1334,120 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let resolved = body["resolvedAt"].as_i64().unwrap();
         assert_eq!(body["expiresAt"].as_i64(), Some(resolved + 365 * 86_400));
+    }
+    #[tokio::test]
+    async fn a_suspend_action_records_a_suspension_the_platform_reads() {
+        let h = harness(20);
+        let (status, body) = read_suspension(&h, "creator-a").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, json!({"subject": "creator-a", "suspended": false}));
+
+        assert_eq!(suspend_creator(&h, REPORT_ID).await, StatusCode::OK);
+        let id = REPORT_ID.to_lowercase();
+        let (status, body) = read_suspension(&h, "creator-a").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["suspended"], true);
+        assert_eq!(body["reportId"], id);
+        assert!(body["since"].as_str().unwrap().ends_with('Z'));
+        // Both subject forms name the same account.
+        let (_, prefixed) = read_suspension(&h, "arkavo:creator-a").await;
+        assert_eq!(prefixed["suspended"], true);
+        assert_eq!(prefixed["subject"], "arkavo:creator-a");
+        let (_, other) = read_suspension(&h, "creator-b").await;
+        assert_eq!(other["suspended"], false);
+    }
+
+    #[tokio::test]
+    async fn an_account_keeps_its_first_suspension() {
+        let h = harness(20);
+        suspend_creator(&h, REPORT_ID).await;
+        let second = "7A9619FF-8B86-D011-B42D-00C04FC964FF";
+        assert_eq!(suspend_creator(&h, second).await, StatusCode::OK);
+        let (_, body) = read_suspension(&h, "creator-a").await;
+        assert_eq!(body["reportId"], REPORT_ID.to_lowercase());
+    }
+
+    #[tokio::test]
+    async fn only_listed_service_clients_read_suspensions() {
+        let h = harness(20);
+        let uri = "/moderation/v1/suspensions/creator-a";
+        let cases = [
+            (None, StatusCode::UNAUTHORIZED),
+            (Some(token(VIEWER)), StatusCode::UNAUTHORIZED),
+            (Some(token(MODERATOR)), StatusCode::UNAUTHORIZED),
+            (Some(service_token("catalog-node")), StatusCode::FORBIDDEN),
+            (Some(service_token(READER)), StatusCode::OK),
+        ];
+        for (bearer, want) in cases {
+            let (status, _, _) = call(&h.app, "GET", uri, bearer.as_deref(), None).await;
+            assert_eq!(status, want, "{bearer:?}");
+        }
+        let (status, _) = read_suspension(&h, "creator%20a").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = read_suspension(&h, "arkavo:").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn a_suspension_store_outage_is_503_and_leaves_the_report_open() {
+        let h = harness(20);
+        submit(&h, VIEWER, REPORT_ID).await;
+        *h.suspensions.fail.lock().unwrap() = true;
+        let id = REPORT_ID.to_lowercase();
+        let (status, _, _) = call(
+            &h.app,
+            "PATCH",
+            &format!("/moderation/v1/reports/{id}"),
+            Some(&token(MODERATOR)),
+            Some(json!({"status": "actioned", "actions": ["suspend"]})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let stored = h.store.records.lock().unwrap().get(&id).cloned().unwrap();
+        assert_eq!(stored.status, Status::Received);
+        // No action event went out for an unrecorded suspension.
+        assert_eq!(h.notes.0.lock().unwrap().len(), 1);
+        let (status, _) = read_suspension(&h, "creator-a").await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn a_moderator_lifts_a_suspension() {
+        let h = harness(20);
+        suspend_creator(&h, REPORT_ID).await;
+        let uri = "/moderation/v1/suspensions/arkavo:creator-a";
+        let (status, _, _) = call(&h.app, "DELETE", uri, Some(&token(VIEWER)), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, _, _) = call(&h.app, "DELETE", uri, Some(&service_token(READER)), None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let (status, _, body) = call(&h.app, "DELETE", uri, Some(&token(MODERATOR)), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["lifted"], true);
+        assert_eq!(body["suspended"], false);
+        let (_, body) = read_suspension(&h, "creator-a").await;
+        assert_eq!(body["suspended"], false);
+        let lift = h.notes.0.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(lift.0, "moderation.actions.lift");
+        assert_eq!(lift.1["creatorSubject"], "creator-a");
+        assert_eq!(lift.1["moderator"], MODERATOR);
+
+        let (status, _, body) = call(&h.app, "DELETE", uri, Some(&token(MODERATOR)), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["lifted"], false);
+    }
+
+    #[tokio::test]
+    async fn without_the_intake_the_suspension_route_is_503_not_404() {
+        let (status, _, body) = call(
+            &unconfigured_router(),
+            "GET",
+            "/moderation/v1/suspensions/creator-a",
+            Some(&service_token(READER)),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"], "moderation not configured");
     }
 }

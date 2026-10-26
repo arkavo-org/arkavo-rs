@@ -13,6 +13,11 @@ use std::collections::HashSet;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     pub table: String,
+    /// Per-account publishing suspensions (arkavo-rs#93).
+    pub suspensions_table: String,
+    /// Service clients that may read suspensions (the platform's
+    /// `constraints.publishing_status`).
+    pub suspension_readers: HashSet<String>,
     pub status_index: String,
     pub issuer: String,
     pub cose_keys_url: String,
@@ -41,6 +46,8 @@ pub fn settings_from(get: impl Fn(&str) -> Option<String>) -> Result<Option<Sett
     }
     let table = get("MODERATION_REPORTS_TABLE")
         .ok_or("MODERATION_INTAKE=on requires MODERATION_REPORTS_TABLE")?;
+    let suspensions_table = get("MODERATION_SUSPENSIONS_TABLE")
+        .ok_or("MODERATION_INTAKE=on requires MODERATION_SUSPENSIONS_TABLE")?;
     let issuer = get("OIDC_ISSUER").unwrap_or_else(|| "https://identity.arkavo.net".into());
     let cose_keys_url = get("MODERATION_COSE_KEYS_URL")
         .unwrap_or_else(|| format!("{}/.well-known/cose-keys", issuer.trim_end_matches('/')));
@@ -61,6 +68,10 @@ pub fn settings_from(get: impl Fn(&str) -> Option<String>) -> Result<Option<Sett
     }
     Ok(Some(Settings {
         table,
+        suspensions_table,
+        suspension_readers: get("MODERATION_SUSPENSION_READER_IDS")
+            .map(|v| auth::parse_client_ids(&v))
+            .unwrap_or_default(),
         status_index: get("MODERATION_STATUS_INDEX").unwrap_or_else(|| DEFAULT_STATUS_INDEX.into()),
         issuer,
         cose_keys_url,
@@ -103,14 +114,25 @@ mod tests {
     #[test]
     fn on_requires_a_table_and_has_defaults() {
         assert!(settings(&[("MODERATION_INTAKE", "on")]).is_err());
+        assert!(settings(&[
+            ("MODERATION_INTAKE", "on"),
+            ("MODERATION_REPORTS_TABLE", "prod-moderation-reports"),
+        ])
+        .is_err());
         let s = settings(&[
             ("MODERATION_INTAKE", "ON"),
             ("MODERATION_REPORTS_TABLE", "prod-moderation-reports"),
+            (
+                "MODERATION_SUSPENSIONS_TABLE",
+                "prod-moderation-suspensions",
+            ),
             ("MODERATION_MODERATORS", "arkavo:m1,m2"),
         ])
         .unwrap()
         .unwrap();
         assert_eq!(s.table, "prod-moderation-reports");
+        assert_eq!(s.suspensions_table, "prod-moderation-suspensions");
+        assert!(s.suspension_readers.is_empty());
         assert_eq!(s.status_index, DEFAULT_STATUS_INDEX);
         assert_eq!(s.issuer, "https://identity.arkavo.net");
         assert_eq!(
@@ -130,13 +152,22 @@ mod tests {
         let s = settings(&[
             ("MODERATION_INTAKE", "on"),
             ("MODERATION_REPORTS_TABLE", "prod-moderation-reports"),
+            (
+                "MODERATION_SUSPENSIONS_TABLE",
+                "prod-moderation-suspensions",
+            ),
             ("MODERATION_DYNAMODB_ENDPOINT", "http://127.0.0.1:8000"),
+            ("MODERATION_SUSPENSION_READER_IDS", "opentdf-platform"),
         ])
         .unwrap()
         .unwrap();
         assert_eq!(
             s.dynamodb_endpoint.as_deref(),
             Some("http://127.0.0.1:8000")
+        );
+        assert_eq!(
+            s.suspension_readers,
+            HashSet::from(["opentdf-platform".to_string()])
         );
     }
 
@@ -145,6 +176,7 @@ mod tests {
         let base = [
             ("MODERATION_INTAKE", "on"),
             ("MODERATION_REPORTS_TABLE", "t"),
+            ("MODERATION_SUSPENSIONS_TABLE", "s"),
         ];
         for (k, v) in [
             ("MODERATION_RETENTION_DAYS", "0"),
