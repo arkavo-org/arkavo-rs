@@ -137,11 +137,14 @@ The server first measures the manifest box without signing it: a sizing pass wit
     "description": "Optional description",
     "timestamp": "2025-10-26T00:00:00Z", // ISO 8601
     "ai_generated": false,
+    "digital_source_type": "screenCapture", // optional IPTC term, see below
     "software": "Arkavo Creator 1.4.2",
     "all_actions_included": false // optional; true only if the actions are the whole history
   }
 }
 ```
+
+`digital_source_type` is the `c2pa.created` action's [IPTC digital source type](https://cv.iptc.org/newscodes/digitalsourcetype/), as a term such as `screenCapture` or its full URI. A term c2pa-rs doesn't know gets `400`. So does an `ai_generated` that disagrees with the type: it must be true exactly for `trainedAlgorithmicMedia`, `compositeWithTrainedAlgorithmicMedia` and `trainedAlgorithmicData`. Clients send both fields so that older servers, which ignore `digital_source_type`, still get the AI flag. Without a type, `ai_generated: true` gives `trainedAlgorithmicMedia` and anything else `digitalCapture` (arkavo-rs#129).
 
 **Response (Success):**
 ```json
@@ -190,6 +193,7 @@ Validate a C2PA manifest against a content hash.
   "errors": [],
   "creator": "user@example.com",
   "ai_generated": false,
+  "digital_source_type": "digitalCapture",
   "provenance_chain": [
     {
       "action": "created",
@@ -201,7 +205,7 @@ Validate a C2PA manifest against a content hash.
 }
 ```
 
-`signed_at` is the timestamp's signing time, and is present only when the manifest has one (see [Timestamps](#timestamps)). `creator` comes from the `org.arkavo.recording` assertion, and `ai_generated` and `provenance_chain` come from the `c2pa.actions` assertion. The server never has the asset, so it skips `assertion.dataHash.mismatch` and compares `content_hash` with `org.arkavo.c2pa.content_hash` instead. Only the configured trust anchors are trusted (see `C2PA_TRUST_ANCHORS_PATH`). By default that is the CA in our own signing chain, so a manifest arks signed returns `valid: true`. A manifest signed under any other CA, including CAs on the public C2PA trust list, returns `valid: false` with `signingCredential.untrusted`.
+`signed_at` is the timestamp's signing time, and is present only when the manifest has one (see [Timestamps](#timestamps)). `creator` comes from the `org.arkavo.recording` assertion, and `ai_generated`, `digital_source_type` and `provenance_chain` come from the `c2pa.actions` assertion. `digital_source_type` is the `c2pa.created` action's term, in the form the sign request takes. The server never has the asset, so it skips `assertion.dataHash.mismatch` and compares `content_hash` with `org.arkavo.c2pa.content_hash` instead. Only the configured trust anchors are trusted (see `C2PA_TRUST_ANCHORS_PATH`). By default that is the CA in our own signing chain, so a manifest arks signed returns `valid: true`. A manifest signed under any other CA, including CAs on the public C2PA trust list, returns `valid: false` with `signingCredential.untrusted`.
 
 ## Configuration
 
@@ -644,7 +648,7 @@ The `/c2pa/v1/sign` endpoint returns a **base64-encoded JUMBF** (JPEG Universal 
 - COSE-signed claim with ES256 signature
 - Manifest `title` from `metadata.title`
 - Assertion store:
-  - `c2pa.actions.v2`: a single `c2pa.created` action with `when` (`metadata.timestamp`), `softwareAgent.name` (`metadata.software`) and `digitalSourceType` (`trainedAlgorithmicMedia` when `metadata.ai_generated` is true, otherwise `digitalCapture`)
+  - `c2pa.actions.v2`: a single `c2pa.created` action with `when` (`metadata.timestamp`), `softwareAgent.name` (`metadata.software`) and `digitalSourceType` (`metadata.digital_source_type`; without it, `trainedAlgorithmicMedia` when `metadata.ai_generated` is true, otherwise `digitalCapture`)
   - `stds.schema-org.CreativeWork`: `author: [{"@type": "Person", "name": metadata.creator}]` and `metadata.description`
   - `c2pa.hash.data` and `org.arkavo.c2pa.content_hash`
 - Claim v2 requires the first action to be `c2pa.created` or `c2pa.opened`. The manifests signed before arkavo-rs#98 used custom `c2pa.created` / `c2pa.claim.creator` / `c2pa.ai_generated` / `dc.title` labels and fail `c2patool` with `assertion.action.malformed`. `/c2pa/v1/validate` no longer reads those labels
