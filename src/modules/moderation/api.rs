@@ -6,13 +6,15 @@
 //! - `PATCH /moderation/v1/reports/:id`  moderators record a response
 //! - `GET    /moderation/v1/suspensions/:subject`  the platform reads an
 //!   account's publishing suspension (service CWT, arkavo-rs#93)
-//! - `DELETE /moderation/v1/suspensions/:subject`  moderators lift it
+//! - `DELETE /moderation/v1/suspensions/:subject`  moderators lift it, with a
+//!   reason; the lift is recorded, not deleted
 
 use super::auth::{AuthError, SessionVerifier};
 use super::report::{
-    Action, InvalidReport, ReportRecord, ReportSubmission, Status, StatusUpdate, MAX_IDENTIFIER_LEN,
+    normalised_note, Action, InvalidReport, ReportRecord, ReportSubmission, Status, StatusUpdate,
+    MAX_IDENTIFIER_LEN, MAX_RESOLUTION_NOTE_LEN,
 };
-use super::store::{Cursor, Inserted, ReportStore, StoreError, Suspension, SuspensionStore};
+use super::store::{Cursor, Inserted, Lift, ReportStore, StoreError, Suspension, SuspensionStore};
 use crate::modules::authzen::cwt_subject::subject_id_bind;
 use async_trait::async_trait;
 use axum::body::Bytes;
@@ -437,6 +439,13 @@ pub async fn update_report(
         Ok(None) => return err_json(StatusCode::NOT_FOUND, "no such report"),
         Err(e) => return store_fail(e),
     };
+    // A moderator never decides a report they filed.
+    if current.reporter_subject == moderator {
+        return err_json(
+            StatusCode::FORBIDDEN,
+            "a moderator can't respond to their own report",
+        );
+    }
     let now = chrono::Utc::now().timestamp();
     let mut next = match update.apply(&current, &moderator, now) {
         Ok(n) => n,
@@ -457,11 +466,23 @@ pub async fn update_report(
                 "suspend requires a usable creator subject",
             );
         };
+        if subject == moderator {
+            return err_json(
+                StatusCode::FORBIDDEN,
+                "a moderator can't suspend their own account",
+            );
+        }
+        // The reason travels with the suspension (and to identity, #93).
+        let Some(reason) = next.resolution_note.clone() else {
+            return err_json(StatusCode::BAD_REQUEST, "suspend requires a note");
+        };
         let suspension = Suspension {
             subject,
             since: now,
             report_id: next.id.clone(),
             moderator: moderator.clone(),
+            reason,
+            lifted: None,
         };
         if let Err(e) = state.suspensions.suspend(&suspension).await {
             error!(
@@ -511,11 +532,18 @@ fn suspension_key(subject: &str) -> Option<String> {
 }
 
 fn suspension_fail(e: StoreError) -> Response {
-    error!("moderation suspension store unavailable: {e:?}");
-    err_json(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "suspension store unavailable",
-    )
+    match e {
+        StoreError::StatusChanged => {
+            err_json(StatusCode::CONFLICT, "suspension changed; try again")
+        }
+        StoreError::Unavailable(detail) => {
+            error!("moderation suspension store unavailable: {detail}");
+            err_json(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "suspension store unavailable",
+            )
+        }
+    }
 }
 
 /// `GET /moderation/v1/suspensions/:subject`, for the platform's
@@ -544,24 +572,32 @@ pub async fn get_suspension(
         return err_json(StatusCode::BAD_REQUEST, "invalid subject");
     };
     match state.suspensions.get(&key).await {
-        Ok(Some(s)) => Json(json!({
+        Ok(Some(s)) if s.is_active() => Json(json!({
             "subject": subject,
             "suspended": true,
             "since": rfc3339(s.since),
             "reportId": s.report_id,
         }))
         .into_response(),
-        Ok(None) => Json(json!({ "subject": subject, "suspended": false })).into_response(),
+        Ok(_) => Json(json!({ "subject": subject, "suspended": false })).into_response(),
         Err(e) => suspension_fail(e),
     }
 }
 
-/// `DELETE /moderation/v1/suspensions/:subject`: a moderator lifts an
-/// account's suspension. Idempotent; `lifted` says whether there was one.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LiftRequest {
+    reason: String,
+}
+
+/// `DELETE /moderation/v1/suspensions/:subject` with `{"reason"}`: a moderator
+/// lifts an account's suspension. The lift is recorded on the suspension, not
+/// deleted. Idempotent; `lifted` says whether there was an active one.
 pub async fn lift_suspension(
     State(state): State<Arc<ModerationState>>,
     headers: HeaderMap,
     Path(subject): Path<String>,
+    body: Bytes,
 ) -> Response {
     let moderator = match state.moderator(&headers).await {
         Ok(m) => m,
@@ -570,7 +606,25 @@ pub async fn lift_suspension(
     let Some(key) = suspension_key(&subject) else {
         return err_json(StatusCode::BAD_REQUEST, "invalid subject");
     };
-    let lifted = match state.suspensions.lift(&key).await {
+    if key == moderator {
+        return err_json(
+            StatusCode::FORBIDDEN,
+            "a moderator can't lift their own suspension",
+        );
+    }
+    let reason = match serde_json::from_slice::<LiftRequest>(&body) {
+        Ok(r) => normalised_note(&r.reason),
+        Err(_) => return err_json(StatusCode::BAD_REQUEST, "lift requires a reason"),
+    };
+    if reason.is_empty() || reason.chars().count() > MAX_RESOLUTION_NOTE_LEN {
+        return err_json(StatusCode::BAD_REQUEST, "lift requires a reason");
+    }
+    let lift = Lift {
+        at: chrono::Utc::now().timestamp(),
+        moderator: moderator.clone(),
+        reason,
+    };
+    let lifted = match state.suspensions.lift(&key, &lift).await {
         Ok(l) => l,
         Err(e) => return suspension_fail(e),
     };
@@ -584,7 +638,7 @@ pub async fn lift_suspension(
                     "action": "lift",
                     "creatorSubject": key,
                     "moderator": moderator,
-                    "at": rfc3339(chrono::Utc::now().timestamp()),
+                    "at": rfc3339(lift.at),
                 }),
             )
             .await;
@@ -721,7 +775,7 @@ mod tests {
             "PATCH",
             &format!("/moderation/v1/reports/{}", report_id.to_lowercase()),
             Some(&token(MODERATOR)),
-            Some(json!({"status": "actioned", "actions": ["suspend"]})),
+            Some(json!({"status": "actioned", "actions": ["suspend"], "note": "harassment"})),
         )
         .await
         .0
@@ -1405,7 +1459,7 @@ mod tests {
             "PATCH",
             &format!("/moderation/v1/reports/{id}"),
             Some(&token(MODERATOR)),
-            Some(json!({"status": "actioned", "actions": ["suspend"]})),
+            Some(json!({"status": "actioned", "actions": ["suspend"], "note": "harassment"})),
         )
         .await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
@@ -1418,29 +1472,141 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_moderator_lifts_a_suspension() {
+    async fn a_moderator_lifts_a_suspension_with_a_reason_and_it_stays_on_record() {
         let h = harness(20);
         suspend_creator(&h, REPORT_ID).await;
         let uri = "/moderation/v1/suspensions/arkavo:creator-a";
-        let (status, _, _) = call(&h.app, "DELETE", uri, Some(&token(VIEWER)), None).await;
+        let reason = Some(json!({"reason": "appeal upheld"}));
+        let (status, _, _) =
+            call(&h.app, "DELETE", uri, Some(&token(VIEWER)), reason.clone()).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
-        let (status, _, _) = call(&h.app, "DELETE", uri, Some(&service_token(READER)), None).await;
+        let (status, _, _) = call(
+            &h.app,
+            "DELETE",
+            uri,
+            Some(&service_token(READER)),
+            reason.clone(),
+        )
+        .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+        for bad in [
+            None,
+            Some(json!({})),
+            Some(json!({"reason": "  \n "})),
+            Some(json!({"reason": "x", "extra": 1})),
+        ] {
+            let (status, _, _) =
+                call(&h.app, "DELETE", uri, Some(&token(MODERATOR)), bad.clone()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad:?}");
+        }
 
-        let (status, _, body) = call(&h.app, "DELETE", uri, Some(&token(MODERATOR)), None).await;
+        let (status, _, body) = call(
+            &h.app,
+            "DELETE",
+            uri,
+            Some(&token(MODERATOR)),
+            reason.clone(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["lifted"], true);
         assert_eq!(body["suspended"], false);
         let (_, body) = read_suspension(&h, "creator-a").await;
-        assert_eq!(body["suspended"], false);
-        let lift = h.notes.0.lock().unwrap().last().cloned().unwrap();
-        assert_eq!(lift.0, "moderation.actions.lift");
-        assert_eq!(lift.1["creatorSubject"], "creator-a");
-        assert_eq!(lift.1["moderator"], MODERATOR);
+        assert_eq!(body, json!({"subject": "creator-a", "suspended": false}));
+        // The lift is recorded on the suspension, which stays on record.
+        let stored = h.suspensions.records.lock().unwrap()["creator-a"].clone();
+        assert_eq!(stored.current.reason, "harassment");
+        let lift = stored.current.lifted.unwrap();
+        assert_eq!(
+            (lift.moderator.as_str(), lift.reason.as_str()),
+            (MODERATOR, "appeal upheld")
+        );
+        let event = h.notes.0.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(event.0, "moderation.actions.lift");
+        assert_eq!(event.1["creatorSubject"], "creator-a");
+        assert_eq!(event.1["moderator"], MODERATOR);
 
-        let (status, _, body) = call(&h.app, "DELETE", uri, Some(&token(MODERATOR)), None).await;
+        let (status, _, body) = call(&h.app, "DELETE", uri, Some(&token(MODERATOR)), reason).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["lifted"], false);
+
+        // Suspended again by a later report: active, and the lifted one is history.
+        let second = "7A9619FF-8B86-D011-B42D-00C04FC964FF";
+        assert_eq!(suspend_creator(&h, second).await, StatusCode::OK);
+        let (_, body) = read_suspension(&h, "creator-a").await;
+        assert_eq!(body["suspended"], true);
+        assert_eq!(body["reportId"], second.to_lowercase());
+        assert_eq!(
+            h.suspensions.records.lock().unwrap()["creator-a"]
+                .earlier
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn a_suspend_needs_a_note() {
+        let h = harness(20);
+        submit(&h, VIEWER, REPORT_ID).await;
+        let (status, _, _) = call(
+            &h.app,
+            "PATCH",
+            &format!("/moderation/v1/reports/{}", REPORT_ID.to_lowercase()),
+            Some(&token(MODERATOR)),
+            Some(json!({"status": "actioned", "actions": ["suspend"]})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(h.suspensions.records.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_moderator_never_acts_on_their_own_report_or_account() {
+        let h = harness(20);
+        // Their own report, about anyone.
+        submit(&h, MODERATOR, REPORT_ID).await;
+        let (status, _, _) = call(
+            &h.app,
+            "PATCH",
+            &format!("/moderation/v1/reports/{}", REPORT_ID.to_lowercase()),
+            Some(&token(MODERATOR)),
+            Some(json!({"status": "reviewing"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        // A viewer's report about the moderator.
+        let other = "7A9619FF-8B86-D011-B42D-00C04FC964FF";
+        let mut p = payload(other);
+        p["blockedPublicID"] = json!(format!("arkavo:{MODERATOR}"));
+        call(
+            &h.app,
+            "POST",
+            "/moderation/v1/reports",
+            Some(&token(VIEWER)),
+            Some(p),
+        )
+        .await;
+        let (status, _, _) = call(
+            &h.app,
+            "PATCH",
+            &format!("/moderation/v1/reports/{}", other.to_lowercase()),
+            Some(&token(MODERATOR)),
+            Some(json!({"status": "actioned", "actions": ["suspend"], "note": "self"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(h.suspensions.records.lock().unwrap().is_empty());
+
+        let (status, _, _) = call(
+            &h.app,
+            "DELETE",
+            &format!("/moderation/v1/suspensions/{MODERATOR}"),
+            Some(&token(MODERATOR)),
+            Some(json!({"reason": "mine"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

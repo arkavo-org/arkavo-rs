@@ -1046,10 +1046,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 s.table.clone(),
                 s.status_index.clone(),
             );
-            let suspensions = moderation::store::DynamoSuspensionStore::new(
-                dynamodb,
-                s.suspensions_table.clone(),
-            );
+            let suspensions =
+                moderation::store::DynamoSuspensionStore::new(dynamodb, s.table.clone());
             if s.suspension_readers.is_empty() {
                 warn!("MODERATION_SUSPENSION_READER_IDS is empty: no service can read suspensions");
             }
@@ -1059,8 +1057,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             info!(
-                "Moderation intake enabled, table={}, suspensions={}, issuer={}",
-                s.table, s.suspensions_table, s.issuer
+                "Moderation intake enabled, table={}, issuer={}",
+                s.table, s.issuer
             );
             moderation::api::router(Arc::new(moderation::api::ModerationState {
                 store: Arc::new(store),
