@@ -113,8 +113,9 @@ impl C2paConfig {
                 let chain = std::fs::read(&signing_cert_path)
                     .map_err(|e| format!("Failed to read C2PA signing cert: {}", e))?;
                 let signer_cert = pem::parse_many(&chain)
-                    .ok()
-                    .and_then(|blocks| blocks.into_iter().find(|b| b.tag() == "CERTIFICATE"))
+                    .map_err(|e| format!("C2PA signing cert chain is not PEM: {}", e))?
+                    .into_iter()
+                    .find(|b| b.tag() == "CERTIFICATE")
                     .ok_or("C2PA signing cert chain has no certificate")?;
                 let key = connect_with_retry(CONNECT_ATTEMPTS, CONNECT_FIRST_RETRY, || {
                     KmsKey::connect(key_id.clone(), signer_cert.contents())
