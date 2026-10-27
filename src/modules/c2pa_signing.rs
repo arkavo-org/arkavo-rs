@@ -189,10 +189,7 @@ impl C2paConfig {
             .unwrap_or(false);
 
         // A typo must not silently leave signing open to non-members
-        let require_entitlement = parse_flag(
-            "C2PA_REQUIRE_ENTITLEMENT",
-            std::env::var("C2PA_REQUIRE_ENTITLEMENT").ok().as_deref(),
-        )?;
+        let require_entitlement = crate::modules::env_flag::from_env("C2PA_REQUIRE_ENTITLEMENT")?;
 
         let allowed_creators = std::env::var("C2PA_ALLOWED_CREATORS")
             .unwrap_or_default()
@@ -914,19 +911,6 @@ fn claim_generator_info(software: Option<&str>) -> ClaimGeneratorInfo {
     info
 }
 
-/// Parses a boolean setting: absent is `false`; an explicit value must be one of
-/// true/false/1/0/yes/no (any case, surrounding space ignored)
-fn parse_flag(name: &str, value: Option<&str>) -> Result<bool, String> {
-    let Some(value) = value else {
-        return Ok(false);
-    };
-    match value.trim().to_ascii_lowercase().as_str() {
-        "true" | "1" | "yes" => Ok(true),
-        "false" | "0" | "no" => Ok(false),
-        _ => Err(format!("{} must be true or false, got {:?}", name, value)),
-    }
-}
-
 /// Normalise the P-256 signing key to PKCS#8 PEM. c2pa's rust_native_crypto signer only
 /// reads PKCS#8, while `openssl ecparam -genkey` (docs/c2pa_video_drm.md) writes SEC1.
 fn signing_key_pkcs8_pem(pem: &[u8]) -> Result<zeroize::Zeroizing<String>, String> {
@@ -1192,23 +1176,6 @@ mod tests {
         assert!(json.contains("\"start\":100"));
         assert!(json.contains("\"end\":500"));
         assert!(json.contains("\"box_type\":\"uuid\""));
-    }
-
-    /// C2PA_REQUIRE_ENTITLEMENT gates signing, so a value that isn't clearly true or false
-    /// must stop startup rather than silently leave the gate open (arkavo-rs#120).
-    #[test]
-    fn test_flag_parsing_fails_closed() {
-        assert_eq!(parse_flag("F", None), Ok(false));
-        for on in ["true", "TRUE", " True ", "1", "yes"] {
-            assert_eq!(parse_flag("F", Some(on)), Ok(true), "{:?}", on);
-        }
-        for off in ["false", "FALSE", "0", "no", " false"] {
-            assert_eq!(parse_flag("F", Some(off)), Ok(false), "{:?}", off);
-        }
-        for bad in ["", "on", "enabled", "tru"] {
-            let err = parse_flag("C2PA_REQUIRE_ENTITLEMENT", Some(bad)).unwrap_err();
-            assert!(err.contains("C2PA_REQUIRE_ENTITLEMENT"), "{}", err);
-        }
     }
 
     #[test]

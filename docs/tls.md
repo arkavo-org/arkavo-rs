@@ -7,17 +7,17 @@ All TLS in arks is rustls; there is no OpenSSL on these paths.
 
 | Listener | Versions | Where |
 |---|---|---|
-| TCP (HTTPS, WebSocket), `$PORT` | TLS 1.3 and 1.2, 1.3 preferred; nothing older | `ServerConfig::builder()` in `src/bin/main.rs` |
+| TCP (HTTPS, WebSocket), `$PORT` | TLS 1.3 only; with `TLS_ALLOW_TLS12=true`, also 1.2 (1.3 preferred) | `rustls_server_config` in `src/bin/main.rs` |
 | HTTP/3 (QUIC), UDP `$PORT` | TLS 1.3 only (QUIC requires it) | `src/modules/h3.rs` |
 
-TLS 1.2 stays enabled for clients that still need it. A client that supports 1.3 always
-gets 1.3: TLS 1.3's downgrade protection (RFC 8446 §4.1.3) stops an attacker forcing two
-1.3-capable ends down to 1.2. Clients that must never use 1.2 enforce a 1.3 minimum
-themselves; ArkavoKit does this for C2PA and identity calls (ArkavoKit#38).
+One listener serves every client (`/ws`, `/media`, KAS, `/c2pa`, `.well-known`), so a
+client without TLS 1.3 fails the handshake on all of them. ArkavoKit also requires TLS 1.3
+on its side for C2PA and identity calls (ArkavoKit#38).
 
-To make the listener 1.3-only, replace `ServerConfig::builder()` with
-`ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])`. Clients
-without TLS 1.3 then fail the handshake.
+`TLS_ALLOW_TLS12` (default `false`; `true`/`false`, `1`/`0`, `yes`/`no`, anything else
+stops startup) re-admits TLS 1.2 as an ops rollback if a client turns out to need it.
+arks logs a warning at startup while it is on. A 1.3-capable client still gets 1.3: TLS
+1.3's downgrade protection (RFC 8446 §4.1.3) stops an attacker forcing it down to 1.2.
 
 ## Outbound
 

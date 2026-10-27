@@ -5,6 +5,7 @@ pub mod c2pa_kms;
 pub mod c2pa_signing;
 pub mod cbor_protocol;
 pub mod crypto;
+pub mod env_flag;
 pub mod fairplay;
 #[cfg(feature = "http3")]
 pub mod h3;
