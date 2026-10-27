@@ -85,7 +85,7 @@ z85 = "3.0"
 
 # Chain-driven KAS dependencies
 subxt = { version = "0.51", features = ["jsonrpsee"] }
-twox-hash = "1.6"
+twox-hash = "2.1"
 blake2 = "0.10"
 secrecy = { version = "0.8", features = ["serde"] }
 zeroize = { version = "1.7", features = ["derive"] }
