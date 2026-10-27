@@ -11,7 +11,7 @@ use std::time::Duration;
 use aws_sdk_kms::primitives::Blob;
 use aws_sdk_kms::types::{KeySpec, KeyUsageType, MessageType, SigningAlgorithmSpec};
 use c2pa::{Signer, SigningAlg};
-use log::warn;
+use nanotdf::warn;
 use sha2::{Digest, Sha256};
 
 /// Upper bound on one key-service signing call.

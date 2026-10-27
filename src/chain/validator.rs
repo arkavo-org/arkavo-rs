@@ -6,8 +6,8 @@ use crate::chain::cache::SessionCache;
 use crate::chain::client::ChainClient;
 use crate::chain::error::ValidationError;
 use crate::chain::types::{ChainValidationRequest, SessionGrant, ValidatedSession};
+use crate::{debug, info, warn};
 use async_trait::async_trait;
-use log::{debug, info, warn};
 use std::sync::Arc;
 
 /// Trait for session validation.

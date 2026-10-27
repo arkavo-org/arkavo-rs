@@ -1,5 +1,5 @@
+use crate::{error, info};
 use async_nats::Client as NatsClient;
-use log::{error, info};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;

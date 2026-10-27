@@ -40,7 +40,9 @@ fn envelope_keys_from_env() -> Result<Option<Arc<EnvelopeKeys>>, String> {
                 "MEDIA_ENVELOPE_RSA_RETIRED_KEY_PATHS needs MEDIA_ENVELOPE_RSA_KEY_PATH".into(),
             );
         }
-        log::info!("FairPlay key-envelope profile disabled: MEDIA_ENVELOPE_RSA_KEY_PATH is unset");
+        nanotdf::info!(
+            "FairPlay key-envelope profile disabled: MEDIA_ENVELOPE_RSA_KEY_PATH is unset"
+        );
         return Ok(None);
     };
     let current = read_envelope_key("MEDIA_ENVELOPE_RSA_KEY_PATH", &path)?;
@@ -49,7 +51,7 @@ fn envelope_keys_from_env() -> Result<Option<Arc<EnvelopeKeys>>, String> {
         .map(|p| read_envelope_key("MEDIA_ENVELOPE_RSA_RETIRED_KEY_PATHS", p))
         .collect::<Result<Vec<_>, _>>()?;
     let keys = EnvelopeKeys::new(current, retired)?;
-    log::info!(
+    nanotdf::info!(
         "FairPlay key-envelope profile enabled: current kid {}, {} retired",
         keys.current_kid(),
         keys.kids().count() - 1
@@ -86,11 +88,11 @@ pub fn device_verifier_from_env(
 
 pub fn license_authz_from_env(platform_url: Option<&str>) -> Result<Option<LicenseAuthz>, String> {
     let Some(platform_url) = platform_url else {
-        log::warn!("FairPlay licensing disabled: OPENTDF_PLATFORM_URL is unset");
+        nanotdf::warn!("FairPlay licensing disabled: OPENTDF_PLATFORM_URL is unset");
         return Ok(None);
     };
     let Ok(secret) = std::env::var("ARKS_MEDIA_CLIENT_SECRET") else {
-        log::warn!("FairPlay licensing disabled: ARKS_MEDIA_CLIENT_SECRET is unset");
+        nanotdf::warn!("FairPlay licensing disabled: ARKS_MEDIA_CLIENT_SECRET is unset");
         return Ok(None);
     };
     let client_id =

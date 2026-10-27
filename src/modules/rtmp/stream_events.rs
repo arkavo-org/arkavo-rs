@@ -154,18 +154,18 @@ impl StreamEventBroadcaster {
             match event.encode() {
                 Ok(message) => {
                     if let Err(e) = client.publish(self.subject.clone(), message.into()).await {
-                        log::error!(
+                        nanotdf::error!(
                             "Failed to publish {} event for {}: {}",
                             event_type,
                             stream_key,
                             e
                         );
                     } else {
-                        log::info!("Published {} event for {}", event_type, stream_key);
+                        nanotdf::info!("Published {} event for {}", event_type, stream_key);
                     }
                 }
                 Err(e) => {
-                    log::error!(
+                    nanotdf::error!(
                         "Failed to encode {} event for {}: {}",
                         event_type,
                         stream_key,
@@ -174,7 +174,7 @@ impl StreamEventBroadcaster {
                 }
             }
         } else {
-            log::debug!(
+            nanotdf::debug!(
                 "NATS not available, skipping {} event for {}",
                 event_type,
                 stream_key

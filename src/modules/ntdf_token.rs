@@ -10,7 +10,7 @@ use aes_gcm::aead::KeyInit;
 use aes_gcm::aead::{Aead, Key};
 use aes_gcm::Aes256Gcm;
 use hkdf::Hkdf;
-use log::{debug, info, warn};
+use nanotdf::{debug, info, warn};
 use opentdf_kas::custom_ecdh;
 use opentdf_protocol::binary::BinaryRead;
 use opentdf_protocol::binary::BinaryWrite;

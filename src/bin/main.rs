@@ -38,7 +38,7 @@ use axum::response::IntoResponse;
 use flatbuffers::root;
 use futures_util::{SinkExt, StreamExt};
 use jsonwebtoken::{decode, DecodingKey, Validation};
-use log::{error, info, warn};
+use nanotdf::{error, info, warn};
 use nanotdf::{BinaryParser, PolicyType, ProtocolEnum, ResourceLocator};
 use once_cell::sync::OnceCell;
 use p256::ecdh::EphemeralSecret;
@@ -856,19 +856,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         use std::path::PathBuf;
 
         let credentials_path = std::env::var("FAIRPLAY_CREDENTIALS_PATH").unwrap_or_else(|_| {
-            log::warn!("FAIRPLAY_CREDENTIALS_PATH not set, using default");
+            nanotdf::warn!("FAIRPLAY_CREDENTIALS_PATH not set, using default");
             "./vendor/FairPlay_Streaming_Server_SDK_26/Development/Key_Server_Module/credentials"
                 .to_string()
         });
 
         match FairPlayHandler::new(PathBuf::from(credentials_path)) {
             Ok(handler) => {
-                log::info!("FairPlay handler initialized successfully");
+                nanotdf::info!("FairPlay handler initialized successfully");
                 Arc::new(handler)
             }
             Err(e) => {
-                log::error!("Failed to initialize FairPlay handler: {}", e);
-                log::error!("FairPlay support will be disabled");
+                nanotdf::error!("Failed to initialize FairPlay handler: {}", e);
+                nanotdf::error!("FairPlay support will be disabled");
                 Arc::new(FairPlayHandler::new(PathBuf::from(".")).unwrap())
             }
         }
@@ -1506,7 +1506,7 @@ fn verify_token(
 ) -> Result<Claims, jsonwebtoken::errors::Error> {
     if settings.jwt_validation_disabled {
         // Development mode - disable signature validation
-        log::warn!(
+        nanotdf::warn!(
             "⚠️  JWT signature validation is DISABLED - for development only! \
              Set JWT_VALIDATION_DISABLED=false for production."
         );
@@ -1866,7 +1866,7 @@ async fn handle_rewrap(
             // 3. Derived from a known policy signing key
             //
             // Without the public key, we can only validate format
-            log::warn!(
+            nanotdf::warn!(
                 "ECDSA policy binding signature format valid, but cryptographic verification \
                  requires policy authority public key (not implemented)"
             );
@@ -1891,7 +1891,7 @@ async fn handle_rewrap(
             // GMAC verification requires the symmetric key derived during rewrap
             // The GMAC tag is computed over the policy bytes using the payload key
             // We'll verify this later in the rewrap process after deriving the key
-            log::warn!(
+            nanotdf::warn!(
                 "GMAC policy binding tag format valid, but cryptographic verification \
                  requires payload key (deferred to rewrap)"
             );
@@ -2316,7 +2316,7 @@ async fn handle_chain_rewrap(
             );
         }
         Err(e) => {
-            log::warn!("Chain validation failed: {:?}", e);
+            nanotdf::warn!("Chain validation failed: {:?}", e);
             let (code, message) = match e {
                 ValidationError::SessionNotFound { session_id } => (
                     "policy_denied",

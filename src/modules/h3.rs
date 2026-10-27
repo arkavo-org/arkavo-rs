@@ -13,7 +13,7 @@ use axum::extract::ConnectInfo;
 use axum::Router;
 use bytes::Buf;
 use http::{Method, StatusCode};
-use log::{debug, info};
+use nanotdf::{debug, info};
 use quinn::crypto::rustls::QuicServerConfig;
 use rustls::ServerConfig;
 use rustls_pemfile::{certs, pkcs8_private_keys};

@@ -17,7 +17,7 @@ use axum::{
 };
 use base64::Engine;
 use chrono::Utc;
-use log::{error, info, warn};
+use nanotdf::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;

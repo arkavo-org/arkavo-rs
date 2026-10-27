@@ -124,22 +124,22 @@ impl CoseKeyCache {
         }
 
         let resp = self.http.get(url).send().await.map_err(|e| {
-            log::warn!("cose-keys GET {url}: {e}");
+            nanotdf::warn!("cose-keys GET {url}: {e}");
             VerifyError::KeySet
         })?;
         if !resp.status().is_success() {
-            log::warn!("cose-keys GET {url}: HTTP {}", resp.status());
+            nanotdf::warn!("cose-keys GET {url}: HTTP {}", resp.status());
             return Err(VerifyError::KeySet);
         }
         let body = resp.bytes().await.map_err(|e| {
-            log::warn!("cose-keys body: {e}");
+            nanotdf::warn!("cose-keys body: {e}");
             VerifyError::KeySet
         })?;
         let keys = parse_cose_key_set(&body).map_err(|e| {
-            log::warn!("cose-keys parse: {e}");
+            nanotdf::warn!("cose-keys parse: {e}");
             VerifyError::KeySet
         })?;
-        log::info!("Refreshed COSE key set ({} keys)", keys.len());
+        nanotdf::info!("Refreshed COSE key set ({} keys)", keys.len());
         let mut cache = self.cache.write().await;
         cache.keys = keys.into_iter().collect();
         cache.last_fetch = Some(Instant::now());
@@ -157,14 +157,14 @@ pub fn parse_cose_key_set(bytes: &[u8]) -> Result<Vec<(Vec<u8>, VerifyingKey)>, 
         let key = match coset::CoseKey::from_cbor_value(entry) {
             Ok(k) => k,
             Err(e) => {
-                log::warn!("Skipping unparseable COSE key in set: {e:?}");
+                nanotdf::warn!("Skipping unparseable COSE key in set: {e:?}");
                 continue;
             }
         };
         match p256_from_cose_key(&key) {
             Ok(vk) if !key.key_id.is_empty() => out.push((key.key_id.clone(), vk)),
-            Ok(_) => log::warn!("Skipping COSE key without kid"),
-            Err(e) => log::warn!("Skipping non-P-256 COSE key: {e}"),
+            Ok(_) => nanotdf::warn!("Skipping COSE key without kid"),
+            Err(e) => nanotdf::warn!("Skipping non-P-256 COSE key: {e}"),
         }
     }
     if out.is_empty() {
