@@ -19,6 +19,12 @@ pub struct Person {
     /// Read by C2PA signing (arkavo-rs#120), which is behind the `c2pa_signing` feature.
     #[cfg_attr(not(feature = "c2pa_signing"), allow(dead_code))]
     pub entitlements: Vec<String>,
+    /// The token's `iss` and `arkavo_account_id`: a DeviceCheck token binds to this
+    /// person when both match (arkavo-rs#133, the platform's rule).
+    #[cfg_attr(not(feature = "c2pa_signing"), allow(dead_code))]
+    pub iss: String,
+    #[cfg_attr(not(feature = "c2pa_signing"), allow(dead_code))]
+    pub arkavo_account_id: Option<String>,
     /// The raw bearer, forwarded to the platform as the decision entity.
     pub token: String,
 }
@@ -90,6 +96,8 @@ impl PersonTokenVerifier {
         Ok(Person {
             sub: claims.sub,
             entitlements: claims.arkavo_entitlements.unwrap_or_default(),
+            iss: claims.iss,
+            arkavo_account_id: claims.arkavo_account_id,
             token: token.to_string(),
         })
     }

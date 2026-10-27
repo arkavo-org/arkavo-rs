@@ -73,6 +73,17 @@ pub fn person_verifier_from_env() -> PersonTokenVerifier {
     PersonTokenVerifier::new(CoseKeyCache::new(keys_url), iss, aud)
 }
 
+/// The DeviceCheck token verifier for C2PA signing (arkavo-rs#133): identity's
+/// COSE keys and issuer, as for passkey tokens.
+#[cfg(feature = "c2pa_signing")]
+pub fn device_verifier_from_env(
+    app_ids: std::collections::HashSet<String>,
+) -> crate::modules::c2pa_device::DeviceTokenVerifier {
+    let iss = issuer();
+    let keys_url = format!("{}/.well-known/cose-keys", iss.trim_end_matches('/'));
+    crate::modules::c2pa_device::DeviceTokenVerifier::new(CoseKeyCache::new(keys_url), iss, app_ids)
+}
+
 pub fn license_authz_from_env(platform_url: Option<&str>) -> Result<Option<LicenseAuthz>, String> {
     let Some(platform_url) = platform_url else {
         log::warn!("FairPlay licensing disabled: OPENTDF_PLATFORM_URL is unset");
