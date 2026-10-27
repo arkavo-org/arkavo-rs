@@ -212,7 +212,7 @@ Each WebSocket connection maintains:
 - **Key Agreement**: ECDH using P-256 (secp256r1) with custom x-coordinate extraction
 - **Session Keys**: HKDF-SHA256 key derivation from shared secret
 - **Symmetric Encryption**: AES-256-GCM for rewrapping data encryption keys (DEK)
-- **TLS**: Minimum TLS 1.2, configurable certificate paths
+- **TLS**: Inbound TLS 1.3 only (`TLS_ALLOW_TLS12=true` re-admits 1.2 as a rollback; HTTP/3 is always 1.3), configurable certificate paths. Outbound `reqwest` clients (identity, platform) require TLS 1.3 via `modules::http_client::builder()`; see `docs/tls.md`
 
 ## Configuration
 
@@ -221,6 +221,7 @@ Environment variables:
 export PORT=8443                                   # Unified server port (HTTP + WebSocket)
 export TLS_CERT_PATH=/path/to/fullchain.pem        # Optional, disables TLS if not set
 export TLS_KEY_PATH=/path/to/privkey.pem
+export TLS_ALLOW_TLS12=false                       # Listener is TLS 1.3 only; true re-admits TLS 1.2 (ops rollback); true/false, 1/0, yes/no, anything else stops startup
 export KAS_KEY_PATH=/path/to/recipient_private_key.pem  # EC key for NanoTDF (required)
 export KAS_RSA_KEY_PATH=/path/to/kas_rsa_private_pkcs8.pem  # RSA key for Standard TDF (optional)
 export NATS_URL=nats://localhost:4222

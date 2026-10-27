@@ -75,7 +75,7 @@ impl PlatformProxyState {
             return Err(format!("invalid upstream URL scheme: {}", parsed.scheme()));
         }
         let upstream_base = upstream.trim_end_matches('/').to_string();
-        let client = Client::builder()
+        let client = crate::modules::http_client::builder()
             .timeout(Duration::from_secs(30))
             .pool_max_idle_per_host(16)
             .build()

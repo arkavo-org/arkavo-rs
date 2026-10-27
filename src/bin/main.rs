@@ -644,6 +644,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(load_tls_config(
             &settings.tls_cert_path,
             &settings.tls_key_path,
+            settings.tls_allow_tls12,
         )?)
     } else {
         None
@@ -1343,8 +1344,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn load_tls_config(
     cert_path: &str,
     key_path: &str,
+    allow_tls12: bool,
 ) -> Result<TlsAcceptor, Box<dyn std::error::Error>> {
-    let config = load_rustls_config(cert_path, key_path)?;
+    let config = load_rustls_config(cert_path, key_path, allow_tls12)?;
     let acceptor = TlsAcceptor::from(std::sync::Arc::new(config));
     Ok(acceptor)
 }
@@ -1352,6 +1354,7 @@ fn load_tls_config(
 fn load_rustls_config(
     cert_path: &str,
     key_path: &str,
+    allow_tls12: bool,
 ) -> Result<rustls::ServerConfig, Box<dyn std::error::Error>> {
     use std::io::BufReader;
 
@@ -1382,8 +1385,28 @@ fn load_rustls_config(
     let private_key = rustls::pki_types::PrivateKeyDer::Pkcs8(keys.remove(0));
     info!("Private key loaded successfully");
 
-    // Create rustls server configuration
-    let mut config = ServerConfig::builder()
+    let config = rustls_server_config(cert_chain, private_key, allow_tls12)?;
+    if allow_tls12 {
+        warn!("TLS_ALLOW_TLS12=true: the listener accepts TLS 1.2 as well as TLS 1.3");
+    } else {
+        info!("TLS configuration created successfully (TLS 1.3 only)");
+    }
+    Ok(config)
+}
+
+/// The listener's TLS: TLS 1.3 only, unless `allow_tls12` (the `TLS_ALLOW_TLS12`
+/// rollback) also admits TLS 1.2. See docs/tls.md.
+fn rustls_server_config(
+    cert_chain: Vec<rustls::pki_types::CertificateDer<'static>>,
+    private_key: rustls::pki_types::PrivateKeyDer<'static>,
+    allow_tls12: bool,
+) -> Result<rustls::ServerConfig, Box<dyn std::error::Error>> {
+    let versions: &[&rustls::SupportedProtocolVersion] = if allow_tls12 {
+        &[&rustls::version::TLS13, &rustls::version::TLS12]
+    } else {
+        &[&rustls::version::TLS13]
+    };
+    let mut config = ServerConfig::builder_with_protocol_versions(versions)
         .with_no_client_auth()
         .with_single_cert(cert_chain, private_key)
         .map_err(|e| format!("Failed to create TLS config: {}", e))?;
@@ -1391,8 +1414,6 @@ fn load_rustls_config(
     // Negotiate HTTP/2 for REST clients while keeping HTTP/1.1 for the WebSocket
     // upgrade (/ws). Without ALPN, clients silently fall back to HTTP/1.1 only.
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-
-    info!("TLS configuration created successfully");
     Ok(config)
 }
 
@@ -2947,6 +2968,8 @@ struct ServerSettings {
     tls_enabled: bool,
     tls_cert_path: String,
     tls_key_path: String,
+    /// `TLS_ALLOW_TLS12`: ops rollback that re-admits TLS 1.2 on the listener
+    tls_allow_tls12: bool,
     kas_key_path: String,
     enable_timing_logs: bool,
     nats_url: String,
@@ -2987,6 +3010,7 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
                 .unwrap()
                 .to_string()
         }),
+        tls_allow_tls12: modules::env_flag::from_env("TLS_ALLOW_TLS12")?,
         kas_key_path: env::var("KAS_KEY_PATH").unwrap_or_else(|_| {
             current_dir
                 .join("recipient_private_key.pem")
@@ -3144,6 +3168,75 @@ fn convert_rating_level(level: arkavo::RatingLevel) -> RatingLevel {
         x if x == arkavo::RatingLevel::moderate.0 => RatingLevel::Moderate,
         x if x == arkavo::RatingLevel::severe.0 => RatingLevel::Severe,
         _ => RatingLevel::Unused, // Default to Unused for any invalid values
+    }
+}
+
+#[cfg(test)]
+mod tls_version_tests {
+    use super::*;
+    use tokio_rustls::TlsConnector;
+
+    /// Handshakes a client limited to `client_versions` against the listener
+    /// config; returns the negotiated version.
+    async fn handshake(
+        allow_tls12: bool,
+        client_versions: &[&'static rustls::SupportedProtocolVersion],
+    ) -> Result<rustls::ProtocolVersion, std::io::Error> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert = ck.cert.der().clone();
+        let key = rustls::pki_types::PrivateKeyDer::Pkcs8(
+            rustls::pki_types::PrivatePkcs8KeyDer::from(ck.key_pair.serialize_der()),
+        );
+        let server = rustls_server_config(vec![cert.clone()], key, allow_tls12).unwrap();
+
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(cert).unwrap();
+        let client = rustls::ClientConfig::builder_with_protocol_versions(client_versions)
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let acceptor = TlsAcceptor::from(Arc::new(server));
+        let server_task = tokio::spawn(async move { acceptor.accept(server_io).await.is_ok() });
+        let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+        let result = TlsConnector::from(Arc::new(client))
+            .connect(name, client_io)
+            .await
+            .map(|s| s.get_ref().1.protocol_version().unwrap());
+        let _ = server_task.await;
+        result
+    }
+
+    #[tokio::test]
+    async fn listener_negotiates_tls13() {
+        let v = handshake(false, &[&rustls::version::TLS13]).await.unwrap();
+        assert_eq!(v, rustls::ProtocolVersion::TLSv1_3);
+    }
+
+    #[tokio::test]
+    async fn listener_refuses_a_tls12_only_client() {
+        let err = handshake(false, &[&rustls::version::TLS12])
+            .await
+            .unwrap_err();
+        let tls = err
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<rustls::Error>())
+            .unwrap_or_else(|| panic!("not a TLS error: {err:?}"));
+        assert_eq!(
+            tls,
+            &rustls::Error::AlertReceived(rustls::AlertDescription::ProtocolVersion)
+        );
+    }
+
+    #[tokio::test]
+    async fn rollback_admits_tls12_and_still_prefers_tls13() {
+        let v = handshake(true, &[&rustls::version::TLS12]).await.unwrap();
+        assert_eq!(v, rustls::ProtocolVersion::TLSv1_2);
+        let v = handshake(true, &[&rustls::version::TLS13, &rustls::version::TLS12])
+            .await
+            .unwrap();
+        assert_eq!(v, rustls::ProtocolVersion::TLSv1_3);
     }
 }
 
