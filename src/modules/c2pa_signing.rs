@@ -20,7 +20,7 @@ use super::c2pa_kms::{
 };
 use super::license::person_token::PersonTokenVerifier;
 use axum::http::HeaderMap;
-use log::{error, info, warn};
+use nanotdf::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::sync::Arc;
@@ -88,7 +88,7 @@ impl C2paConfig {
     /// Load C2PA configuration from environment variables. With C2PA_SIGNER=kms this
     /// also checks that the KMS key matches the signer certificate.
     pub async fn from_env() -> Result<Self, String> {
-        use log::info;
+        use nanotdf::info;
 
         info!("Loading C2PA configuration from environment...");
 

@@ -6,9 +6,9 @@ use axum::{
     Json,
 };
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
-use log::{error, info, warn};
 use nanotdf::chain::{ChainValidationRequest, SessionValidator, ValidationError};
 use nanotdf::BinaryParser;
+use nanotdf::{error, info, warn};
 use opentdf_kas::{
     compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek, rewrap_dek_simple,
     NanoTdfVersion,

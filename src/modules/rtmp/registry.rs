@@ -79,7 +79,7 @@ impl StreamRegistry {
 
         streams.insert(stream_key.to_string(), Arc::new(RwLock::new(active_stream)));
 
-        log::info!("Publisher registered: {}", stream_key);
+        nanotdf::info!("Publisher registered: {}", stream_key);
         sender
     }
 
@@ -87,7 +87,7 @@ impl StreamRegistry {
     pub async fn unregister_publisher(&self, stream_key: &str) {
         let mut streams = self.streams.write().await;
         if streams.remove(stream_key).is_some() {
-            log::info!("Publisher unregistered: {}", stream_key);
+            nanotdf::info!("Publisher unregistered: {}", stream_key);
         }
     }
 
@@ -116,10 +116,10 @@ impl StreamRegistry {
             let metadata = stream.stream_metadata.clone();
             let ntdf_header = stream.ntdf_header.clone();
 
-            log::info!("Subscriber connected to: {}", stream_key);
+            nanotdf::info!("Subscriber connected to: {}", stream_key);
             Some((receiver, video_header, audio_header, metadata, ntdf_header))
         } else {
-            log::debug!("Stream not found for subscription: {}", stream_key);
+            nanotdf::debug!("Stream not found for subscription: {}", stream_key);
             None
         }
     }
@@ -157,7 +157,7 @@ impl StreamRegistry {
         if let Some(stream) = streams.get(stream_key) {
             let mut stream = stream.write().await;
             stream.ntdf_header = Some(ntdf_header);
-            log::info!("Cached ntdf_header for stream: {}", stream_key);
+            nanotdf::info!("Cached ntdf_header for stream: {}", stream_key);
         }
     }
 

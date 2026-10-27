@@ -127,7 +127,7 @@ pub async fn cache_manifest(
         .await
         .map_err(|e| ManifestError::RedisError(e.to_string()))?;
 
-    log::debug!(
+    nanotdf::debug!(
         "Cached manifest for stream {} (TTL: {}s)",
         manifest.stream_key,
         MANIFEST_TTL_SECONDS
@@ -179,7 +179,7 @@ pub async fn delete_cached_manifest(
         .await
         .map_err(|e| ManifestError::RedisError(e.to_string()))?;
 
-    log::debug!("Deleted cached manifest for stream {}", stream_key);
+    nanotdf::debug!("Deleted cached manifest for stream {}", stream_key);
 
     Ok(())
 }

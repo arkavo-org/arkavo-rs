@@ -88,7 +88,7 @@ impl FacadeState {
             .ok()
             .filter(|s| !s.is_empty());
         if public_url.is_none() {
-            log::warn!(
+            nanotdf::warn!(
                 "AUTHZEN_PUBLIC_URL is unset; the discovery document will be derived \
                  from the request Host header. Set it in production."
             );
@@ -325,7 +325,7 @@ async fn verify_device_tokens(
                 }
                 Err(VerifyError::KeySet) => return Err(VerifyError::KeySet),
                 Err(e) => {
-                    log::warn!(
+                    nanotdf::warn!(
                         "authzen: evaluation_id={rid} a device token does not verify ({e:?}); \
                          its evaluations are denied"
                     );
@@ -335,7 +335,7 @@ async fn verify_device_tokens(
         }
     }
     if tokenless > 0 {
-        log::warn!(
+        nanotdf::warn!(
             "authzen: evaluation_id={rid} dropped {tokenless} device(s) sent without a \
              DeviceCheck token; the platform binds a device only by its signed token"
         );
@@ -492,7 +492,7 @@ fn apply_decisions(
             // shared a resource.id and the PDP deduplicated them. Deny closed,
             // but say so, otherwise it is indistinguishable from a policy deny.
             None => {
-                log::warn!("authzen: no upstream decision for ephemeral id {eid}");
+                nanotdf::warn!("authzen: no upstream decision for ephemeral id {eid}");
                 Some(deny_closed(
                     rid,
                     Some(*index),
@@ -525,15 +525,15 @@ async fn post_connect(
         req = req.bearer_auth(bearer);
     }
     let resp = req.send().await.map_err(|e| {
-        log::warn!("authzen upstream {method}: {e}");
+        nanotdf::warn!("authzen upstream {method}: {e}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
     if !resp.status().is_success() {
-        log::warn!("authzen upstream {method}: HTTP {}", resp.status());
+        nanotdf::warn!("authzen upstream {method}: HTTP {}", resp.status());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
     resp.json().await.map_err(|e| {
-        log::warn!("authzen upstream {method} json: {e}");
+        nanotdf::warn!("authzen upstream {method} json: {e}");
         StatusCode::INTERNAL_SERVER_ERROR
     })
 }
@@ -796,7 +796,7 @@ async fn evaluations(
                 // fill_remaining_deny, denying evaluations the PDP never ruled on
                 // with no error signal to the caller.
                 if parsed_groups.len() != groups.len() {
-                    log::warn!(
+                    nanotdf::warn!(
                         "authzen GetDecisionBulk: {} decisionResponses for {} groups",
                         parsed_groups.len(),
                         groups.len()
@@ -825,7 +825,7 @@ async fn evaluations(
     fill_remaining_deny(&mut results, &rid, "unspecified");
     let evaluations: Vec<Value> = results.into_iter().map(|v| v.unwrap()).collect();
     if let Some(first) = prepared.first() {
-        log::info!(
+        nanotdf::info!(
             "authzen evaluations evaluation_id={} pep_sub={} subject_id={} batch={}",
             rid,
             pep.sub,
@@ -840,7 +840,7 @@ async fn evaluations(
 }
 
 fn log_eval(pep_sub: &str, p: &Prepared, permit: bool, rid: &str) {
-    log::info!(
+    nanotdf::info!(
         "authzen evaluation evaluation_id={} pep_sub={} subject_id={} action={} resource_type={} decision={}",
         rid,
         pep_sub,

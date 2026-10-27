@@ -315,7 +315,7 @@ fn pe_claims(subject: &Value) -> Result<Value, TranslateError> {
                     m.insert("arkavo_entitlements".into(), ents);
                 }
                 Ok(None) => {}
-                Err(count) => log::warn!(
+                Err(count) => nanotdf::warn!(
                     "dropping forwarded arkavo_entitlements for subject {id}: {count} Patreon \
                      entitlements exceeds cap {MAX_FORWARDED_ENTITLEMENTS}"
                 ),

@@ -25,7 +25,7 @@ use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use log::{error, info, warn};
+use nanotdf::{error, info, warn};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;

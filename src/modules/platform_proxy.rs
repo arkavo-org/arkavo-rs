@@ -108,7 +108,7 @@ pub async fn proxy(
     let body_bytes: Bytes = axum::body::to_bytes(body, MAX_PROXY_BODY)
         .await
         .map_err(|e| {
-            log::warn!("proxy request body read error: {e}");
+            nanotdf::warn!("proxy request body read error: {e}");
             StatusCode::PAYLOAD_TOO_LARGE
         })?;
 
@@ -123,7 +123,7 @@ pub async fn proxy(
         .send()
         .await
         .map_err(|e| {
-            log::warn!("proxy upstream error: {e}");
+            nanotdf::warn!("proxy upstream error: {e}");
             StatusCode::BAD_GATEWAY
         })?;
 
@@ -132,7 +132,7 @@ pub async fn proxy(
     strip_proxy_headers(&mut resp_headers);
 
     let bytes = upstream_resp.bytes().await.map_err(|e| {
-        log::warn!("proxy upstream body read error: {e}");
+        nanotdf::warn!("proxy upstream body read error: {e}");
         StatusCode::BAD_GATEWAY
     })?;
 
@@ -256,7 +256,7 @@ pub async fn kas_public_key(
     let upstream_resp = match state.client.post(&url).json(&body).send().await {
         Ok(resp) => resp,
         Err(e) => {
-            log::warn!("kas_public_key upstream error: {e}");
+            nanotdf::warn!("kas_public_key upstream error: {e}");
             return error_response(
                 StatusCode::BAD_GATEWAY,
                 "unavailable",
@@ -269,7 +269,7 @@ pub async fn kas_public_key(
     let bytes = match upstream_resp.bytes().await {
         Ok(b) => b,
         Err(e) => {
-            log::warn!("kas_public_key upstream body read error: {e}");
+            nanotdf::warn!("kas_public_key upstream body read error: {e}");
             return error_response(
                 StatusCode::BAD_GATEWAY,
                 "unavailable",
@@ -297,7 +297,7 @@ pub async fn kas_public_key(
         })
         .into_response(),
         Err(e) => {
-            log::warn!("kas_public_key upstream response not understood: {e}");
+            nanotdf::warn!("kas_public_key upstream response not understood: {e}");
             error_response(
                 StatusCode::BAD_GATEWAY,
                 "unavailable",

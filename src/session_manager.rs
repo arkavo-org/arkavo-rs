@@ -1,6 +1,6 @@
 use crate::modules::MediaProtocol;
+use crate::{info, warn};
 use chrono::Utc;
-use log::{info, warn};
 use redis::{AsyncCommands, Client as RedisClient};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

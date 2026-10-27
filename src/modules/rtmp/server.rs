@@ -96,11 +96,11 @@ impl RtmpServer {
             .await
             .map_err(ServerError::BindError)?;
 
-        log::info!("NTDF-RTMP server listening on {}", addr);
-        log::info!("Protocol: NTDF-RTMP (NanoTDF over RTMP)");
-        log::info!("Features: End-to-end encryption, manifest caching for late joiners");
+        nanotdf::info!("NTDF-RTMP server listening on {}", addr);
+        nanotdf::info!("Protocol: NTDF-RTMP (NanoTDF over RTMP)");
+        nanotdf::info!("Features: End-to-end encryption, manifest caching for late joiners");
         if self.event_broadcaster.is_some() {
-            log::info!("Stream events: NATS broadcasting enabled");
+            nanotdf::info!("Stream events: NATS broadcasting enabled");
         }
 
         // Wrap shared state in Arc for cloning to spawned tasks
@@ -112,7 +112,7 @@ impl RtmpServer {
         loop {
             match listener.accept().await {
                 Ok((socket, addr)) => {
-                    log::debug!("Accepted RTMP connection from {}", addr);
+                    nanotdf::debug!("Accepted RTMP connection from {}", addr);
 
                     // Clone shared state for this connection
                     let redis = redis_client.clone();
@@ -125,12 +125,12 @@ impl RtmpServer {
                         let session = RtmpSession::new(redis, kas_key, broadcaster, registry);
 
                         if let Err(e) = session.handle_connection(socket).await {
-                            log::error!("RTMP session error from {}: {}", addr, e);
+                            nanotdf::error!("RTMP session error from {}: {}", addr, e);
                         }
                     });
                 }
                 Err(e) => {
-                    log::error!("Failed to accept RTMP connection: {}", e);
+                    nanotdf::error!("Failed to accept RTMP connection: {}", e);
                     // Continue accepting other connections
                 }
             }
@@ -147,7 +147,7 @@ impl RtmpServer {
             .await
             .map_err(ServerError::BindError)?;
 
-        log::info!(
+        nanotdf::info!(
             "NTDF-RTMP server listening on {} (with graceful shutdown)",
             addr
         );
@@ -162,7 +162,7 @@ impl RtmpServer {
                 result = listener.accept() => {
                     match result {
                         Ok((socket, addr)) => {
-                            log::debug!("Accepted RTMP connection from {}", addr);
+                            nanotdf::debug!("Accepted RTMP connection from {}", addr);
 
                             let redis = redis_client.clone();
                             let kas_key = kas_private_key;
@@ -172,17 +172,17 @@ impl RtmpServer {
                             tokio::spawn(async move {
                                 let session = RtmpSession::new(redis, kas_key, broadcaster, registry);
                                 if let Err(e) = session.handle_connection(socket).await {
-                                    log::error!("RTMP session error from {}: {}", addr, e);
+                                    nanotdf::error!("RTMP session error from {}: {}", addr, e);
                                 }
                             });
                         }
                         Err(e) => {
-                            log::error!("Failed to accept RTMP connection: {}", e);
+                            nanotdf::error!("Failed to accept RTMP connection: {}", e);
                         }
                     }
                 }
                 _ = shutdown.recv() => {
-                    log::info!("RTMP server shutting down");
+                    nanotdf::info!("RTMP server shutting down");
                     break;
                 }
             }

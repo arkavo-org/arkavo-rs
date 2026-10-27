@@ -32,7 +32,7 @@ impl FairPlayHandler {
     #[allow(dead_code)]
     pub fn new(credentials_path: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
         let key_server = FairPlayKeyServer::new(credentials_path)?;
-        log::info!(
+        nanotdf::info!(
             "FairPlay handler initialized (SDK v{})",
             key_server.version()
         );
@@ -47,7 +47,7 @@ impl FairPlayHandler {
     #[cfg(not(feature = "fairplay"))]
     #[allow(dead_code)]
     pub fn new(_credentials_path: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
-        log::warn!("FairPlay feature not enabled at compile time");
+        nanotdf::warn!("FairPlay feature not enabled at compile time");
         Ok(Self { enabled: false })
     }
 
@@ -76,7 +76,7 @@ impl FairPlayHandler {
         crate::modules::license::issuer::IssuedLicense,
         Box<dyn std::error::Error + Send + Sync>,
     > {
-        log::debug!(
+        nanotdf::debug!(
             "Processing FairPlay key request: asset_id={} content_type={} spc_len={} lease_secs={}",
             asset_id,
             content_type.as_str(),
@@ -99,7 +99,7 @@ impl FairPlayHandler {
         let response =
             tokio::task::spawn_blocking(move || key_server.process_spc(request)).await??;
 
-        log::debug!("FairPlay CKC generated ({} bytes)", response.ckc_data.len());
+        nanotdf::debug!("FairPlay CKC generated ({} bytes)", response.ckc_data.len());
 
         Ok(crate::modules::license::issuer::IssuedLicense {
             ckc: response.ckc_data,

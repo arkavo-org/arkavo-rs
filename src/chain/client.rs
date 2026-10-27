@@ -5,7 +5,7 @@
 
 use crate::chain::error::ChainError;
 use crate::chain::types::SessionGrant;
-use log::{debug, error, info};
+use crate::{debug, error, info};
 use std::sync::atomic::{AtomicU64, Ordering};
 use subxt::{OnlineClient, PolkadotConfig};
 use tokio::sync::RwLock;

@@ -1,0 +1,10 @@
+# The vendored FairPlay SDK enables log's `release_max_level_off`, which compiles the
+# `log` crate's macros out of release builds. Use nanotdf::{info, warn, error, debug,
+# trace} (src/logging.rs), which reach the logger at run time.
+disallowed-macros = [
+    { path = "log::error", reason = "compiled out in release by fpssdk; use nanotdf::error" },
+    { path = "log::warn", reason = "compiled out in release by fpssdk; use nanotdf::warn" },
+    { path = "log::info", reason = "compiled out in release by fpssdk; use nanotdf::info" },
+    { path = "log::debug", reason = "compiled out in release by fpssdk; use nanotdf::debug" },
+    { path = "log::trace", reason = "compiled out in release by fpssdk; use nanotdf::trace" },
+]

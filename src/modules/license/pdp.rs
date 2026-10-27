@@ -39,7 +39,7 @@ pub fn map_connect_error(http_status: u16, body: &Value) -> LicenseError {
             | "out_of_range",
         ) => LicenseError::Forbidden("platform refused the decision request"),
         _ => {
-            log::warn!("license pdp: platform HTTP {http_status}");
+            nanotdf::warn!("license pdp: platform HTTP {http_status}");
             LicenseError::Unavailable("platform decision unavailable")
         }
     }
@@ -84,11 +84,11 @@ impl PlatformPdp {
             .send()
             .await
             .map_err(|e| {
-                log::error!("license pdp: service token request: {e:?}");
+                nanotdf::error!("license pdp: service token request: {e:?}");
                 LicenseError::Unavailable("identity unreachable")
             })?;
         if !resp.status().is_success() {
-            log::error!("license pdp: service token HTTP {}", resp.status());
+            nanotdf::error!("license pdp: service token HTTP {}", resp.status());
             return Err(LicenseError::Unavailable("service credential rejected"));
         }
         let body: Value = resp
@@ -134,7 +134,7 @@ impl PlatformPdp {
                 .send()
                 .await
                 .map_err(|e| {
-                    log::error!("license pdp: GetDecision request: {e:?}");
+                    nanotdf::error!("license pdp: GetDecision request: {e:?}");
                     LicenseError::Unavailable("platform unreachable")
                 })?;
             let status = resp.status();

@@ -31,6 +31,30 @@ use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 use std::sync::Once;
 
+/// `log::info!` and the other `log` macros, but handed straight to the installed
+/// logger: the vendored SDK's `release_max_level_off` feature compiles the `log`
+/// crate's own macros out of release builds (arks `src/logging.rs`).
+macro_rules! log_at {
+    ($level:ident, $($arg:tt)+) => {{
+        let logger = ::log::logger();
+        let metadata = ::log::Metadata::builder()
+            .level(::log::Level::$level)
+            .target(module_path!())
+            .build();
+        if logger.enabled(&metadata) {
+            logger.log(
+                &::log::Record::builder()
+                    .metadata(metadata)
+                    .args(format_args!($($arg)+))
+                    .module_path_static(Some(module_path!()))
+                    .file_static(Some(file!()))
+                    .line(Some(line!()))
+                    .build(),
+            );
+        }
+    }};
+}
+
 static INIT: Once = Once::new();
 
 /// FairPlay Key Server instance
@@ -77,19 +101,26 @@ impl FairPlayKeyServer {
             }
         }
         match std::env::var("FPS_CERT_PATH") {
-            Ok(p) => log::info!("FairPlay certificates: {p}"),
+            Ok(p) => log_at!(Info, "FairPlay certificates: {p}"),
             Err(_) => {
-                log::warn!("FairPlay certificates: no certificates JSON found; SDK default path")
+                log_at!(
+                    Warn,
+                    "FairPlay certificates: no certificates JSON found; SDK default path"
+                )
             }
         }
 
         // Initialize SDK (one-time operation)
         INIT.call_once(|| {
-            log::info!("Initializing FairPlay SDK from: {:?}", credentials_path);
+            log_at!(
+                Info,
+                "Initializing FairPlay SDK from: {:?}",
+                credentials_path
+            );
         });
 
         let sdk_version = Self::get_sdk_version()?;
-        log::info!("FairPlay SDK version: {}", sdk_version);
+        log_at!(Info, "FairPlay SDK version: {}", sdk_version);
 
         Ok(Self {
             credentials_path,
@@ -124,15 +155,16 @@ impl FairPlayKeyServer {
     /// let response = server.process_spc(request).unwrap();
     /// ```
     pub fn process_spc(&self, request: SpcRequest) -> Result<CkcResponse, FairPlayError> {
-        log::debug!(
+        log_at!(
+            Debug,
             "Processing SPC for content_id={} asset_id={}",
             request.content_id,
             request.asset_id
         );
         // Baseline for the SDK 27 upgrade: which SPC versions devices send.
         match spc_version(&request.spc_data) {
-            Some(v) => log::info!("FairPlay SPC version {v:#010x}"),
-            None => log::info!("FairPlay SPC shorter than its version field"),
+            Some(v) => log_at!(Info, "FairPlay SPC version {v:#010x}"),
+            None => log_at!(Info, "FairPlay SPC shorter than its version field"),
         }
 
         // Never hand the SDK key material it would have to repair: its decode
@@ -155,7 +187,7 @@ impl FairPlayKeyServer {
 
             if status as i32 != 0 {
                 // noErr = 0
-                log::error!("fpssdk error status: {}", status as i32);
+                log_at!(Error, "fpssdk error status: {}", status as i32);
                 return Err(FairPlayError::SdkError(status as i32));
             }
 
@@ -169,7 +201,8 @@ impl FairPlayKeyServer {
         };
         let response = parsed?;
 
-        log::debug!(
+        log_at!(
+            Debug,
             "Successfully generated CKC ({} bytes)",
             response.ckc_data.len()
         );

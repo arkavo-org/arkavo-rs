@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 
 // Chain-driven KAS validation
 pub mod chain;
+#[doc(hidden)]
+pub mod logging;
 
 // Session manager for media DRM
 pub mod session_manager;
