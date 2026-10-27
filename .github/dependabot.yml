@@ -6,6 +6,38 @@ updates:
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 3
+    # The RustCrypto digest-0.11 generation has to move together (#152); one crate
+    # alone does not build. These are 0.x crates, where a minor bump is breaking, so
+    # minor and major are ignored; patch releases (security fixes) still come through.
+    ignore:
+      - dependency-name: "sha2"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "sha1"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "hkdf"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "hmac"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "digest"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "p256"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "ecdsa"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "elliptic-curve"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "pkcs8"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "aes-gcm"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "aes"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "rsa"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "rand_core"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "signature"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
