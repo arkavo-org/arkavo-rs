@@ -407,7 +407,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "tower 0.4.13",
- "twox-hash 1.6.3",
+ "twox-hash 2.1.5",
  "unicode-segmentation",
  "url",
  "uuid",
@@ -8215,6 +8215,9 @@ name = "twox-hash"
 version = "2.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
+dependencies = [
+ "rand 0.10.3",
+]
 
 [[package]]
 name = "typed-path"
