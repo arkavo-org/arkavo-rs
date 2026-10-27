@@ -70,12 +70,12 @@ c2pa = { version = "0.91", default-features = false, features = ["file_io", "rus
 x509-parser = { version = "0.18", optional = true }
 aws-sdk-kms = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 mp4parse = { version = "0.17", optional = true }
-# opentdf-rs v0.11.0 - NanoTDF and KAS support
-# Source: https://github.com/arkavo-org/opentdf-rs/releases/tag/0.11.0
-opentdf = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.0" }
-opentdf-crypto = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.0", features = ["kem-ec"] }
-opentdf-protocol = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.0" }
-opentdf-kas = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.2" }
+# opentdf-rs v0.16.1 - NanoTDF and KAS support
+# Source: https://github.com/arkavo-org/opentdf-rs/releases/tag/0.16.1
+opentdf = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.16.1" }
+opentdf-crypto = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.16.1", features = ["kem-ec"] }
+opentdf-protocol = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.16.1" }
+opentdf-kas = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.16.1" }
 rsa = { version = "0.9", features = ["sha2"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
 sha1 = "0.10"

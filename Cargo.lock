@@ -180,15 +180,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arbitrary"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed"
-dependencies = [
- "derive_arbitrary",
-]
-
-[[package]]
 name = "arc-swap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -371,7 +362,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "ink",
- "jsonwebtoken 10.4.0",
+ "jsonwebtoken",
  "log",
  "moka",
  "mp4parse",
@@ -1581,7 +1572,7 @@ dependencies = [
  "webpki-roots",
  "x509-parser",
  "zeroize",
- "zip 9.1.2",
+ "zip",
 ]
 
 [[package]]
@@ -2454,17 +2445,6 @@ name = "derive-where"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e2b94854e8576378ccda7c8de8a66ed8b4e8acbd2c50ec3418ea6c8aaf4b567"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.9",
-]
-
-[[package]]
-name = "derive_arbitrary"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b034bd7d5f032402a2479444dcc6f74e36a03f31854d41680fb240ef682a1ac"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4413,25 +4393,11 @@ dependencies = [
 
 [[package]]
 name = "jsonwebtoken"
-version = "9.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a87cc7a48537badeae96744432de36f4be2b4a34a05a5ef32e9dd8a1c169dde"
-dependencies = [
- "base64 0.22.1",
- "js-sys",
- "pem 3.0.6",
- "ring",
- "serde",
- "serde_json",
- "simple_asn1",
-]
-
-[[package]]
-name = "jsonwebtoken"
 version = "10.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eba32bfb4ffdeaca3e34431072faf01745c9b26d25504aa7a6cf5684334fc4fc"
 dependencies = [
+ "aws-lc-rs",
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
  "getrandom 0.2.17",
@@ -4983,14 +4949,15 @@ dependencies = [
 
 [[package]]
 name = "opentdf"
-version = "0.11.0"
-source = "git+https://github.com/arkavo-org/opentdf-rs?tag=0.11.0#e87df2104326d0e1a1f8579297796187aa0e7a1a"
+version = "0.16.1"
+source = "git+https://github.com/arkavo-org/opentdf-rs?tag=0.16.1#7cdc9451a216525d62c4f01443410749fe44476d"
 dependencies = [
  "aes-gcm",
  "aws-lc-rs",
  "base64 0.22.1",
  "chrono",
- "jsonwebtoken 9.3.1",
+ "ed25519-dalek 2.2.0",
+ "jsonwebtoken",
  "opentdf-crypto",
  "opentdf-protocol",
  "pem 3.0.6",
@@ -5000,20 +4967,20 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "url",
  "uuid",
- "zip 2.6.1",
+ "zip",
 ]
 
 [[package]]
 name = "opentdf-crypto"
-version = "0.11.0"
-source = "git+https://github.com/arkavo-org/opentdf-rs?tag=0.11.0#e87df2104326d0e1a1f8579297796187aa0e7a1a"
+version = "0.16.1"
+source = "git+https://github.com/arkavo-org/opentdf-rs?tag=0.16.1#7cdc9451a216525d62c4f01443410749fe44476d"
 dependencies = [
  "aes",
  "aes-gcm",
  "aws-lc-rs",
  "base64 0.22.1",
- "hex",
  "hkdf",
  "hmac 0.12.1",
  "k256",
@@ -5037,8 +5004,8 @@ dependencies = [
 
 [[package]]
 name = "opentdf-kas"
-version = "0.11.1"
-source = "git+https://github.com/arkavo-org/opentdf-rs?tag=0.11.2#adfdcf427f67dc0b77ea20ef4b6d139a384bd3dc"
+version = "0.16.1"
+source = "git+https://github.com/arkavo-org/opentdf-rs?tag=0.16.1#7cdc9451a216525d62c4f01443410749fe44476d"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -5053,8 +5020,8 @@ dependencies = [
 
 [[package]]
 name = "opentdf-protocol"
-version = "0.11.0"
-source = "git+https://github.com/arkavo-org/opentdf-rs?tag=0.11.0#e87df2104326d0e1a1f8579297796187aa0e7a1a"
+version = "0.16.1"
+source = "git+https://github.com/arkavo-org/opentdf-rs?tag=0.16.1#7cdc9451a216525d62c4f01443410749fe44476d"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -9109,32 +9076,19 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "2.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1dcb24d0152526ae49b9b96c1dcf71850ca1e0b882e4e28ed898a93c41334744"
-dependencies = [
- "arbitrary",
- "crc32fast",
- "crossbeam-utils",
- "flate2",
- "indexmap 2.14.2",
- "memchr",
- "zopfli",
-]
-
-[[package]]
-name = "zip"
 version = "9.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec2e3161de27091f18a831d9494e9c53378a34833af5c1dda35ad85849da18d6"
 dependencies = [
  "crc32fast",
+ "flate2",
  "getrandom 0.4.3",
  "indexmap 2.14.2",
  "memchr",
  "nix",
  "typed-path",
  "windows-sys 0.61.2",
+ "zopfli",
 ]
 
 [[package]]
