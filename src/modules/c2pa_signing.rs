@@ -79,7 +79,8 @@ pub struct C2paConfig {
     /// `C2PA_REQUIRE_DEVICE`: signing also needs an attested Creator device token
     /// (arkavo-rs#133)
     pub require_device: bool,
-    /// `C2PA_DEVICE_APP_IDS`: the `<TeamID>.<bundle id>` values a device token may name
+    /// `C2PA_DEVICE_APP_IDS` as rpIdHashes (lowercase hex SHA-256 of `<TeamID>.<bundle id>`)
+    /// a device token's `arkavo_npe.app_id_hash` may carry
     pub device_app_ids: std::collections::HashSet<String>,
 }
 
@@ -2667,7 +2668,7 @@ mod sign_endpoint_tests {
         use crate::modules::c2pa_device::{tests::CREATOR, DeviceTokenVerifier};
         let mut config = tests::make_test_config();
         config.require_device = true;
-        config.device_app_ids = [CREATOR.to_string()].into();
+        config.device_app_ids = crate::modules::c2pa_device::parse_app_ids(CREATOR);
         let app_ids = config.device_app_ids.clone();
         let (_, vk) = keypair();
         let verifier = PersonTokenVerifier::new(
