@@ -20,3 +20,8 @@
 #   id = "<advisory id>"
 #   ignoreUntil = 2026-01-31
 #   reason = "Detected 2026-01-02. <why arks is not exposed, and the fix plan>"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0344"
+ignoreUntil = 2026-11-25
+reason = "Detected 2026-10-26. ruzstd 0.8.3 decompression bomb. Reached only through smoldot-light -> subxt-lightclient, subxt's optional light-client feature, which arks does not enable: Cargo.lock lists it but it is not compiled (cargo tree --all-features shows no ruzstd). Fix: subxt release with smoldot on ruzstd >= 0.9.1, or drop subxt (chain validation is off in production)."
