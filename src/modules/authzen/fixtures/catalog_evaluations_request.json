@@ -7,7 +7,7 @@
       "idp": "arkavo",
       "email": "alice@example.com",
       "email_verified": true,
-      "arkavo_account_id": "arkavo:550e8400-e29b-41d4-a716-446655440000",
+      "arkavo_account_id": "550e8400-e29b-41d4-a716-446655440000",
       "arkavo_roles": ["user"],
       "arkavo_entitlements": [
         "tdf:decrypt",
@@ -37,7 +37,9 @@
       "sub": "550e8400-e29b-41d4-a716-446655440000",
       "iss": "https://identity.arkavo.net",
       "aud": "arkavo:devicecheck",
-      "kid": "YWxwaGEtZGV2aWNlLWtpZA"
+      "kid": "YWxwaGEtZGV2aWNlLWtpZA",
+      "class": "attested",
+      "token": "<device-token:d1>"
     },
     "environment": {
       "region": "us-east-1"
