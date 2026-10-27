@@ -32,6 +32,13 @@ pub enum DeviceRefusal {
     Unavailable,
 }
 
+/// What a check saw in a verified token, for [`DeviceTokenVerifier::observe`]
+#[derive(Default)]
+struct Observed {
+    app_id_hash: Option<String>,
+    app_env: Option<String>,
+}
+
 pub struct DeviceTokenVerifier {
     keys: CoseKeyCache,
     issuer: String,
@@ -54,6 +61,34 @@ impl DeviceTokenVerifier {
         headers: &HeaderMap,
         person: &Person,
         now: i64,
+    ) -> Result<(), DeviceRefusal> {
+        self.check(headers, person, now, &mut Observed::default())
+            .await
+    }
+
+    /// The same check without enforcing it: one log-safe line describing what
+    /// `verify` would decide, with the token's `app_id_hash` and `app_env` (never the
+    /// token). For collecting evidence before `C2PA_REQUIRE_DEVICE` is turned on.
+    pub async fn observe(&self, headers: &HeaderMap, person: &Person, now: i64) -> String {
+        let mut seen = Observed::default();
+        let outcome = match self.check(headers, person, now, &mut seen).await {
+            Ok(()) => "would pass".to_string(),
+            Err(DeviceRefusal::Refused(reason)) => format!("would refuse ({reason})"),
+            Err(DeviceRefusal::Unavailable) => "key set unavailable".to_string(),
+        };
+        format!(
+            "{outcome}; app_id_hash={} app_env={}",
+            seen.app_id_hash.as_deref().unwrap_or("-"),
+            seen.app_env.as_deref().unwrap_or("-")
+        )
+    }
+
+    async fn check(
+        &self,
+        headers: &HeaderMap,
+        person: &Person,
+        now: i64,
+        seen: &mut Observed,
     ) -> Result<(), DeviceRefusal> {
         let token = headers
             .get(DEVICE_TOKEN_HEADER)
@@ -85,6 +120,11 @@ impl DeviceTokenVerifier {
             .as_ref()
             .filter(|npe| npe.get("type").and_then(|t| t.as_str()) == Some("device"))
             .ok_or(DeviceRefusal::Refused("not a device token"))?;
+        let text = |key: &str| npe.get(key).and_then(|v| v.as_str()).map(str::to_string);
+        // Only hex and a short enum: safe to log
+        seen.app_id_hash = text("app_id_hash")
+            .filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()));
+        seen.app_env = text("app_env").filter(|e| e == "production" || e == "development");
         if claims.non_device_agent_marker {
             return Err(DeviceRefusal::Refused(
                 "device token carries an agent marker",
@@ -264,6 +304,48 @@ pub mod tests {
             members.push((Cbor::Text("app_id_hash".into()), Cbor::Text(app_hash(app))));
         }
         Cbor::Map(members)
+    }
+
+    #[tokio::test]
+    async fn observe_reports_the_decision_and_app_without_the_token() {
+        let now = chrono::Utc::now().timestamp();
+        let creator = device_token(|c| {
+            let npe = c
+                .iter_mut()
+                .find(|(k, _)| k.as_text() == Some("arkavo_npe"))
+                .unwrap();
+            if let Cbor::Map(members) = &mut npe.1 {
+                members.push((
+                    Cbor::Text("app_env".into()),
+                    Cbor::Text("production".into()),
+                ));
+            }
+        });
+        let line = verifier().observe(&headers(&creator), &person(), now).await;
+        assert_eq!(
+            line,
+            format!(
+                "would pass; app_id_hash={} app_env=production",
+                app_hash(CREATOR)
+            )
+        );
+        assert!(!line.contains(&creator));
+
+        let viewer = "ABCDE12345.com.arkavo.Viewer";
+        let other = device_token(|c| set(c, "arkavo_npe", npe(Some(viewer), "device")));
+        assert_eq!(
+            verifier().observe(&headers(&other), &person(), now).await,
+            format!(
+                "would refuse (device token is for another app); app_id_hash={} app_env=-",
+                app_hash(viewer)
+            )
+        );
+        assert_eq!(
+            verifier()
+                .observe(&headers("garbage"), &person(), now)
+                .await,
+            "would refuse (malformed device token); app_id_hash=- app_env=-"
+        );
     }
 
     #[tokio::test]

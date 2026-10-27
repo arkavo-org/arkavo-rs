@@ -487,6 +487,15 @@ pub async fn sign_manifest(
                 );
             }
         }
+    } else if let (Some(verifier), true) = (
+        &state.device_tokens,
+        headers.contains_key(crate::modules::c2pa_device::DEVICE_TOKEN_HEADER),
+    ) {
+        // Flag off: check and log only, so the flag is turned on from evidence
+        let seen = verifier
+            .observe(&headers, &person, chrono::Utc::now().timestamp())
+            .await;
+        info!("C2PA device token (not enforced): {}", seen);
     }
     req.metadata.creator = person.sub.clone();
 
