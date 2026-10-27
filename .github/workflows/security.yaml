@@ -105,9 +105,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sbom-cyclonedx-${{ github.sha }}
-          # sbom-extra.md lists what the scanner cannot see: vendor/fpssdk, the Apple
+          # docs/sbom-extra.md lists what the scanner cannot see: vendor/fpssdk, the Apple
           # libfpscrypto binary and git dependencies. It ships with the SBOM.
           path: |
             sbom/
-            sbom-extra.md
+            docs/sbom-extra.md
           if-no-files-found: error
