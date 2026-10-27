@@ -28,6 +28,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: vulnerability-scan-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   osv-scan:
     name: osv-scanner gate
@@ -45,6 +49,7 @@ jobs:
 
       - name: Scan the lockfile
         id: scan
+        # The action is pinned by SHA, but the osv-scanner Docker image it runs is a tag.
         uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
         # osv-scanner exits non-zero when it finds something. The gate step decides
         # whether that fails the job, and also fails if the scan wrote no results.

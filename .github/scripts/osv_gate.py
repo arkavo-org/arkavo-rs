@@ -91,6 +91,14 @@ def lint_waivers(config_path, max_days):
     with open(config_path, "rb") as fh:
         config = tomllib.load(fh)
     problems = []
+    today = dt.date.today()
+    # A [[PackageOverrides]] entry that ignores a package or its vulnerabilities has no
+    # expiry unless effectiveUntil is set, and `ignore = true` drops the package from the
+    # scan entirely. Waivers go in [[IgnoredVulns]] only.
+    for entry in config.get("PackageOverrides", []):
+        name = entry.get("name", "<no name>")
+        if entry.get("ignore") is True or (entry.get("vulnerability") or {}).get("ignore") is True:
+            problems.append(f"PackageOverrides for {name}: ignoring a package or its vulnerabilities is not allowed; use a dated [[IgnoredVulns]] waiver")
     for entry in config.get("IgnoredVulns", []):
         vid = entry.get("id", "<no id>")
         until = entry.get("ignoreUntil")
@@ -107,11 +115,16 @@ def lint_waivers(config_path, max_days):
             problems.append(f'{vid}: reason must record the detection date as "Detected YYYY-MM-DD"')
             continue
         detected = dt.date.fromisoformat(match.group(1))
+        if detected > today:
+            problems.append(f"{vid}: detection date {detected} is in the future")
+        # Both bounds: a mistyped year in both dates would otherwise pass the first check.
+        if until > today + dt.timedelta(days=max_days):
+            problems.append(f"{vid}: ignoreUntil {until} is more than {max_days} days from today")
         if until > detected + dt.timedelta(days=max_days):
             problems.append(
                 f"{vid}: ignoreUntil {until} is more than {max_days} days after detection {detected}"
             )
-        if until <= dt.date.today():
+        if until <= today:
             print(f"::notice::Waiver for {vid} expired on {until}; remove it from {config_path}.")
     return problems
 
