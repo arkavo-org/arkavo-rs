@@ -1032,6 +1032,8 @@ mod license_pipeline_tests {
         Person {
             sub: "550e8400-e29b-41d4-a716-446655440000".into(),
             entitlements: vec![],
+            iss: "https://identity.arkavo.net".into(),
+            arkavo_account_id: Some("550e8400-e29b-41d4-a716-446655440000".into()),
             token: "user-cwt".into(),
         }
     }

@@ -105,7 +105,7 @@ This document describes the integration of C2PA (Coalition for Content Provenanc
 
 Sign a C2PA manifest with a pre-computed content hash.
 
-**Who may sign:** only a signed-in person. The request needs `Authorization: Bearer <passkey CWT>`, the identity.arkavo.net token, verified the same way as `/media/v1`: `aud` must contain `arkavo` and `MEDIA_PLATFORM_AUDIENCE`, the `sub` must be person-shaped, and agent tokens are refused. A missing or invalid token gets 401, and a non-person token 403. The manifest's creator (`org.arkavo.recording`) is the token's `sub`; `metadata.creator` is ignored. `C2PA_ALLOWED_CREATORS`, if set, filters on `sub`. With `C2PA_REQUIRE_ENTITLEMENT=true`, only creator members may sign: the token's `arkavo_entitlements` must include `https://patreon.arkavo.com/attr/arkavo-creator/value/publish`, the attribute publishing requires. Otherwise the request gets 403 with `"error": "signing entitlement required"` and `required_entitlement` naming the attribute. Like every refusal, it uses none of the subject's quota. Each subject may make `C2PA_SIGN_LIMIT_PER_HOUR` requests per hour (default 120); over the limit gets 429 with `Retry-After`. Every request is logged with its `sub`, content hash and exclusion range.
+**Who may sign:** only a signed-in person. The request needs `Authorization: Bearer <passkey CWT>`, the identity.arkavo.net token, verified the same way as `/media/v1`: `aud` must contain `arkavo` and `MEDIA_PLATFORM_AUDIENCE`, the `sub` must be person-shaped, and agent tokens are refused. A missing or invalid token gets 401, and a non-person token 403. The manifest's creator (`org.arkavo.recording`) is the token's `sub`; `metadata.creator` is ignored. `C2PA_ALLOWED_CREATORS`, if set, filters on `sub`. With `C2PA_REQUIRE_ENTITLEMENT=true`, only creator members may sign: the token's `arkavo_entitlements` must include `https://patreon.arkavo.com/attr/arkavo-creator/value/publish`, the attribute publishing requires. Otherwise the request gets 403 with `"error": "signing entitlement required"` and `required_entitlement` naming the attribute. Like every refusal, it uses none of the subject's quota. With `C2PA_REQUIRE_DEVICE=true` (arkavo-rs#133), only Creator on an attested device may sign: the request also needs `X-Entity-Token`, the DeviceCheck CWT identity mints after an App Attest assertion. That token must verify against the identity COSE keys with `aud` `arkavo:devicecheck`, carry a device `arkavo_npe` and a `cnf`, name an `arkavo_npe.app_id` listed in `C2PA_DEVICE_APP_IDS` (comma-separated `<TeamID>.<bundle id>`; required when the flag is on), and bind to the passkey token by equal `iss` and `arkavo_account_id`. Otherwise the request gets 403 `{"error": "device attestation required", "required": "device_attestation"}`, at no quota cost; an identity key-set outage gets 503. The flag uses the strict true/false parser, and a token is a 1-hour bearer, not bound to one request (C2PA Level 1). Each subject may make `C2PA_SIGN_LIMIT_PER_HOUR` requests per hour (default 120); over the limit gets 429 with `Retry-After`. Every request is logged with its `sub`, content hash and exclusion range.
 
 **Manifest contents:** the claim follows C2PA spec 2.2, the version c2pa-rs 0.91 generates, and passes the C2PA Conformance Program's spec 2.2 and integrity rubrics.
 - **Generator:** `claim_generator_info` names the product, "Arkavo Creator", with `specVersion` `2.2.0`. It includes the product's version when `metadata.software` is `Arkavo Creator <version>`, and the signing service as `org.arkavo.signer`.
@@ -219,7 +219,7 @@ export C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem        # with C2PA_SI
 export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert_chain.pem      # signer certificate, then the CA
 export C2PA_REQUIRE_VALIDATION=true  # Enforce C2PA in media policy
 export C2PA_ALLOWED_CREATORS=arkavo:<uuid-1>,arkavo:<uuid-2>  # token subjects (sub), not emails
-export C2PA_REQUIRE_ENTITLEMENT=true  # only creator members (the publish entitlement) may sign; default false; true/false, 1/0 or yes/no, anything else stops startup
+export C2PA_REQUIRE_ENTITLEMENT=true  # only creator members (the publish entitlement) may sign; default false; true/false, 1/0 or yes/no; anything else logs an error and leaves /c2pa/v1/* unmounted until restart (signing fails closed, the rest of arks keeps running)
 # Optional: PEM bundle /c2pa/v1/validate trusts. Default: the certificates after the
 # end-entity in C2PA_SIGNING_CERT_PATH (our own CA). List a retired CA here during a rotation.
 export C2PA_TRUST_ANCHORS_PATH=/path/to/c2pa_trust_anchors.pem
@@ -263,7 +263,40 @@ export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert_chain.pem
 
 Point `C2PA_SIGNING_CERT_PATH` at the chain, not `c2pa_cert.pem`: the CA after the signer certificate is what `/c2pa/v1/validate` trusts by default.
 
-`openssl` here is an operator tool (OpenSSL 3); C2PA signing does not use it. A CA on the C2PA trust list will instead want a CSR signed by the KMS key.
+`openssl` here is an operator tool (OpenSSL 3); C2PA signing does not use it.
+
+**Certificate from a CA on the C2PA Trust List (`arks c2pa-csr`).** A trust-list CA issues the claim signing certificate from a certificate request signed by our key. KMS has no "create CSR" call, so arks builds the request and has the KMS key sign it:
+
+```bash
+AWS_PROFILE=arks-prod AWS_REGION=us-east-1 ./production/arks c2pa-csr \
+  --kms-key-id <key-arn> \
+  --country US --organization "Arkavo LLC" --common-name "<CPL product name>" \
+  --cpl-record <CPL record uuid> --out c2pa_claim_signing.csr.pem
+```
+
+- **Needs** only `kms:GetPublicKey` and `kms:Sign` on the key, which `arks-prod` already has. It does not touch the running server.
+- **What it requests**, per the C2PA Assurance Level 1 CSR profile (conformance-public `docs/v0.2/cert-profiles/claimSigningLeaf.al1.csr.schema.json`):
+  - subject C, O, CN, which must match the Conforming Products List record exactly;
+  - basicConstraints `cA=false` and keyUsage digitalSignature + contentCommitment, both critical;
+  - extendedKeyUsage c2pa-kp-claimSigning (`1.3.6.1.4.1.62558.2.1`) + emailProtection;
+  - certificatePolicies `1.3.6.1.4.1.62558.1.1`;
+  - c2pa-al = AL1 (`1.3.6.1.4.1.62558.3.10`);
+  - c2pa-cpl-record = the record UUID.
+
+  The CA adds the key identifiers, AIA (OCSP) and validity, which a CSR can't carry.
+- **Check before sending.** `arks c2pa-csr` prints the key's SPKI SHA-256 to stderr. Then:
+
+  ```bash
+  openssl req -verify -noout -in c2pa_claim_signing.csr.pem
+  diff <(openssl req -in c2pa_claim_signing.csr.pem -pubkey -noout) \
+       <(aws kms get-public-key --key-id <key-arn> --query PublicKey --output text \
+           | base64 -d | openssl pkey -pubin -inform DER)
+  openssl req -in c2pa_claim_signing.csr.pem -noout -text
+  ```
+- **Rehearse** with a throwaway key instead of KMS: `--key-file <P-256 PKCS#8 PEM>` (for example `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256`).
+- **Order of events.** Request the real certificate only after C2PA confirms conformance, because the record UUID comes from that confirmation.
+- **Install.** Put the issued certificate and the CA's chain in `C2PA_SIGNING_CERT_PATH` (signer certificate first). Then restart: the startup check compares the certificate with the KMS key.
+- **Renewal.** AL1 leaf certificates last at most 366 days. Run the same command with the same key and record well before expiry, and calendar it from the certificate's `notAfter`.
 
 ### Timestamps
 

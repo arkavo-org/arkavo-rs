@@ -254,6 +254,8 @@ export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert_chain.pem   # signer certificat
 export C2PA_REQUIRE_VALIDATION=true                # Enforce C2PA manifest validation
 export C2PA_ALLOWED_CREATORS=arkavo:<uuid-1>,arkavo:<uuid-2>  # Optional; allowlist of passkey token subjects (sub), not emails
 export C2PA_REQUIRE_ENTITLEMENT=true                  # Optional; signing needs the creator publish entitlement in arkavo_entitlements (403 otherwise); default false
+export C2PA_REQUIRE_DEVICE=true                       # Optional (#133); signing also needs X-Entity-Token, an attested DeviceCheck CWT of the same account (iss + arkavo_account_id) whose arkavo_npe.app_id is in C2PA_DEVICE_APP_IDS; 403 required=device_attestation otherwise; default false
+export C2PA_DEVICE_APP_IDS=<TeamID>.com.arkavo.Creator  # Required with C2PA_REQUIRE_DEVICE; comma list
 export C2PA_TRUST_ANCHORS_PATH=/path/to/c2pa_trust_anchors.pem  # Optional; PEM bundle /c2pa/v1/validate trusts (default: the CA certs in C2PA_SIGNING_CERT_PATH)
 export C2PA_SIGN_LIMIT_PER_HOUR=120                     # /c2pa/v1/sign per token subject (needs a passkey CWT; one uuid exclusion = manifest box)
 export C2PA_TSA_URL=https://ts-c2pa.ssl.com           # Optional RFC 3161 TSA, on the C2PA TSA trust list; when set, a TSA failure fails the sign request (15 s bound)

@@ -1,16 +1,54 @@
 //! SARC ↔ OpenTDF v2 proto-JSON (claims-mode entity chain only).
 
 use crate::modules::authzen::cwt_subject::{
-    allowlist_environment, device_to_value, devices_bind, devices_from_context, sanitize_patreon,
-    sanitize_patreon_entitlements, tool_value_slug, DeviceError, DEVICECHECK_AUD,
-    MAX_FORWARDED_ENTITLEMENTS,
+    allowlist_environment, device_token_value, devices_bind, devices_from_context,
+    sanitize_patreon, sanitize_patreon_entitlements, tool_value_slug, DecodedClaims, DeviceError,
+    DEVICECHECK_AUD, MAX_FORWARDED_ENTITLEMENTS,
 };
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 
 const MCP_TOOL_FQN_PREFIX: &str = "https://arkavo.net/attr/mcp-tool/value/";
 const MCP_SERVER_FQN_PREFIX: &str = "https://arkavo.net/attr/mcp-server/value/";
 pub const MAX_CHAIN: usize = 8;
 pub const MAX_EVALUATIONS: usize = 500;
+
+/// What the facade read from a device token whose signature, `iss`, `exp` and
+/// DeviceCheck `aud` it verified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedDevice {
+    pub sub: String,
+    pub iss: String,
+    pub arkavo_account_id: Option<String>,
+    /// The token carries an agent marker beside its device `arkavo_npe`, so
+    /// the platform reads it as an agent's, never a device's.
+    pub agent: bool,
+}
+
+impl From<&DecodedClaims> for VerifiedDevice {
+    fn from(c: &DecodedClaims) -> Self {
+        Self {
+            sub: c.sub.clone(),
+            iss: c.iss.clone(),
+            arkavo_account_id: c.arkavo_account_id.clone(),
+            agent: c.non_device_agent_marker,
+        }
+    }
+}
+
+/// Each device token the facade verified, keyed by the raw token. A token
+/// missing from it did not verify.
+pub type VerifiedDevices = HashMap<String, VerifiedDevice>;
+
+/// Entities the chain for `context` needs: the person, every device sent
+/// (with a token or not) and the environment, if any. Over `MAX_CHAIN` the
+/// request is malformed.
+pub fn chain_len(devices: usize, context: Option<&Value>) -> usize {
+    let env_present = context
+        .and_then(|c| c.get("environment"))
+        .is_some_and(|v| !v.is_null());
+    1 + devices + usize::from(env_present)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranslateError {
@@ -235,16 +273,25 @@ fn pe_claims(subject: &Value) -> Result<Value, TranslateError> {
     // source owns, the publish entitlement its `identity-core` source owns
     // (arkavo-rs#95) and the per-creator `https://arkavo.net/attr/creator/value/<uuid>`
     // (arkavo-rs#126); the platform's pep_assertable setting stays the binding
-    // guard, this filter is defence in depth. email_verified, idp, arkavo_account_id and
-    // arkavo_roles are still dropped (see the explicit assertion in
-    // chain_pe_then_devices_then_env_mismatched_prefix_bind). If any OpenTDF
-    // subject mapping keys on a dropped claim it can never match, so the two
-    // halves need to agree (draft-arkavo-authzen-cwt-00).
+    // guard, this filter is defence in depth. iss and arkavo_account_id are
+    // forwarded as sent: the platform binds a device token to the person only
+    // when both equal the token's, compared exactly, so neither is ever
+    // rewritten. email_verified, idp and arkavo_roles are still dropped (see the
+    // explicit assertion in chain_pe_then_devices_then_env_mismatched_prefix_bind).
+    // If any OpenTDF subject mapping keys on a dropped claim it can never match,
+    // so the two halves need to agree (draft-arkavo-authzen-cwt-00).
     let mut m = Map::new();
     m.insert("sub".into(), json!(id));
     if let Some(props) = subject.get("properties").and_then(Value::as_object) {
         if let Some(iss) = props.get("iss") {
             m.insert("iss".into(), iss.clone());
+        }
+        if let Some(account) = props
+            .get("arkavo_account_id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            m.insert("arkavo_account_id".into(), json!(account));
         }
         if let Some(email) = props.get("email") {
             m.insert("email".into(), email.clone());
@@ -278,9 +325,24 @@ fn pe_claims(subject: &Value) -> Result<Value, TranslateError> {
     Ok(Value::Object(m))
 }
 
+/// Whether the platform binds `device` to the person entity `pe`: the
+/// token's `iss` and `arkavo_account_id` are non-empty and exactly equal the
+/// person's (opentdf-platform composite `unboundReason`). It never reads `sub`.
+fn binds_to_person(device: &VerifiedDevice, pe: &Value) -> bool {
+    let equals = |claim: &str, token: &str| {
+        !token.is_empty() && pe.get(claim).and_then(Value::as_str) == Some(token)
+    };
+    equals("iss", &device.iss)
+        && device
+            .arkavo_account_id
+            .as_deref()
+            .is_some_and(|a| equals("arkavo_account_id", a))
+}
+
 pub fn reconstruct_chain(
     subject: &Value,
     context: Option<&Value>,
+    verified: &VerifiedDevices,
 ) -> Result<ChainMap, TranslateError> {
     let pe = pe_claims(subject)?;
     let pe_sub = pe["sub"].as_str().unwrap_or_default().to_string();
@@ -298,6 +360,11 @@ pub fn reconstruct_chain(
             Err(DeviceError::EmptyDevices) => {
                 return Err(TranslateError::Malformed("context.devices is empty"));
             }
+            Err(DeviceError::BadToken) => {
+                return Err(TranslateError::Malformed(
+                    "device token must be a non-empty string with no surrounding whitespace",
+                ));
+            }
         },
         None => vec![],
     };
@@ -305,7 +372,7 @@ pub fn reconstruct_chain(
         .and_then(|c| c.get("environment"))
         .is_some_and(|v| !v.is_null());
     let e_count = if env_present { 1 } else { 0 };
-    if 1 + devices.len() + e_count > MAX_CHAIN {
+    if chain_len(devices.len(), context) > MAX_CHAIN {
         return Err(TranslateError::ChainCap);
     }
     for d in &devices {
@@ -319,15 +386,40 @@ pub fn reconstruct_chain(
                 "device sub does not bind to subject.id",
             ));
         }
+        // The token is what reaches the platform, so it must be a device's
+        // token there, its own verified sub must bind, and it must bind as the
+        // platform binds it, or the platform denies the whole chain.
+        if let Some(token) = &d.token {
+            let Some(device) = verified.get(token) else {
+                return Ok(ChainMap::DenyClosed("device token does not verify"));
+            };
+            if device.agent {
+                return Ok(ChainMap::DenyClosed("device token is not a device token"));
+            }
+            if !devices_bind(&pe_sub, &device.sub) {
+                return Ok(ChainMap::DenyClosed(
+                    "device token sub does not bind to subject.id",
+                ));
+            }
+            if !binds_to_person(device, &pe) {
+                return Ok(ChainMap::DenyClosed(
+                    "device token does not bind to subject",
+                ));
+            }
+        }
     }
 
-    let mut entities = Vec::with_capacity(1 + devices.len() + e_count);
+    // A device reaches the platform as its signed token alone. One without a
+    // token is dropped (the facade logs it): the platform would read its
+    // claims as a device it cannot bind and deny the whole chain.
+    let tokens: Vec<&str> = devices.iter().filter_map(|d| d.token.as_deref()).collect();
+    let mut entities = Vec::with_capacity(1 + tokens.len() + e_count);
     entities.push(claims_entity("e0", true, pe));
-    for (i, d) in devices.iter().enumerate() {
+    for token in tokens {
         entities.push(claims_entity(
-            &format!("e{}", i + 1),
+            &format!("e{}", entities.len()),
             false,
-            device_to_value(d),
+            device_token_value(token),
         ));
     }
     if env_present {
@@ -510,7 +602,7 @@ mod tests {
                 "idp": "arkavo",
                 "email": "alice@example.com",
                 "email_verified": true,
-                "arkavo_account_id": "arkavo:550e8400-e29b-41d4-a716-446655440000",
+                "arkavo_account_id": "550e8400-e29b-41d4-a716-446655440000",
                 "arkavo_roles": ["user"],
                 "arkavo_entitlements": ["tdf:decrypt"],
                 "arkavo_patreon": {
@@ -529,22 +621,55 @@ mod tests {
         })
     }
 
+    const ACCOUNT: &str = "550e8400-e29b-41d4-a716-446655440000";
+
+    /// A phone carrying its DeviceCheck token (opaque here: the facade
+    /// verifies it) and a `class` of the old wire shape, which is never
+    /// forwarded.
     fn phone() -> Value {
         json!({
-            "sub": "550e8400-e29b-41d4-a716-446655440000",
+            "sub": ACCOUNT,
             "iss": "https://identity.arkavo.net",
             "aud": "arkavo:devicecheck",
-            "kid": "cGhvbmUta2lk"
+            "kid": "cGhvbmUta2lk",
+            "class": "attested",
+            "token": "phone-token"
         })
     }
 
     fn watch() -> Value {
         json!({
-            "sub": "550e8400-e29b-41d4-a716-446655440000",
+            "sub": ACCOUNT,
             "iss": "https://identity.arkavo.net",
             "aud": "arkavo:devicecheck",
-            "kid": "d2F0Y2gta2lk"
+            "kid": "d2F0Y2gta2lk",
+            "token": "watch-token"
         })
+    }
+
+    /// Both tokens verified, each with the person's bare-UUID `sub`.
+    /// A verified DeviceCheck token of the person `pe_subject` describes.
+    fn person_device(sub: &str) -> VerifiedDevice {
+        VerifiedDevice {
+            sub: sub.to_string(),
+            iss: "https://identity.arkavo.net".to_string(),
+            arkavo_account_id: Some(ACCOUNT.to_string()),
+            agent: false,
+        }
+    }
+
+    fn verified() -> VerifiedDevices {
+        ["phone-token", "watch-token"]
+            .into_iter()
+            .map(|t| (t.to_string(), person_device(ACCOUNT)))
+            .collect()
+    }
+
+    fn chain_entities(chain: &ChainMap) -> Vec<Value> {
+        let ChainMap::Ok(chain) = chain else {
+            panic!("expected chain, got {chain:?}");
+        };
+        chain["entities"].as_array().unwrap().clone()
     }
 
     #[test]
@@ -663,7 +788,9 @@ mod tests {
                 "patreon_access_token": "nope"
             }
         });
-        let ChainMap::Ok(chain) = reconstruct_chain(&pe_subject(), Some(&ctx)).unwrap() else {
+        let ChainMap::Ok(chain) =
+            reconstruct_chain(&pe_subject(), Some(&ctx), &verified()).unwrap()
+        else {
             panic!("expected chain");
         };
         let ents = chain["entities"].as_array().unwrap();
@@ -683,14 +810,21 @@ mod tests {
             json!("12345678")
         );
         assert!(ents[0]["claims"]["value"].get("arkavo_roles").is_none());
+        // A device is its signed token and nothing else: no PEP-asserted sub,
+        // kid or class reaches the platform.
+        assert_eq!(ents[1]["ephemeralId"], json!("e1"));
         assert_eq!(ents[1]["category"], json!("CATEGORY_ENVIRONMENT"));
-        assert_eq!(ents[1]["claims"]["value"]["kid"], json!("cGhvbmUta2lk"));
         assert_eq!(
-            ents[1]["claims"]["value"]["sub"],
-            json!("550e8400-e29b-41d4-a716-446655440000")
+            ents[1]["claims"]["value"],
+            json!({"arkavo_device_token": "phone-token"})
         );
-        assert!(ents[1]["claims"]["value"].get("email").is_none());
-        assert_eq!(ents[2]["claims"]["value"]["kid"], json!("d2F0Y2gta2lk"));
+        assert_eq!(ents[2]["ephemeralId"], json!("e2"));
+        assert_eq!(ents[2]["category"], json!("CATEGORY_ENVIRONMENT"));
+        assert_eq!(
+            ents[2]["claims"]["value"],
+            json!({"arkavo_device_token": "watch-token"})
+        );
+        assert_eq!(ents[3]["ephemeralId"], json!("e3"));
         assert_eq!(ents[3]["claims"]["value"]["region"], json!("us-east-1"));
         assert_eq!(ents[3]["claims"]["value"]["kind"], json!("environment"));
         assert!(ents[3]["claims"]["value"].get("email").is_none());
@@ -698,6 +832,206 @@ mod tests {
             .get("patreon_access_token")
             .is_none());
         assert!(chain.get("token").is_none());
+    }
+
+    /// The platform denies a whole chain carrying a device it cannot bind, and
+    /// it binds only a signed token, so a device without one is dropped.
+    #[test]
+    fn chain_drops_a_device_without_a_token() {
+        let mut bare = phone();
+        bare.as_object_mut().unwrap().remove("token");
+        let ctx = json!({
+            "devices": [bare.clone(), watch()],
+            "environment": { "region": "us-east-1" }
+        });
+        let ents =
+            chain_entities(&reconstruct_chain(&pe_subject(), Some(&ctx), &verified()).unwrap());
+        assert_eq!(ents.len(), 3);
+        assert_eq!(ents[0]["category"], json!("CATEGORY_SUBJECT"));
+        assert_eq!(ents[1]["ephemeralId"], json!("e1"));
+        assert_eq!(
+            ents[1]["claims"]["value"],
+            json!({"arkavo_device_token": "watch-token"})
+        );
+        assert_eq!(ents[2]["ephemeralId"], json!("e2"));
+        assert_eq!(ents[2]["claims"]["value"], json!({"region": "us-east-1"}));
+
+        // A null token is no token.
+        let mut null_token = phone();
+        null_token["token"] = Value::Null;
+        for device in [bare, null_token] {
+            let ents = chain_entities(
+                &reconstruct_chain(
+                    &pe_subject(),
+                    Some(&json!({ "device": device })),
+                    &verified(),
+                )
+                .unwrap(),
+            );
+            assert_eq!(ents.len(), 1, "only the person is left");
+            assert_eq!(ents[0]["category"], json!("CATEGORY_SUBJECT"));
+        }
+    }
+
+    #[test]
+    fn chain_device_token_must_be_a_non_empty_string() {
+        // Whitespace would be verified trimmed but forwarded as sent, which
+        // the platform's base64url decoding refuses.
+        for token in [
+            json!(""),
+            json!(42),
+            json!({"t": "x"}),
+            json!(" phone-token"),
+            json!("phone-token\n"),
+        ] {
+            let mut device = phone();
+            device["token"] = token.clone();
+            assert_eq!(
+                reconstruct_chain(
+                    &pe_subject(),
+                    Some(&json!({ "device": device })),
+                    &verified()
+                )
+                .unwrap_err(),
+                TranslateError::Malformed(
+                    "device token must be a non-empty string with no surrounding whitespace"
+                ),
+                "token {token}"
+            );
+        }
+    }
+
+    /// A token the facade did not verify, or whose verified `sub` is not the
+    /// person's, denies the evaluation, as a PEP-asserted unbound `sub` does.
+    #[test]
+    fn chain_unverified_or_unbound_device_token_is_deny_closed() {
+        let ctx = json!({ "devices": [phone(), watch()] });
+        let mut only_watch = verified();
+        only_watch.remove("phone-token");
+        assert_eq!(
+            reconstruct_chain(&pe_subject(), Some(&ctx), &only_watch).unwrap(),
+            ChainMap::DenyClosed("device token does not verify")
+        );
+        let mut other = verified();
+        other.insert(
+            "watch-token".into(),
+            person_device("00000000-0000-0000-0000-000000000000"),
+        );
+        assert_eq!(
+            reconstruct_chain(&pe_subject(), Some(&ctx), &other).unwrap(),
+            ChainMap::DenyClosed("device token sub does not bind to subject.id")
+        );
+        // The verified `sub` binds as a PEP-asserted one does: `arkavo:` aside.
+        let mut prefixed = verified();
+        prefixed.insert(
+            "watch-token".into(),
+            person_device(&format!("arkavo:{ACCOUNT}")),
+        );
+        assert!(matches!(
+            reconstruct_chain(&pe_subject(), Some(&ctx), &prefixed).unwrap(),
+            ChainMap::Ok(_)
+        ));
+    }
+
+    /// The platform binds a device to the person by the token's `iss` and
+    /// `arkavo_account_id`, each non-empty and exactly equal to the person
+    /// entity's, and never by `sub`. A chain it would deny is deny-closed here.
+    #[test]
+    fn chain_device_token_binds_on_iss_and_account_id() {
+        let ctx = json!({ "device": phone() });
+        let deny = ChainMap::DenyClosed("device token does not bind to subject");
+        let with_token = |v: VerifiedDevice| VerifiedDevices::from([("phone-token".into(), v)]);
+
+        let mut other_account = person_device(ACCOUNT);
+        other_account.arkavo_account_id = Some("00000000-0000-0000-0000-000000000000".into());
+        let mut prefixed_account = person_device(ACCOUNT);
+        prefixed_account.arkavo_account_id = Some(format!("arkavo:{ACCOUNT}"));
+        let mut no_account = person_device(ACCOUNT);
+        no_account.arkavo_account_id = None;
+        let mut empty_account = person_device(ACCOUNT);
+        empty_account.arkavo_account_id = Some(String::new());
+        let mut other_iss = person_device(ACCOUNT);
+        other_iss.iss = "https://other.example".into();
+        for (why, v) in [
+            ("account mismatch", other_account),
+            ("prefixed token account", prefixed_account),
+            ("token without account", no_account),
+            ("token with empty account", empty_account),
+            ("iss mismatch", other_iss),
+        ] {
+            assert_eq!(
+                reconstruct_chain(&pe_subject(), Some(&ctx), &with_token(v)).unwrap(),
+                deny,
+                "{why}"
+            );
+        }
+
+        // The person's side: missing, prefixed, non-string or a different iss.
+        let mut no_subject_account = pe_subject();
+        no_subject_account["properties"]
+            .as_object_mut()
+            .unwrap()
+            .remove("arkavo_account_id");
+        let mut prefixed_subject = pe_subject();
+        prefixed_subject["properties"]["arkavo_account_id"] = json!(format!("arkavo:{ACCOUNT}"));
+        let mut numeric_subject = pe_subject();
+        numeric_subject["properties"]["arkavo_account_id"] = json!(42);
+        let mut other_subject_iss = pe_subject();
+        other_subject_iss["properties"]["iss"] = json!("https://other.example");
+        let mut no_subject_iss = pe_subject();
+        no_subject_iss["properties"]
+            .as_object_mut()
+            .unwrap()
+            .remove("iss");
+        for (why, subject) in [
+            ("subject without account", no_subject_account),
+            ("prefixed subject account", prefixed_subject),
+            ("non-string subject account", numeric_subject),
+            ("subject iss mismatch", other_subject_iss),
+            ("subject without iss", no_subject_iss),
+        ] {
+            assert_eq!(
+                reconstruct_chain(&subject, Some(&ctx), &verified()).unwrap(),
+                deny,
+                "{why}"
+            );
+        }
+
+        // Matching iss and account bind.
+        let ents =
+            chain_entities(&reconstruct_chain(&pe_subject(), Some(&ctx), &verified()).unwrap());
+        assert_eq!(
+            ents[1]["claims"]["value"],
+            json!({"arkavo_device_token": "phone-token"})
+        );
+    }
+
+    /// A token with an agent marker beside its device `arkavo_npe` is an
+    /// agent's to the platform's `KindOf`, never a device, and would deny the
+    /// whole chain there.
+    #[test]
+    fn chain_agent_token_as_device_is_deny_closed() {
+        let mut agent = person_device(ACCOUNT);
+        agent.agent = true;
+        assert_eq!(
+            reconstruct_chain(
+                &pe_subject(),
+                Some(&json!({ "device": phone() })),
+                &VerifiedDevices::from([("phone-token".into(), agent)])
+            )
+            .unwrap(),
+            ChainMap::DenyClosed("device token is not a device token")
+        );
+    }
+
+    #[test]
+    fn chain_len_counts_every_device_sent() {
+        let mut bare = phone();
+        bare.as_object_mut().unwrap().remove("token");
+        let ctx = json!({ "devices": [bare, watch()], "environment": { "region": "us-east-1" } });
+        assert_eq!(chain_len(2, Some(&ctx)), 4);
+        assert_eq!(chain_len(2, Some(&json!({ "environment": null }))), 3);
+        assert_eq!(chain_len(0, None), 1);
     }
 
     #[test]
@@ -709,7 +1043,7 @@ mod tests {
             "kid": "YWxwaGEtZGV2aWNlLWtpZA"
         }});
         assert!(matches!(
-            reconstruct_chain(&pe_subject(), Some(&bad_aud)).unwrap(),
+            reconstruct_chain(&pe_subject(), Some(&bad_aud), &verified()).unwrap(),
             ChainMap::DenyClosed(_)
         ));
         let unbound = json!({"device": {
@@ -719,9 +1053,21 @@ mod tests {
             "kid": "YWxwaGEtZGV2aWNlLWtpZA"
         }});
         assert!(matches!(
-            reconstruct_chain(&pe_subject(), Some(&unbound)).unwrap(),
+            reconstruct_chain(&pe_subject(), Some(&unbound), &verified()).unwrap(),
             ChainMap::DenyClosed(_)
         ));
+        // The PEP-asserted checks hold for a device with a verified token too.
+        let mut unbound_with_token = phone();
+        unbound_with_token["sub"] = json!("00000000-0000-0000-0000-000000000000");
+        assert_eq!(
+            reconstruct_chain(
+                &pe_subject(),
+                Some(&json!({ "device": unbound_with_token })),
+                &verified()
+            )
+            .unwrap(),
+            ChainMap::DenyClosed("device sub does not bind to subject.id")
+        );
     }
 
     #[test]
@@ -732,7 +1078,7 @@ mod tests {
             "aud": "arkavo:devicecheck"
         }});
         assert_eq!(
-            reconstruct_chain(&pe_subject(), Some(&missing)).unwrap_err(),
+            reconstruct_chain(&pe_subject(), Some(&missing), &verified()).unwrap_err(),
             TranslateError::Malformed("device missing required field")
         );
     }
@@ -753,12 +1099,12 @@ mod tests {
             "environment": { "region": "us-east-1" }
         });
         assert_eq!(
-            reconstruct_chain(&pe_subject(), Some(&over)).unwrap_err(),
+            reconstruct_chain(&pe_subject(), Some(&over), &verified()).unwrap_err(),
             TranslateError::ChainCap
         );
         let both = json!({"device": phone(), "devices": [phone()]});
         assert_eq!(
-            reconstruct_chain(&pe_subject(), Some(&both)).unwrap_err(),
+            reconstruct_chain(&pe_subject(), Some(&both), &verified()).unwrap_err(),
             TranslateError::Malformed("context.device and context.devices both present")
         );
     }
@@ -802,7 +1148,11 @@ mod tests {
         let expected: Value =
             serde_json::from_str(include_str!("fixtures/catalog_multiresource_request.json"))
                 .unwrap();
-        let ChainMap::Ok(chain) = reconstruct_chain(&req["subject"], req.get("context")).unwrap()
+        // The facade verified the fixture's device token as the person's.
+        let token = req["context"]["device"]["token"].as_str().unwrap();
+        let verified = VerifiedDevices::from([(token.to_string(), person_device(ACCOUNT))]);
+        let ChainMap::Ok(chain) =
+            reconstruct_chain(&req["subject"], req.get("context"), &verified).unwrap()
         else {
             panic!("chain");
         };
@@ -826,7 +1176,9 @@ mod tests {
             serde_json::from_str(include_str!("fixtures/mcp_evaluation_request.json")).unwrap();
         let expected: Value =
             serde_json::from_str(include_str!("fixtures/mcp_getdecision_request.json")).unwrap();
-        let ChainMap::Ok(chain) = reconstruct_chain(&req["subject"], req.get("context")).unwrap()
+        let ChainMap::Ok(chain) =
+            reconstruct_chain(&req["subject"], req.get("context"), &VerifiedDevices::new())
+                .unwrap()
         else {
             panic!("chain");
         };
@@ -993,6 +1345,42 @@ mod tests {
             consumer["arkavo_entitlements"],
             creator["arkavo_entitlements"]
         );
+    }
+
+    /// The platform binds a device token to the person by exact `iss` and
+    /// `arkavo_account_id`, so both reach the subject entity as the PEP sent
+    /// them: a rewritten value would never bind.
+    #[test]
+    fn pe_claims_forwards_iss_and_account_id_verbatim() {
+        let claims = pe_claims(&pe_subject()).unwrap();
+        assert_eq!(claims["iss"], json!("https://identity.arkavo.net"));
+        assert_eq!(
+            claims["arkavo_account_id"],
+            json!("550e8400-e29b-41d4-a716-446655440000")
+        );
+        let mut prefixed = pe_subject();
+        prefixed["properties"]["arkavo_account_id"] =
+            json!("arkavo:550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(
+            pe_claims(&prefixed).unwrap()["arkavo_account_id"],
+            json!("arkavo:550e8400-e29b-41d4-a716-446655440000"),
+            "arkavo_account_id is forwarded, never normalised"
+        );
+    }
+
+    #[test]
+    fn pe_claims_forwards_account_id_only_as_a_non_empty_string() {
+        for bad in [json!(""), json!(42), json!(null), json!(["x"])] {
+            let mut subject = pe_subject();
+            subject["properties"]["arkavo_account_id"] = bad.clone();
+            assert!(
+                pe_claims(&subject)
+                    .unwrap()
+                    .get("arkavo_account_id")
+                    .is_none(),
+                "{bad}"
+            );
+        }
     }
 
     /// `context`/`subject` are PEP-supplied and unsigned. The patreon redaction

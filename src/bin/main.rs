@@ -580,6 +580,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Install default crypto provider for rustls
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    #[cfg(feature = "c2pa_signing")]
+    if std::env::args().nth(1).as_deref() == Some("c2pa-csr") {
+        return modules::c2pa_csr::run_cli(std::env::args().skip(2).collect())
+            .await
+            .map_err(Into::into);
+    }
+
     // Load configuration
     let settings = load_config()?;
 
@@ -884,10 +891,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let c2pa_signing_state = match c2pa_signing::C2paConfig::from_env().await {
         Ok(config) => {
             info!("C2PA signing enabled");
-            Some(Arc::new(c2pa_signing::C2paSigningState::new(
+            let device_tokens = config.require_device.then(|| {
+                info!(
+                    "C2PA signing requires an attested device ({} app id(s))",
+                    config.device_app_ids.len()
+                );
+                modules::license::config::device_verifier_from_env(config.device_app_ids.clone())
+            });
+            let state = c2pa_signing::C2paSigningState::new(
                 config,
                 Arc::new(modules::license::config::person_verifier_from_env()),
-            )))
+            );
+            Some(Arc::new(match device_tokens {
+                Some(verifier) => state.with_device_tokens(verifier),
+                None => state,
+            }))
         }
         Err(e) => {
             // C2PA_SIGNER set, or a key file left from before C2PA_SIGNER existed, means
@@ -1040,7 +1058,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .build();
                     aws_sdk_dynamodb::Client::from_conf(conf)
                 }
-                None => aws_sdk_dynamodb::Client::new(&aws_config::load_from_env().await),
+                None => aws_sdk_dynamodb::Client::new(modules::aws::shared_config().await),
             };
             let store = moderation::store::DynamoReportStore::new(
                 dynamodb.clone(),

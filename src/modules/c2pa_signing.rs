@@ -76,6 +76,11 @@ pub struct C2paConfig {
     pub allowed_creators: Vec<String>,
     /// `C2PA_REQUIRE_ENTITLEMENT`: only tokens carrying [`SIGNING_ENTITLEMENT`] may sign
     pub require_entitlement: bool,
+    /// `C2PA_REQUIRE_DEVICE`: signing also needs an attested Creator device token
+    /// (arkavo-rs#133)
+    pub require_device: bool,
+    /// `C2PA_DEVICE_APP_IDS`: the `<TeamID>.<bundle id>` values a device token may name
+    pub device_app_ids: std::collections::HashSet<String>,
 }
 
 impl C2paConfig {
@@ -108,8 +113,9 @@ impl C2paConfig {
                 let chain = std::fs::read(&signing_cert_path)
                     .map_err(|e| format!("Failed to read C2PA signing cert: {}", e))?;
                 let signer_cert = pem::parse_many(&chain)
-                    .ok()
-                    .and_then(|blocks| blocks.into_iter().find(|b| b.tag() == "CERTIFICATE"))
+                    .map_err(|e| format!("C2PA signing cert chain is not PEM: {}", e))?
+                    .into_iter()
+                    .find(|b| b.tag() == "CERTIFICATE")
                     .ok_or("C2PA signing cert chain has no certificate")?;
                 let key = connect_with_retry(CONNECT_ATTEMPTS, CONNECT_FIRST_RETRY, || {
                     KmsKey::connect(key_id.clone(), signer_cert.contents())
@@ -190,6 +196,13 @@ impl C2paConfig {
 
         // A typo must not silently leave signing open to non-members
         let require_entitlement = crate::modules::env_flag::from_env("C2PA_REQUIRE_ENTITLEMENT")?;
+        let require_device = crate::modules::env_flag::from_env("C2PA_REQUIRE_DEVICE")?;
+        let device_app_ids = crate::modules::c2pa_device::parse_app_ids(
+            &std::env::var("C2PA_DEVICE_APP_IDS").unwrap_or_default(),
+        );
+        if require_device && device_app_ids.is_empty() {
+            return Err("C2PA_REQUIRE_DEVICE needs C2PA_DEVICE_APP_IDS".to_string());
+        }
 
         let allowed_creators = std::env::var("C2PA_ALLOWED_CREATORS")
             .unwrap_or_default()
@@ -209,6 +222,8 @@ impl C2paConfig {
             _require_validation,
             allowed_creators,
             require_entitlement,
+            require_device,
+            device_app_ids,
         })
     }
 }
@@ -333,6 +348,8 @@ pub struct C2paSigningState {
     /// Recent sign requests per token subject, for the hourly limit
     sign_requests: std::sync::Mutex<std::collections::HashMap<String, Vec<std::time::Instant>>>,
     sign_limit_per_hour: usize,
+    /// DeviceCheck tokens, checked when `config.require_device` is on
+    device_tokens: Option<crate::modules::c2pa_device::DeviceTokenVerifier>,
 }
 
 impl C2paSigningState {
@@ -347,7 +364,17 @@ impl C2paSigningState {
             person_tokens,
             sign_requests: Default::default(),
             sign_limit_per_hour,
+            device_tokens: None,
         }
+    }
+
+    /// Sets the device token verifier `C2PA_REQUIRE_DEVICE` uses.
+    pub fn with_device_tokens(
+        mut self,
+        verifier: crate::modules::c2pa_device::DeviceTokenVerifier,
+    ) -> Self {
+        self.device_tokens = Some(verifier);
+        self
     }
 
     /// Count a sign request for `sub`; Err(seconds to wait) when over the hourly limit.
@@ -427,6 +454,38 @@ pub async fn sign_manifest(
             "signing entitlement required",
             serde_json::json!({ "required_entitlement": SIGNING_ENTITLEMENT }),
         );
+    }
+    // Only Creator on an attested device may sign (arkavo-rs#133, C2PA O.2). Also
+    // checked before anything counts against the quota.
+    if state.config.require_device {
+        use crate::modules::c2pa_device::DeviceRefusal;
+        let verified = match &state.device_tokens {
+            Some(verifier) => {
+                verifier
+                    .verify(&headers, &person, chrono::Utc::now().timestamp())
+                    .await
+            }
+            None => Err(DeviceRefusal::Unavailable),
+        };
+        match verified {
+            Ok(()) => {}
+            Err(DeviceRefusal::Refused(reason)) => {
+                warn!("C2PA signing denied: {}", reason);
+                return sign_error(
+                    StatusCode::FORBIDDEN,
+                    "device attestation required",
+                    serde_json::json!({ "required": "device_attestation" }),
+                );
+            }
+            Err(DeviceRefusal::Unavailable) => {
+                warn!("C2PA signing refused: device token keys unavailable");
+                return sign_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "identity keys unavailable",
+                    serde_json::json!({}),
+                );
+            }
+        }
     }
     req.metadata.creator = person.sub.clone();
 
@@ -1277,6 +1336,8 @@ mod tests {
             _require_validation: false,
             allowed_creators: vec![],
             require_entitlement: false,
+            require_device: false,
+            device_app_ids: Default::default(),
         }
     }
 
@@ -2332,12 +2393,24 @@ mod sign_endpoint_tests {
         bearer: Option<&str>,
         body: serde_json::Value,
     ) -> (StatusCode, serde_json::Value, Option<String>) {
+        sign_with_device(state, bearer, None, body).await
+    }
+
+    async fn sign_with_device(
+        state: &Arc<C2paSigningState>,
+        bearer: Option<&str>,
+        device: Option<&str>,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value, Option<String>) {
         let app = Router::new()
             .route("/c2pa/v1/sign", post(sign_manifest))
             .with_state(state.clone());
         let mut request = Request::post("/c2pa/v1/sign").header("content-type", "application/json");
         if let Some(token) = bearer {
             request = request.header("authorization", format!("Bearer {}", token));
+        }
+        if let Some(token) = device {
+            request = request.header("x-entity-token", token);
         }
         let response = app
             .oneshot(request.body(Body::from(body.to_string())).unwrap())
@@ -2551,6 +2624,113 @@ mod sign_endpoint_tests {
     async fn test_sign_ignores_entitlements_unless_configured() {
         let state = state(10);
         let (status, _, _) = sign(&state, Some(&token(SUB)), body(uuid_range(0, 1))).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    const ACCOUNT: &str = "9b1d3c5e-0000-4000-8000-000000000001";
+
+    /// A passkey token for SUB carrying `arkavo_account_id`, as identity mints one
+    fn token_with_account(account: &str) -> String {
+        let (sk, _) = keypair();
+        let now = chrono::Utc::now().timestamp();
+        mint_map(
+            &sk,
+            KID,
+            vec![
+                (Value::Integer(1.into()), Value::Text(ISS.into())),
+                (Value::Integer(2.into()), Value::Text(SUB.into())),
+                (
+                    Value::Integer(3.into()),
+                    Value::Array(vec![
+                        Value::Text("arkavo".into()),
+                        Value::Text(PLATFORM.into()),
+                    ]),
+                ),
+                (
+                    Value::Integer(4.into()),
+                    Value::Integer((now + 3600).into()),
+                ),
+                (Value::Integer(6.into()), Value::Integer(now.into())),
+                (
+                    Value::Integer(7.into()),
+                    Value::Bytes(uuid::Uuid::new_v4().as_bytes().to_vec()),
+                ),
+                (
+                    Value::Text("arkavo_account_id".into()),
+                    Value::Text(account.into()),
+                ),
+            ],
+        )
+    }
+
+    fn device_state(limit: usize) -> Arc<C2paSigningState> {
+        use crate::modules::c2pa_device::{tests::CREATOR, DeviceTokenVerifier};
+        let mut config = tests::make_test_config();
+        config.require_device = true;
+        config.device_app_ids = [CREATOR.to_string()].into();
+        let app_ids = config.device_app_ids.clone();
+        let (_, vk) = keypair();
+        let verifier = PersonTokenVerifier::new(
+            CoseKeyCache::with_static_keys(vec![(KID.to_vec(), vk)]),
+            ISS.into(),
+            PLATFORM.into(),
+        );
+        let mut state = C2paSigningState::new(config, Arc::new(verifier)).with_device_tokens(
+            DeviceTokenVerifier::new(
+                CoseKeyCache::with_static_keys(vec![(KID.to_vec(), vk)]),
+                ISS.into(),
+                app_ids,
+            ),
+        );
+        state.sign_limit_per_hour = limit;
+        Arc::new(state)
+    }
+
+    fn device(account: &str, app_id: &str) -> String {
+        crate::modules::c2pa_device::tests::mint_device_token(ISS, KID, account, app_id, |_| {})
+    }
+
+    /// With C2PA_REQUIRE_DEVICE, only Creator on an attested device of the same account
+    /// may sign (arkavo-rs#133). A refusal costs no quota.
+    #[tokio::test]
+    async fn test_sign_requires_an_attested_creator_device_when_configured() {
+        use crate::modules::c2pa_device::tests::CREATOR;
+        let state = device_state(1);
+        let person = token_with_account(ACCOUNT);
+        let other_account = device("11111111-2222-3333-4444-555555555555", CREATOR);
+        let other_app = device(ACCOUNT, "ABCDE12345.com.arkavo.Viewer");
+        for device_token in [None, Some(other_account.as_str()), Some(other_app.as_str())] {
+            let (status, json, _) =
+                sign_with_device(&state, Some(&person), device_token, body(uuid_range(0, 1))).await;
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert_eq!(json["error"], "device attestation required");
+            assert_eq!(json["required"], "device_attestation");
+        }
+        let creator = device(ACCOUNT, CREATOR);
+        let (status, _, _) = sign_with_device(
+            &state,
+            Some(&person),
+            Some(&creator),
+            body(uuid_range(0, 1)),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the Creator device signs as before, with the quota intact"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sign_ignores_the_device_token_unless_configured() {
+        let state = state(10);
+        let (status, _, _) = sign_with_device(
+            &state,
+            Some(&token(SUB)),
+            Some("not-a-token"),
+            body(uuid_range(0, 1)),
+        )
+        .await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 

@@ -11,6 +11,7 @@
             "value": {
               "sub": "arkavo:550e8400-e29b-41d4-a716-446655440000",
               "iss": "https://identity.arkavo.net",
+              "arkavo_account_id": "550e8400-e29b-41d4-a716-446655440000",
               "email": "alice@example.com",
               "patreon_user_id": "12345678",
               "arkavo_entitlements": [
@@ -42,10 +43,7 @@
           "claims": {
             "@type": "type.googleapis.com/google.protobuf.Struct",
             "value": {
-              "sub": "550e8400-e29b-41d4-a716-446655440000",
-              "iss": "https://identity.arkavo.net",
-              "aud": "arkavo:devicecheck",
-              "kid": "YWxwaGEtZGV2aWNlLWtpZA"
+              "arkavo_device_token": "<device-token:d1>"
             }
           }
         },
