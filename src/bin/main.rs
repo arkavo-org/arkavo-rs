@@ -274,11 +274,41 @@ async fn log_request_middleware(
 }
 
 /// WebSocket upgrade handler for Axum
+/// `X-Auth-Token`: the session CWT ArkavoKit sends on the `/ws` handshake.
+const WS_SESSION_TOKEN_HEADER: &str = "x-auth-token";
+
+/// A session CWT on the `/ws` handshake must verify, `exp` included (arkavo-rs#71):
+/// accepting an expired one keeps a stale session alive, and the client never re-mints.
+/// Returns the refusal; a request without the header is left to the other checks.
+async fn refuse_bad_session_token(
+    headers: &HeaderMap,
+    verifier: &modules::license::person_token::PersonTokenVerifier,
+) -> Option<axum::response::Response> {
+    let token = headers.get(WS_SESSION_TOKEN_HEADER)?;
+    let token = match token.to_str().map(str::trim) {
+        Ok(t) if !t.is_empty() => t,
+        _ => return Some((StatusCode::UNAUTHORIZED, "invalid session token").into_response()),
+    };
+    match verifier
+        .verify_token(token, chrono::Utc::now().timestamp())
+        .await
+    {
+        Ok(_) => None,
+        Err(e) => {
+            warn!("/ws session token refused: {}", e.reason());
+            Some((e.status(), e.reason()).into_response())
+        }
+    }
+}
+
 async fn ws_handler(
     State(state): State<Arc<WebSocketState>>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
+    if let Some(refusal) = refuse_bad_session_token(&headers, &state.session_tokens).await {
+        return refusal;
+    }
     // Check for NTDF token in Authorization header
     if let Some(auth_header) = headers.get(AUTHORIZATION) {
         if let Ok(auth_str) = auth_header.to_str() {
@@ -395,11 +425,10 @@ async fn handle_websocket_axum(ws: WebSocket, state: Arc<WebSocketState>) {
                         break;
                     }
                     AxumMessage::Text(token) => {
-                        // Handle JWT token
-                        println!("token: {}", token);
+                        // Handle JWT token (never log the token itself)
                         match verify_token(&token, &state.server_state.settings) {
                             Ok(claims) => {
-                                println!("Valid JWT received. Claims: {:?}", claims);
+                                println!("Valid JWT received");
                                 // Store the claims
                                 {
                                     let mut claims_lock =
@@ -1172,6 +1201,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         server_state: server_state.clone(),
         nats_connection: nats_connection.clone(),
         apple_app_site_association: apple_app_site_association.clone(),
+        session_tokens: Arc::new(modules::license::config::person_verifier_from_env()),
     });
 
     // Combine all routers
@@ -2988,6 +3018,8 @@ struct WebSocketState {
     server_state: Arc<ServerState>,
     nats_connection: Arc<NatsConnection>,
     apple_app_site_association: Arc<RwLock<String>>,
+    /// Verifies a session CWT sent as `X-Auth-Token` on `/ws` (arkavo-rs#71)
+    session_tokens: Arc<modules::license::person_token::PersonTokenVerifier>,
 }
 
 impl ServerState {
@@ -3210,6 +3242,101 @@ fn convert_rating_level(level: arkavo::RatingLevel) -> RatingLevel {
         x if x == arkavo::RatingLevel::moderate.0 => RatingLevel::Moderate,
         x if x == arkavo::RatingLevel::severe.0 => RatingLevel::Severe,
         _ => RatingLevel::Unused, // Default to Unused for any invalid values
+    }
+}
+
+#[cfg(test)]
+mod ws_session_token_tests {
+    use super::*;
+    use ciborium::value::Value as Cbor;
+    use modules::authzen::cose_keys::CoseKeyCache;
+    use modules::authzen::cwt_verify::test_support::{keypair, mint_map};
+    use modules::license::person_token::PersonTokenVerifier;
+
+    const ISS: &str = "https://identity.test";
+    const PLATFORM: &str = "https://platform.arkavo.net";
+    const KID: &[u8] = b"kid-1";
+
+    fn verifier() -> PersonTokenVerifier {
+        let (_, vk) = keypair();
+        PersonTokenVerifier::new(
+            CoseKeyCache::with_static_keys(vec![(KID.to_vec(), vk)]),
+            ISS.into(),
+            PLATFORM.into(),
+        )
+    }
+
+    /// A session CWT as identity mints one: a one-hour lifetime ending at `exp`.
+    fn session(exp: i64, aud: &[&str], kid: &[u8]) -> String {
+        let (sk, _) = keypair();
+        mint_map(
+            &sk,
+            kid,
+            vec![
+                (Cbor::Integer(1.into()), Cbor::Text(ISS.into())),
+                (
+                    Cbor::Integer(2.into()),
+                    Cbor::Text("arkavo:9b1d3c5e-0000-4000-8000-000000000001".into()),
+                ),
+                (
+                    Cbor::Integer(3.into()),
+                    Cbor::Array(aud.iter().map(|a| Cbor::Text((*a).into())).collect()),
+                ),
+                (Cbor::Integer(4.into()), Cbor::Integer(exp.into())),
+                (Cbor::Integer(6.into()), Cbor::Integer((exp - 3600).into())),
+                (Cbor::Integer(7.into()), Cbor::Bytes(vec![7u8; 16])),
+            ],
+        )
+    }
+
+    fn headers(token: Option<&str>) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        if let Some(t) = token {
+            h.insert(WS_SESSION_TOKEN_HEADER, t.parse().unwrap());
+        }
+        h
+    }
+
+    async fn status(token: Option<&str>) -> Option<StatusCode> {
+        refuse_bad_session_token(&headers(token), &verifier())
+            .await
+            .map(|r| r.status())
+    }
+
+    #[tokio::test]
+    async fn a_valid_session_token_or_none_is_left_to_the_other_checks() {
+        let now = chrono::Utc::now().timestamp();
+        let live = session(now + 1800, &["arkavo", PLATFORM], KID);
+        assert_eq!(status(Some(&live)).await, None);
+        assert_eq!(status(None).await, None);
+    }
+
+    /// arkavo-rs#71: a token 4.65 days past `exp` was accepted
+    #[tokio::test]
+    async fn an_expired_session_token_is_401() {
+        let now = chrono::Utc::now().timestamp();
+        let stale = session(now - 401_993, &["arkavo", PLATFORM], KID);
+        assert_eq!(status(Some(&stale)).await, Some(StatusCode::UNAUTHORIZED));
+    }
+
+    #[tokio::test]
+    async fn a_blank_foreign_or_wrong_audience_token_is_refused() {
+        let now = chrono::Utc::now().timestamp();
+        assert_eq!(status(Some(" ")).await, Some(StatusCode::UNAUTHORIZED));
+        assert_eq!(
+            status(Some("not-a-cwt")).await,
+            Some(StatusCode::UNAUTHORIZED)
+        );
+        let unknown_key = session(now + 1800, &["arkavo", PLATFORM], b"other-kid");
+        assert_eq!(
+            status(Some(&unknown_key)).await,
+            Some(StatusCode::UNAUTHORIZED)
+        );
+        let no_platform = session(now + 1800, &["arkavo"], KID);
+        assert_eq!(
+            status(Some(&no_platform)).await,
+            Some(StatusCode::UNAUTHORIZED)
+        );
     }
 }
 
