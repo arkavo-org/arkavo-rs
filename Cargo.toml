@@ -48,7 +48,7 @@ log = "0.4.22"
 ink = "5.0.0"
 jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 async-nats = "0.51"
-redis = { version = "0.27.2", features = ["tokio-comp"] }
+redis = { version = "1.8.0", features = ["tokio-comp"] }
 flatbuffers = "24.12.23"
 scale = { package = "parity-scale-codec", version = "3.6.12", default-features = false, features = ["derive"] }
 scale-info = { version = "2.11.3", default-features = false, features = ["derive"], optional = true }
