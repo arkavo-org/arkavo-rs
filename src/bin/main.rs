@@ -1417,19 +1417,6 @@ fn rustls_server_config(
     Ok(config)
 }
 
-/// Parses a boolean setting: absent is `false`; an explicit value must be one of
-/// true/false/1/0/yes/no (any case, surrounding space ignored)
-fn parse_env_flag(name: &str, value: Option<&str>) -> Result<bool, String> {
-    let Some(value) = value else {
-        return Ok(false);
-    };
-    match value.trim().to_ascii_lowercase().as_str() {
-        "true" | "1" | "yes" => Ok(true),
-        "false" | "0" | "no" => Ok(false),
-        _ => Err(format!("{} must be true or false, got {:?}", name, value)),
-    }
-}
-
 // Old handle_websocket and handle_connection functions removed - replaced by handle_websocket_axum
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -3023,10 +3010,7 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
                 .unwrap()
                 .to_string()
         }),
-        tls_allow_tls12: parse_env_flag(
-            "TLS_ALLOW_TLS12",
-            env::var("TLS_ALLOW_TLS12").ok().as_deref(),
-        )?,
+        tls_allow_tls12: modules::env_flag::from_env("TLS_ALLOW_TLS12")?,
         kas_key_path: env::var("KAS_KEY_PATH").unwrap_or_else(|_| {
             current_dir
                 .join("recipient_private_key.pem")
@@ -3197,7 +3181,7 @@ mod tls_version_tests {
     async fn handshake(
         allow_tls12: bool,
         client_versions: &[&'static rustls::SupportedProtocolVersion],
-    ) -> Result<rustls::ProtocolVersion, String> {
+    ) -> Result<rustls::ProtocolVersion, std::io::Error> {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
         let cert = ck.cert.der().clone();
@@ -3219,8 +3203,7 @@ mod tls_version_tests {
         let result = TlsConnector::from(Arc::new(client))
             .connect(name, client_io)
             .await
-            .map(|s| s.get_ref().1.protocol_version().unwrap())
-            .map_err(|e| e.to_string());
+            .map(|s| s.get_ref().1.protocol_version().unwrap());
         let _ = server_task.await;
         result
     }
@@ -3236,7 +3219,14 @@ mod tls_version_tests {
         let err = handshake(false, &[&rustls::version::TLS12])
             .await
             .unwrap_err();
-        assert!(err.contains("ProtocolVersion"), "unexpected error: {err}");
+        let tls = err
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<rustls::Error>())
+            .unwrap_or_else(|| panic!("not a TLS error: {err:?}"));
+        assert_eq!(
+            tls,
+            &rustls::Error::AlertReceived(rustls::AlertDescription::ProtocolVersion)
+        );
     }
 
     #[tokio::test]
@@ -3247,14 +3237,6 @@ mod tls_version_tests {
             .await
             .unwrap();
         assert_eq!(v, rustls::ProtocolVersion::TLSv1_3);
-    }
-
-    #[test]
-    fn allow_tls12_flag_is_strict() {
-        assert_eq!(parse_env_flag("TLS_ALLOW_TLS12", None), Ok(false));
-        assert_eq!(parse_env_flag("TLS_ALLOW_TLS12", Some(" Yes ")), Ok(true));
-        assert_eq!(parse_env_flag("TLS_ALLOW_TLS12", Some("0")), Ok(false));
-        assert!(parse_env_flag("TLS_ALLOW_TLS12", Some("on")).is_err());
     }
 }
 
