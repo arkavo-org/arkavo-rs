@@ -1,0 +1,117 @@
+name: Security
+
+# C2PA Generator Product Security Requirements v0.2, O.3 (release gate) and O.6
+# (hosting: 30 days for high). Tracked in #135.
+#
+# osv-scanner reads Cargo.lock and matches it against OSV, which carries RustSec
+# advisories, NVD CVEs and GitHub advisories. The gate fails on CRITICAL/HIGH
+# findings that are not waived in osv-scanner.toml; waivers last 30 days at most.
+# A failing run on a release tag is the gate evidence; protect release tags or
+# check the run before publishing the release.
+#
+# Cargo.lock is committed (#140), so the gate scans exactly what releases build.
+# `cargo generate-lockfile` below only runs if it is ever missing.
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+    tags: [ "**" ]
+  schedule:
+    # Weekly, so a new advisory against unchanged dependencies still surfaces.
+    - cron: '29 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vulnerability-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  osv-scan:
+    name: osv-scanner gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve Cargo.lock
+        run: |
+          if [ ! -f Cargo.lock ]; then
+            cargo generate-lockfile
+          fi
+
+      - name: Scan the lockfile
+        id: scan
+        # The action is pinned by SHA, but the osv-scanner Docker image it runs is a tag.
+        uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
+        # osv-scanner exits non-zero when it finds something. The gate step decides
+        # whether that fails the job, and also fails if the scan wrote no results.
+        continue-on-error: true
+        with:
+          # One argument per line. --all-packages lists clean packages too, so the
+          # gate can tell "nothing found" from "nothing parsed".
+          scan-args: |-
+            --lockfile=Cargo.lock
+            --config=osv-scanner.toml
+            --format=json
+            --output-file=osv-results.json
+            --all-packages
+
+      - name: Gate on CRITICAL and HIGH findings
+        run: python3 -I .github/scripts/osv_gate.py osv-results.json --config osv-scanner.toml --max-waiver-days 30
+
+      - name: Keep the scan results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: osv-scan-results
+          path: |
+            osv-results.json
+            Cargo.lock
+          if-no-files-found: ignore
+
+  sbom:
+    name: CycloneDX SBOM
+    # Per release (tag push). workflow_dispatch lets you test it without a tag.
+    # Only after the gate passes: a release that failed it gets no SBOM evidence.
+    if: ${{ needs.osv-scan.result == 'success' && (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') }}
+    needs: osv-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Use the lockfile that was scanned
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: osv-scan-results
+
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --version 0.5.9 --locked
+
+      - name: Generate the SBOM
+        # One CycloneDX file per workspace member (arkavo-rs, fpssdk, fairplay-wrapper).
+        # --all-features covers every optional dependency: c2pa_signing, http3, fairplay.
+        run: |
+          cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 --all-features
+          mkdir sbom
+          find . -name '*.cdx.json' -not -path './sbom/*' -not -path './target/*' -exec cp {} sbom/ \;
+          ls -l sbom
+          test -n "$(ls sbom)"
+
+      - name: Upload the SBOM
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom-cyclonedx-${{ github.sha }}
+          # docs/sbom-extra.md lists what the scanner cannot see: vendor/fpssdk, the Apple
+          # libfpscrypto binary and git dependencies. It ships with the SBOM.
+          path: |
+            sbom/
+            docs/sbom-extra.md
+          if-no-files-found: error
