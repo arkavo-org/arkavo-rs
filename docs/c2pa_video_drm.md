@@ -288,7 +288,7 @@ Without a trusted timestamp, a verifier checks the signer certificate against th
 
 C2PA uses ES256 (ECDSA with SHA-256) for signing. **Important:** c2pa-rs rejects self-signed certificates. You must generate a CA + end-entity certificate chain with the `emailProtection` Extended Key Usage.
 
-arks signs with c2pa-rs's pure-Rust crypto backend (`rust_native_crypto`, RustCrypto `p256`), so C2PA signing uses no OpenSSL. (On Linux the binary still links OpenSSL through `reqwest`'s default `native-tls`.) The backend only reads PKCS#8 keys, so arks converts a SEC1 `EC PRIVATE KEY` (what `openssl ecparam` writes) to PKCS#8 when it loads the key. Either format works for `C2PA_SIGNING_KEY_PATH`.
+arks signs with c2pa-rs's pure-Rust crypto backend (`rust_native_crypto`, RustCrypto `p256`), so C2PA signing uses no OpenSSL. HTTPS clients use rustls too (TLS versions in [tls.md](tls.md)); the only OpenSSL in the binary is the vendored FairPlay SDK, with the `fairplay` feature. The backend only reads PKCS#8 keys, so arks converts a SEC1 `EC PRIVATE KEY` (what `openssl ecparam` writes) to PKCS#8 when it loads the key. Either format works for `C2PA_SIGNING_KEY_PATH`.
 
 ```bash
 # 1. Generate CA key and self-signed CA certificate

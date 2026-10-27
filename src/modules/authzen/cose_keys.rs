@@ -32,6 +32,7 @@ pub struct CoseKeyCache {
 fn bounded_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(KEY_FETCH_TIMEOUT)
+        .min_tls_version(reqwest::tls::Version::TLS_1_3)
         .build()
         .expect("reqwest client")
 }

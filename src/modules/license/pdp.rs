@@ -55,6 +55,7 @@ impl PlatformPdp {
         let http = reqwest::Client::builder()
             .timeout(HTTP_TIMEOUT)
             .redirect(Policy::none())
+            .min_tls_version(reqwest::tls::Version::TLS_1_3)
             .build()
             .map_err(|e| format!("license pdp http client: {e}"))?;
         Ok(Self {
