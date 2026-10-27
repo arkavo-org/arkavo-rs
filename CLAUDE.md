@@ -212,7 +212,7 @@ Each WebSocket connection maintains:
 - **Key Agreement**: ECDH using P-256 (secp256r1) with custom x-coordinate extraction
 - **Session Keys**: HKDF-SHA256 key derivation from shared secret
 - **Symmetric Encryption**: AES-256-GCM for rewrapping data encryption keys (DEK)
-- **TLS**: Inbound minimum TLS 1.2 (TLS 1.3 preferred; HTTP/3 is always 1.3), configurable certificate paths. Outbound identity calls (COSE keys, service tokens) require TLS 1.3; see `docs/tls.md`
+- **TLS**: Inbound minimum TLS 1.2 (TLS 1.3 preferred; HTTP/3 is always 1.3), configurable certificate paths. Outbound `reqwest` clients (identity, platform) require TLS 1.3 via `modules::http_client::builder()`; see `docs/tls.md`
 
 ## Configuration
 

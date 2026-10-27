@@ -52,10 +52,9 @@ impl PlatformPdp {
         client_id: String,
         client_secret: String,
     ) -> Result<Self, String> {
-        let http = reqwest::Client::builder()
+        let http = crate::modules::http_client::builder()
             .timeout(HTTP_TIMEOUT)
             .redirect(Policy::none())
-            .min_tls_version(reqwest::tls::Version::TLS_1_3)
             .build()
             .map_err(|e| format!("license pdp http client: {e}"))?;
         Ok(Self {
@@ -84,7 +83,10 @@ impl PlatformPdp {
             .form(&[("grant_type", "client_credentials")])
             .send()
             .await
-            .map_err(|_| LicenseError::Unavailable("identity unreachable"))?;
+            .map_err(|e| {
+                log::error!("license pdp: service token request: {e:?}");
+                LicenseError::Unavailable("identity unreachable")
+            })?;
         if !resp.status().is_success() {
             log::error!("license pdp: service token HTTP {}", resp.status());
             return Err(LicenseError::Unavailable("service credential rejected"));
@@ -131,7 +133,10 @@ impl PlatformPdp {
                 .json(&body)
                 .send()
                 .await
-                .map_err(|_| LicenseError::Unavailable("platform unreachable"))?;
+                .map_err(|e| {
+                    log::error!("license pdp: GetDecision request: {e:?}");
+                    LicenseError::Unavailable("platform unreachable")
+                })?;
             let status = resp.status();
             if status.as_u16() == 401 && !force {
                 force = true;

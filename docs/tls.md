@@ -23,14 +23,16 @@ without TLS 1.3 then fail the handshake.
 
 | Link | Client | Minimum |
 |---|---|---|
-| Identity: COSE keys (`{OIDC_ISSUER}/.well-known/cose-keys`) | `reqwest`, `src/modules/authzen/cose_keys.rs` | TLS 1.3 |
-| Identity: service tokens (`{OIDC_ISSUER}/oauth/token`), and the platform `GetDecision` | `reqwest`, `src/modules/license/pdp.rs` | TLS 1.3 |
+| Identity: COSE keys (`{OIDC_ISSUER}/.well-known/cose-keys`), service tokens (`{OIDC_ISSUER}/oauth/token`) | `reqwest` | TLS 1.3 |
+| opentdf-platform (`OPENTDF_PLATFORM_URL`): `GetDecision`, proxy, AuthZEN facade | `reqwest` | TLS 1.3 when https; plain HTTP on loopback in production |
 | AWS KMS (C2PA signing), DynamoDB (moderation) | AWS SDK default HTTPS client | TLS 1.2 |
 | C2PA timestamp authority (`C2PA_TSA_URL`) | `ureq`, built by the c2pa crate | TLS 1.2 |
-| opentdf-platform proxy, AuthZEN facade | `reqwest` | TLS 1.2 (plain HTTP on loopback in production) |
 | NATS, Redis | | plain, loopback only |
 
-A 1.3 minimum means a server that offers only TLS 1.2 is refused at the handshake.
+Every `reqwest` client is built from `modules::http_client::builder()`, which sets the
+TLS 1.3 minimum; new outbound clients should start from it too. A server that offers only
+TLS 1.2 is refused at the handshake, and the request fails as unreachable (503 on the
+licence and token paths, with the cause in the error log).
 
 The AWS SDK and timestamp clients are not pinned. AWS KMS, DynamoDB and the SSL.com C2PA
 timestamp authority all offer TLS 1.3, so those links negotiate 1.3, and rustls's
