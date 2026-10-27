@@ -18,3 +18,5 @@ pub mod ntdf_token;
 pub mod platform_proxy;
 pub mod rtmp;
 pub mod secure_keys;
+#[cfg(all(feature = "fairplay", unix))]
+pub mod stderr_scrub;

@@ -363,6 +363,7 @@ dependencies = [
  "hyper-util",
  "ink",
  "jsonwebtoken",
+ "libc",
  "log",
  "moka",
  "mp4parse",

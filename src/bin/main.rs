@@ -569,8 +569,32 @@ async fn apple_app_site_association_handler(
     )
 }
 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Before anything writes to stderr: the FairPlay SDK's error lines can carry the
+    // license request (#83)
+    #[cfg(all(feature = "fairplay", unix))]
+    if let Err(e) = modules::stderr_scrub::install() {
+        eprintln!(
+            "stderr scrubbing unavailable ({e}); FairPlay SDK errors may log request material"
+        );
+    }
+    let result = run();
+    #[cfg(all(feature = "fairplay", unix))]
+    {
+        // Print the error ourselves, then drain the pipe before exiting
+        if let Err(e) = &result {
+            eprintln!("Error: {e:?}");
+        }
+        modules::stderr_scrub::finish();
+        if result.is_err() {
+            std::process::exit(1);
+        }
+    }
+    result
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging with default level if RUST_LOG not set
     // Force unbuffered output to stderr for immediate log visibility
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
