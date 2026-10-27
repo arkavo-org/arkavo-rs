@@ -219,7 +219,7 @@ export C2PA_SIGNING_KEY_PATH=/path/to/c2pa_private_key.pem        # with C2PA_SI
 export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert_chain.pem      # signer certificate, then the CA
 export C2PA_REQUIRE_VALIDATION=true  # Enforce C2PA in media policy
 export C2PA_ALLOWED_CREATORS=arkavo:<uuid-1>,arkavo:<uuid-2>  # token subjects (sub), not emails
-export C2PA_REQUIRE_ENTITLEMENT=true  # only creator members (the publish entitlement) may sign; default false; true/false, 1/0 or yes/no, anything else stops startup
+export C2PA_REQUIRE_ENTITLEMENT=true  # only creator members (the publish entitlement) may sign; default false; true/false, 1/0 or yes/no; anything else logs an error and leaves /c2pa/v1/* unmounted until restart (signing fails closed, the rest of arks keeps running)
 # Optional: PEM bundle /c2pa/v1/validate trusts. Default: the certificates after the
 # end-entity in C2PA_SIGNING_CERT_PATH (our own CA). List a retired CA here during a rotation.
 export C2PA_TRUST_ANCHORS_PATH=/path/to/c2pa_trust_anchors.pem
