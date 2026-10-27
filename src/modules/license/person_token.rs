@@ -64,6 +64,12 @@ impl PersonTokenVerifier {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .ok_or(LicenseError::Unauthenticated("missing bearer token"))?;
+        self.verify_token(token, now).await
+    }
+
+    /// Verifies a passkey token given directly (e.g. `/ws`'s `X-Auth-Token`): the same
+    /// checks as [`Self::verify`], including `exp`.
+    pub async fn verify_token(&self, token: &str, now: i64) -> Result<Person, LicenseError> {
         let kid =
             header_kid(token).map_err(|_| LicenseError::Unauthenticated("malformed token"))?;
         let key = match self.keys.resolve(&kid).await {
