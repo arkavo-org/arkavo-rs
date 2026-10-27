@@ -342,7 +342,7 @@ dependencies = [
  "aws-sdk-dynamodb",
  "aws-sdk-kms",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "blake2",
  "bs58",
  "bytes",
@@ -1221,12 +1221,6 @@ name = "base58"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6107fe1be6682a68940da878d9e9f5e90ca5745b3dec9fd1bb393c8777d4f581"
-
-[[package]]
-name = "base64"
-version = "0.21.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
 
 [[package]]
 name = "base64"
@@ -2879,7 +2873,7 @@ checksum = "4a61bffc6f807b136c3efeeac295edde2c65b1e345de7ea777e75f63de7436c6"
 name = "fairplay-wrapper"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "env_logger 0.11.11",
  "fpssdk",
  "hex",
@@ -3028,7 +3022,7 @@ name = "fpssdk"
 version = "26.0.0"
 dependencies = [
  "aes",
- "base64 0.21.7",
+ "base64 0.23.1",
  "byteorder",
  "chrono",
  "cipher",
