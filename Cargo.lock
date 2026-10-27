@@ -354,7 +354,7 @@ dependencies = [
  "h3",
  "h3-quinn",
  "hex",
- "hkdf",
+ "hkdf 0.13.0",
  "hmac 0.12.1",
  "http",
  "http-body",
@@ -2721,7 +2721,7 @@ dependencies = [
  "ff 0.13.1",
  "generic-array",
  "group 0.13.0",
- "hkdf",
+ "hkdf 0.12.4",
  "pem-rfc7468 0.7.0",
  "pkcs8 0.10.2",
  "rand_core 0.6.4",
@@ -3438,6 +3438,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
 dependencies = [
  "hmac 0.12.1",
+]
+
+[[package]]
+name = "hkdf"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"
+dependencies = [
+ "hmac 0.13.0",
 ]
 
 [[package]]
@@ -4981,7 +4990,7 @@ dependencies = [
  "aes-gcm",
  "aws-lc-rs",
  "base64 0.22.1",
- "hkdf",
+ "hkdf 0.12.4",
  "hmac 0.12.1",
  "k256",
  "opentdf-protocol",
@@ -5009,7 +5018,7 @@ source = "git+https://github.com/arkavo-org/opentdf-rs?tag=0.16.1#7cdc9451a21652
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
- "hkdf",
+ "hkdf 0.12.4",
  "p256 0.13.2",
  "pem 3.0.6",
  "rand 0.8.8",
