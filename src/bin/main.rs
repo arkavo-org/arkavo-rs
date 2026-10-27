@@ -944,13 +944,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let c2pa_signing_state = match c2pa_signing::C2paConfig::from_env().await {
         Ok(config) => {
             info!("C2PA signing enabled");
-            let device_tokens = config.require_device.then(|| {
+            // Always built: with C2PA_REQUIRE_DEVICE off it only logs what it would decide
+            if config.require_device {
                 info!(
                     "C2PA signing requires an attested device ({} app id(s))",
                     config.device_app_ids.len()
                 );
-                modules::license::config::device_verifier_from_env(config.device_app_ids.clone())
-            });
+            }
+            let device_tokens = Some(modules::license::config::device_verifier_from_env(
+                config.device_app_ids.clone(),
+            ));
             let state = c2pa_signing::C2paSigningState::new(
                 config,
                 Arc::new(modules::license::config::person_verifier_from_env()),
