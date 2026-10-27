@@ -120,7 +120,7 @@ c2pa_signing = ["c2pa", "mp4parse", "x509-parser", "aws-sdk-kms"]
 criterion = "0.5.1"
 serial_test = "3.2.0"
 wiremock = "0.6"
-# Self-signed cert generation for the http3 end-to-end smoke test.
+# Self-signed certs for the http3 smoke test and the TLS version tests.
 rcgen = "0.13"
 # Short-lived signer certificates for the C2PA timestamp test.
 time = "0.3"

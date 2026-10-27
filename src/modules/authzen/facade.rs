@@ -119,7 +119,7 @@ impl FacadeState {
                 parsed.scheme()
             ));
         }
-        let http = reqwest::Client::builder()
+        let http = crate::modules::http_client::builder()
             .timeout(Duration::from_secs(UPSTREAM_TIMEOUT_SECS))
             .redirect(Policy::none())
             .build()
