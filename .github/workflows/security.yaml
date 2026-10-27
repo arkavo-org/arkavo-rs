@@ -9,10 +9,8 @@ name: Security
 # A failing run on a release tag is the gate evidence; protect release tags or
 # check the run before publishing the release.
 #
-# Cargo.lock is not committed (it is in .gitignore), so the scan job resolves it
-# with `cargo generate-lockfile`. That scans the newest versions Cargo.toml allows,
-# which can differ from what a production build resolved. Committing Cargo.lock for
-# the arks binary would make the scan exact; this workflow then uses the committed file.
+# Cargo.lock is committed (#140), so the gate scans exactly what releases build.
+# `cargo generate-lockfile` below only runs if it is ever missing.
 
 on:
   pull_request:
@@ -80,7 +78,8 @@ jobs:
   sbom:
     name: CycloneDX SBOM
     # Per release (tag push). workflow_dispatch lets you test it without a tag.
-    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') }}
+    # Only after the gate passes: a release that failed it gets no SBOM evidence.
+    if: ${{ needs.osv-scan.result == 'success' && (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') }}
     needs: osv-scan
     runs-on: ubuntu-latest
     steps:
