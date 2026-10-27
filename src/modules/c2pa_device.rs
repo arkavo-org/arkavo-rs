@@ -7,7 +7,9 @@
 //!   `iss`, an unexpired `exp`, and an `aud` naming `arkavo:devicecheck`;
 //! - `arkavo_npe` is a device's (`type` = `device`), `cnf` is present, and it carries
 //!   no other agent marker;
-//! - `arkavo_npe.app_id` is in `C2PA_DEVICE_APP_IDS` (authnz-rs#124);
+//! - `arkavo_npe.app_id_hash` (the App Attest rpIdHash: lowercase hex SHA-256 of
+//!   `<TeamID>.<bundle id>`, authnz-rs#114) is one of `C2PA_DEVICE_APP_IDS`. Identity
+//!   includes it only for an app it accepts, so a token without it is refused;
 //! - it binds to the person as the platform binds a device: its `iss` and
 //!   `arkavo_account_id` equal the passkey token's.
 
@@ -91,11 +93,11 @@ impl DeviceTokenVerifier {
         if !claims.cnf {
             return Err(DeviceRefusal::Refused("device token has no cnf"));
         }
-        let app_id = npe
-            .get("app_id")
+        let app_id_hash = npe
+            .get("app_id_hash")
             .and_then(|a| a.as_str())
             .ok_or(DeviceRefusal::Refused("device token names no app"))?;
-        if !self.app_ids.contains(app_id) {
+        if !self.app_ids.contains(&app_id_hash.to_ascii_lowercase()) {
             return Err(DeviceRefusal::Refused("device token is for another app"));
         }
         let account = claims
@@ -112,12 +114,21 @@ impl DeviceTokenVerifier {
     }
 }
 
-/// `C2PA_DEVICE_APP_IDS`: comma-separated `<TeamID>.<bundle id>` values.
+/// `C2PA_DEVICE_APP_IDS`: comma-separated `<TeamID>.<bundle id>` values, or their
+/// rpIdHash as 64 hex digits. Returns the set of lowercase hex hashes that
+/// `arkavo_npe.app_id_hash` is compared with.
 pub fn parse_app_ids(raw: &str) -> HashSet<String> {
+    use sha2::{Digest, Sha256};
     raw.split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
+        .map(|entry| {
+            if entry.len() == 64 && entry.bytes().all(|b| b.is_ascii_hexdigit()) {
+                entry.to_ascii_lowercase()
+            } else {
+                hex::encode(Sha256::digest(entry.as_bytes()))
+            }
+        })
         .collect()
 }
 
@@ -132,6 +143,25 @@ pub mod tests {
     const KID: &[u8] = b"test-kid";
     const ACCOUNT: &str = "550e8400-e29b-41d4-a716-446655440000";
     pub const CREATOR: &str = "ABCDE12345.com.arkavo.Creator";
+
+    /// The rpIdHash identity puts in `app_id_hash` for an app id
+    fn app_hash(app_id: &str) -> String {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(app_id.as_bytes()))
+    }
+
+    #[test]
+    fn app_ids_are_hashed_or_taken_as_hashes() {
+        let creator = "ea2defc9e7bf14b832b0fb5e4ada8f0af0e114dca9fc7741cda17d875cf1bc01";
+        assert_eq!(
+            parse_app_ids(" M8GS7ZT95Y.com.arkavo.ArkavoCreator ,"),
+            [creator.to_string()].into()
+        );
+        assert_eq!(
+            parse_app_ids(&creator.to_ascii_uppercase()),
+            [creator.to_string()].into()
+        );
+    }
 
     fn verifier() -> DeviceTokenVerifier {
         let (_, vk) = keypair();
@@ -152,7 +182,7 @@ pub mod tests {
         }
     }
 
-    /// A DeviceCheck token as authnz-rs mints one, with `app_id` (authnz-rs#124).
+    /// A DeviceCheck token as authnz-rs mints one, with `app_id_hash` (authnz-rs#114).
     /// `edit` changes the claims before signing.
     fn device_token(edit: impl FnOnce(&mut Vec<(Cbor, Cbor)>)) -> String {
         mint_device_token(ISS, KID, ACCOUNT, CREATOR, edit)
@@ -196,7 +226,10 @@ pub mod tests {
                 Cbor::Map(vec![
                     (Cbor::Text("type".into()), Cbor::Text("device".into())),
                     (Cbor::Text("class".into()), Cbor::Text("attested".into())),
-                    (Cbor::Text("app_id".into()), Cbor::Text(app_id.into())),
+                    (
+                        Cbor::Text("app_id_hash".into()),
+                        Cbor::Text(app_hash(app_id)),
+                    ),
                 ]),
             ),
         ];
@@ -228,7 +261,7 @@ pub mod tests {
     fn npe(app_id: Option<&str>, kind: &str) -> Cbor {
         let mut members = vec![(Cbor::Text("type".into()), Cbor::Text(kind.into()))];
         if let Some(app) = app_id {
-            members.push((Cbor::Text("app_id".into()), Cbor::Text(app.into())));
+            members.push((Cbor::Text("app_id_hash".into()), Cbor::Text(app_hash(app))));
         }
         Cbor::Map(members)
     }
