@@ -232,8 +232,9 @@ fn pe_claims(subject: &Value) -> Result<Value, TranslateError> {
     // `cwt_subject::subject()` emits email_verified, idp, arkavo_account_id,
     // arkavo_roles and arkavo_entitlements. arkavo_entitlements is forwarded,
     // filtered to the Patreon definitions the platform's composite `patreon`
-    // source owns and the publish entitlement its `identity-core` source owns
-    // (arkavo-rs#95); the platform's pep_assertable setting stays the binding
+    // source owns, the publish entitlement its `identity-core` source owns
+    // (arkavo-rs#95) and the per-creator `https://arkavo.net/attr/creator/value/<uuid>`
+    // (arkavo-rs#126); the platform's pep_assertable setting stays the binding
     // guard, this filter is defence in depth. email_verified, idp, arkavo_account_id and
     // arkavo_roles are still dropped (see the explicit assertion in
     // chain_pe_then_devices_then_env_mismatched_prefix_bind). If any OpenTDF
@@ -888,6 +889,38 @@ mod tests {
                 "https://patreon.arkavo.com/attr/arkavo-creator/value/publish",
                 "https://patreon.arkavo.com/attr/campaign/value/7237273"
             ])
+        );
+    }
+
+    #[test]
+    fn pe_claims_forwards_the_creator_attribute_only_in_its_exact_form() {
+        let account = "550e8400-e29b-41d4-a716-446655440000";
+        let subject = pe_with_entitlements(
+            json!([
+                format!("https://arkavo.net/attr/creator/value/{account}"),
+                "HTTPS://ARKAVO.NET/attr/creator/value/550E8400-E29B-41D4-A716-446655440000",
+                "https://arkavo.net/attr/creator/value/550e8400e29b41d4a716446655440000",
+                "https://arkavo.net/attr/creator/value/{550e8400-e29b-41d4-a716-446655440000}",
+                "https://arkavo.net/attr/creator/value/urn:uuid:550e8400-e29b-41d4-a716-446655440000",
+                "https://arkavo.net/attr/creator/value/not-a-uuid",
+                format!("https://arkavo.net/attr/creator/value/{account}/x"),
+                format!("https://arkavo.net/attr/creators/value/{account}"),
+                format!("https://arkavo.net/attr/other/value/{account}"),
+                format!("https://arkavo.net.evil/attr/creator/value/{account}"),
+                format!("http://arkavo.net/attr/creator/value/{account}"),
+                format!("https://arkavo.ai/attr/creator/value/{account}"),
+                "https://arkavo.net/attr/creator/value/11111111-2222-3333-4444-555555555555"
+            ]),
+            "consumer",
+        );
+        let claims = pe_claims(&subject).unwrap();
+        assert_eq!(
+            claims["arkavo_entitlements"],
+            json!([
+                format!("https://arkavo.net/attr/creator/value/{account}"),
+                "https://arkavo.net/attr/creator/value/11111111-2222-3333-4444-555555555555"
+            ]),
+            "lowercased and de-duplicated; look-alikes dropped"
         );
     }
 

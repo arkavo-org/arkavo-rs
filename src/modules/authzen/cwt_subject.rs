@@ -194,12 +194,27 @@ fn is_slug(s: &str) -> bool {
 /// source (arkavo-rs#95). Patreon and App Store Creator Membership both mint it.
 const PUBLISH_ENTITLEMENT: &str = "https://patreon.arkavo.com/attr/arkavo-creator/value/publish";
 
+/// The per-creator attribute authnz-rs mints into an account's own tokens
+/// (arkavo-rs#126): `<prefix><account uuid>`, granted by the platform's composite
+/// ERS source (opentdf-platform#64).
+const CREATOR_ATTR_PREFIX: &str = "https://arkavo.net/attr/creator/value/";
+
+/// A lowercase hyphenated UUID, exactly as `Uuid::hyphenated` prints it.
+fn is_hyphenated_uuid(s: &str) -> bool {
+    uuid::Uuid::try_parse(s).is_ok_and(|u| u.hyphenated().to_string() == s)
+}
+
 /// True for exactly `campaign/value/<digits>`,
 /// `campaign-tier/value/<digits>_<[a-z0-9-]+>` and `arkavo-creator/value/publish`
-/// under the Patreon attr namespace. Expects an already ASCII-lowercased FQN.
+/// under the Patreon attr namespace, and the per-creator
+/// `https://arkavo.net/attr/creator/value/<uuid>`. Expects an already
+/// ASCII-lowercased FQN.
 fn is_patreon_entitlement(fqn: &str) -> bool {
     if fqn == PUBLISH_ENTITLEMENT {
         return true;
+    }
+    if let Some(account) = fqn.strip_prefix(CREATOR_ATTR_PREFIX) {
+        return is_hyphenated_uuid(account);
     }
     let Some(rest) = fqn.strip_prefix(PATREON_ATTR_PREFIX) else {
         return false;
@@ -217,7 +232,7 @@ fn is_patreon_entitlement(fqn: &str) -> bool {
 
 /// Filter PEP-supplied `arkavo_entitlements` down to the Patreon definitions the
 /// platform's composite `patreon` source owns, plus the publish entitlement its
-/// `identity-core` source owns. Lowercases, de-duplicates (input
+/// `identity-core` source owns and the per-creator attribute (arkavo-rs#126). Lowercases, de-duplicates (input
 /// order), and returns `Ok(None)` when the input is not an array or nothing
 /// survives. More than `MAX_FORWARDED_ENTITLEMENTS` survivors is `Err(count)`
 /// (never truncates); the caller owns logging so one subject yields one line.
