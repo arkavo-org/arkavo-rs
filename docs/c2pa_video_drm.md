@@ -263,7 +263,40 @@ export C2PA_SIGNING_CERT_PATH=/path/to/c2pa_cert_chain.pem
 
 Point `C2PA_SIGNING_CERT_PATH` at the chain, not `c2pa_cert.pem`: the CA after the signer certificate is what `/c2pa/v1/validate` trusts by default.
 
-`openssl` here is an operator tool (OpenSSL 3); C2PA signing does not use it. A CA on the C2PA trust list will instead want a CSR signed by the KMS key.
+`openssl` here is an operator tool (OpenSSL 3); C2PA signing does not use it.
+
+**Certificate from a CA on the C2PA Trust List (`arks c2pa-csr`).** A trust-list CA issues the claim signing certificate from a certificate request signed by our key. KMS has no "create CSR" call, so arks builds the request and has the KMS key sign it:
+
+```bash
+AWS_PROFILE=arks-prod AWS_REGION=us-east-1 ./production/arks c2pa-csr \
+  --kms-key-id <key-arn> \
+  --country US --organization "Arkavo LLC" --common-name "<CPL product name>" \
+  --cpl-record <CPL record uuid> --out c2pa_claim_signing.csr.pem
+```
+
+- **Needs** only `kms:GetPublicKey` and `kms:Sign` on the key, which `arks-prod` already has. It does not touch the running server.
+- **What it requests**, per the C2PA Assurance Level 1 CSR profile (conformance-public `docs/v0.2/cert-profiles/claimSigningLeaf.al1.csr.schema.json`):
+  - subject C, O, CN, which must match the Conforming Products List record exactly;
+  - basicConstraints `cA=false` and keyUsage digitalSignature + contentCommitment, both critical;
+  - extendedKeyUsage c2pa-kp-claimSigning (`1.3.6.1.4.1.62558.2.1`) + emailProtection;
+  - certificatePolicies `1.3.6.1.4.1.62558.1.1`;
+  - c2pa-al = AL1 (`1.3.6.1.4.1.62558.3.10`);
+  - c2pa-cpl-record = the record UUID.
+
+  The CA adds the key identifiers, AIA (OCSP) and validity, which a CSR can't carry.
+- **Check before sending.** `arks c2pa-csr` prints the key's SPKI SHA-256 to stderr. Then:
+
+  ```bash
+  openssl req -verify -noout -in c2pa_claim_signing.csr.pem
+  diff <(openssl req -in c2pa_claim_signing.csr.pem -pubkey -noout) \
+       <(aws kms get-public-key --key-id <key-arn> --query PublicKey --output text \
+           | base64 -d | openssl pkey -pubin -inform DER)
+  openssl req -in c2pa_claim_signing.csr.pem -noout -text
+  ```
+- **Rehearse** with a throwaway key instead of KMS: `--key-file <P-256 PKCS#8 PEM>` (for example `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256`).
+- **Order of events.** Request the real certificate only after C2PA confirms conformance, because the record UUID comes from that confirmation.
+- **Install.** Put the issued certificate and the CA's chain in `C2PA_SIGNING_CERT_PATH` (signer certificate first). Then restart: the startup check compares the certificate with the KMS key.
+- **Renewal.** AL1 leaf certificates last at most 366 days. Run the same command with the same key and record well before expiry, and calendar it from the certificate's `notAfter`.
 
 ### Timestamps
 
