@@ -203,7 +203,10 @@ pub async fn run_cli(args: Vec<String>) -> Result<(), String> {
             (Some(key_id), None) => {
                 let (key, spki) = crate::modules::c2pa_kms::KmsKey::open(key_id.clone())
                     .await
-                    .map_err(|e| format!("{:?}", e))?;
+                    .map_err(|e| match e {
+                        crate::modules::c2pa_kms::ConnectError::Unavailable(m)
+                        | crate::modules::c2pa_kms::ConnectError::Invalid(m) => m,
+                    })?;
                 (Arc::new(key), spki)
             }
             (None, Some(path)) => {
@@ -283,9 +286,12 @@ impl RemoteKeyPair for RemoteKey {
 
     fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
         let digest: [u8; 32] = Sha256::digest(msg).into();
-        self.signer
-            .sign_digest(&digest)
-            .map_err(|_| rcgen::Error::RemoteKeyError)
+        self.signer.sign_digest(&digest).map_err(|e| {
+            // rcgen's error carries no message; the operator needs the cause (e.g. a
+            // missing kms:Sign permission)
+            eprintln!("signing the request failed: {}", e);
+            rcgen::Error::RemoteKeyError
+        })
     }
 
     fn algorithm(&self) -> &'static SignatureAlgorithm {
