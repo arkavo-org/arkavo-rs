@@ -61,13 +61,14 @@ http-body-util = "0.1"
 base64 = "0.22"
 chrono = "0.4"
 aws-config = { version = "1.5.13", features = ["behavior-version-latest"] }
-aws-sdk-dynamodb = "1"
+# default-features off: the SDKs' "rustls" default pulls the legacy rustls 0.21 client (#135)
+aws-sdk-dynamodb = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 unicode-segmentation = "1"
 uuid = { version = "1.11", features = ["v4"] }
 fairplay-wrapper = { path = "crates/fairplay-wrapper", optional = true }
 c2pa = { version = "0.91", default-features = false, features = ["file_io", "rust_native_crypto", "http_ureq"], optional = true }
 x509-parser = { version = "0.18", optional = true }
-aws-sdk-kms = { version = "1", optional = true }
+aws-sdk-kms = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 mp4parse = { version = "0.17", optional = true }
 # opentdf-rs v0.11.0 - NanoTDF and KAS support
 # Source: https://github.com/arkavo-org/opentdf-rs/releases/tag/0.11.0
