@@ -891,10 +891,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let c2pa_signing_state = match c2pa_signing::C2paConfig::from_env().await {
         Ok(config) => {
             info!("C2PA signing enabled");
-            Some(Arc::new(c2pa_signing::C2paSigningState::new(
+            let device_tokens = config.require_device.then(|| {
+                info!(
+                    "C2PA signing requires an attested device ({} app id(s))",
+                    config.device_app_ids.len()
+                );
+                modules::license::config::device_verifier_from_env(config.device_app_ids.clone())
+            });
+            let state = c2pa_signing::C2paSigningState::new(
                 config,
                 Arc::new(modules::license::config::person_verifier_from_env()),
-            )))
+            );
+            Some(Arc::new(match device_tokens {
+                Some(verifier) => state.with_device_tokens(verifier),
+                None => state,
+            }))
         }
         Err(e) => {
             // C2PA_SIGNER set, or a key file left from before C2PA_SIGNER existed, means

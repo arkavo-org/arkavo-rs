@@ -89,6 +89,10 @@ pub struct DecodedClaims {
     /// `arkavo_state_version`, or the `agent` role (a list or a string). A
     /// DeviceCheck token's device `arkavo_npe` alone is not one.
     pub non_device_agent_marker: bool,
+    /// The `arkavo_npe` map as JSON (a DeviceCheck token's `{type: "device", ...}`).
+    pub arkavo_npe: Option<Value>,
+    /// A proof-of-possession key (`cnf`, claim 8) is present.
+    pub cnf: bool,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -481,6 +485,8 @@ mod tests {
             auth_time: None,
             agent_marker: false,
             non_device_agent_marker: false,
+            arkavo_npe: None,
+            cnf: false,
         }
     }
 

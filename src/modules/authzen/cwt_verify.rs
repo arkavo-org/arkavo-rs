@@ -162,6 +162,8 @@ fn parse_claims(payload: &[u8]) -> Result<DecodedClaims, VerifyError> {
     let mut auth_time = None;
     let mut agent_marker = false;
     let mut non_device_agent_marker = false;
+    let mut arkavo_npe = None;
+    let mut cnf = false;
     for (k, v) in entries {
         let key_id = match &k {
             Value::Integer(i) => format!("i:{}", i128::from(*i)),
@@ -199,6 +201,7 @@ fn parse_claims(payload: &[u8]) -> Result<DecodedClaims, VerifyError> {
                     iat = numeric_date(v);
                 }
                 (7, Value::Bytes(b)) => cti = Some(b),
+                (8, _) => cnf = true,
                 _ => {}
             },
             Value::Text(key) => match (key.as_str(), v) {
@@ -240,6 +243,7 @@ fn parse_claims(payload: &[u8]) -> Result<DecodedClaims, VerifyError> {
                     if !is_device_npe(npe) {
                         non_device_agent_marker = true;
                     }
+                    arkavo_npe = Some(cbor_to_json(npe));
                 }
                 ("arkavo_swarm", _) | ("arkavo_state_version", _) => {
                     agent_marker = true;
@@ -283,6 +287,8 @@ fn parse_claims(payload: &[u8]) -> Result<DecodedClaims, VerifyError> {
         auth_time,
         agent_marker,
         non_device_agent_marker,
+        arkavo_npe,
+        cnf,
     })
 }
 
