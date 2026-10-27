@@ -154,6 +154,18 @@ impl KmsKey {
     /// Load AWS credentials from the environment and check that `key_id` is the key
     /// whose public half is in the signer certificate.
     pub async fn connect(key_id: String, signer_cert_der: &[u8]) -> Result<Self, ConnectError> {
+        let (key, spki) = Self::open(key_id).await?;
+        if spki != cert_spki(signer_cert_der).map_err(ConnectError::Invalid)? {
+            return Err(ConnectError::Invalid(
+                "The KMS key does not match the signer certificate's public key".to_string(),
+            ));
+        }
+        Ok(key)
+    }
+
+    /// Load AWS credentials from the environment; returns the key and its DER
+    /// SubjectPublicKeyInfo from `GetPublicKey`.
+    pub async fn open(key_id: String) -> Result<(Self, Vec<u8>), ConnectError> {
         let shared = aws_config::load_from_env().await;
         let timeouts = aws_config::timeout::TimeoutConfig::builder()
             .operation_timeout(KMS_CALL_TIMEOUT)
@@ -182,12 +194,7 @@ impl KmsKey {
         let spki = public_key.public_key().ok_or_else(|| {
             ConnectError::Unavailable("KMS GetPublicKey returned no public key".to_string())
         })?;
-        if spki.as_ref() != cert_spki(signer_cert_der).map_err(ConnectError::Invalid)? {
-            return Err(ConnectError::Invalid(
-                "The KMS key does not match the signer certificate's public key".to_string(),
-            ));
-        }
-        Ok(key)
+        Ok((key, spki.as_ref().to_vec()))
     }
 }
 

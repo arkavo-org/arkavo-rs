@@ -580,6 +580,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Install default crypto provider for rustls
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    #[cfg(feature = "c2pa_signing")]
+    if std::env::args().nth(1).as_deref() == Some("c2pa-csr") {
+        return modules::c2pa_csr::run_cli(std::env::args().skip(2).collect())
+            .await
+            .map_err(Into::into);
+    }
+
     // Load configuration
     let settings = load_config()?;
 
