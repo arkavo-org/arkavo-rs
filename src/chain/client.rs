@@ -84,12 +84,11 @@ impl ChainClient {
         let client = self.get_client().await?;
 
         let block = client
-            .blocks()
-            .at_latest()
+            .at_current_block()
             .await
             .map_err(|e| ChainError::RpcError(e.to_string()))?;
 
-        let block_number = block.number() as u64;
+        let block_number = block.block_number();
         self.last_known_block.store(block_number, Ordering::Relaxed);
 
         Ok(block_number)
@@ -119,17 +118,16 @@ impl ChainClient {
         );
 
         let block = client
-            .blocks()
-            .at_latest()
+            .at_current_block()
             .await
             .map_err(|e| ChainError::RpcError(e.to_string()))?;
 
         // Query raw storage
-        let storage_data = block
-            .storage()
-            .fetch_raw(storage_key)
-            .await
-            .map_err(|e| ChainError::RpcError(e.to_string()))?;
+        let storage_data = match block.storage().fetch_raw(storage_key).await {
+            Ok(data) => Some(data),
+            Err(subxt::error::StorageError::NoValueFound) => None,
+            Err(e) => return Err(ChainError::RpcError(e.to_string())),
+        };
 
         match storage_data {
             Some(data) => {
@@ -153,12 +151,11 @@ impl ChainClient {
     ) -> Result<(), ChainError> {
         // Check block height is progressing (simplified health check)
         let block = client
-            .blocks()
-            .at_latest()
+            .at_current_block()
             .await
             .map_err(|e| ChainError::RpcError(e.to_string()))?;
 
-        let current_block = block.number() as u64;
+        let current_block = block.block_number();
         let last_known = self.last_known_block.load(Ordering::Relaxed);
 
         // Allow some margin for block time variance
