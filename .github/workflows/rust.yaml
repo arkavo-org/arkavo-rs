@@ -26,7 +26,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: moonrepo/setup-rust@v1
         with:
           components: clippy, rustfmt
@@ -56,7 +56,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: moonrepo/setup-rust@v1
         with:
           targets: x86_64-unknown-linux-gnu
@@ -75,7 +75,7 @@ jobs:
   bench:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: moonrepo/setup-rust@v1
         with:
           targets: x86_64-unknown-linux-gnu
