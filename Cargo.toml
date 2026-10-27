@@ -70,6 +70,8 @@ fairplay-wrapper = { path = "crates/fairplay-wrapper", optional = true }
 libc = { version = "0.2", optional = true }
 c2pa = { version = "0.91", default-features = false, features = ["file_io", "rust_native_crypto", "http_ureq"], optional = true }
 x509-parser = { version = "0.18", optional = true }
+# CSR for the C2PA claim signing certificate (c2pa-csr); remote KMS key, so no crypto backend
+rcgen = { version = "0.13", optional = true, default-features = false, features = ["pem"] }
 aws-sdk-kms = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 mp4parse = { version = "0.17", optional = true }
 # opentdf-rs v0.16.1 - NanoTDF and KAS support
@@ -117,7 +119,7 @@ http = { version = "1", optional = true }
 default = []
 http3 = ["h3", "h3-quinn", "quinn", "http-body", "http"]
 fairplay = ["fairplay-wrapper", "libc"]
-c2pa_signing = ["c2pa", "mp4parse", "x509-parser", "aws-sdk-kms"]
+c2pa_signing = ["c2pa", "mp4parse", "x509-parser", "aws-sdk-kms", "rcgen"]
 
 [dev-dependencies]
 criterion = "0.5.1"

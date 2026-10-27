@@ -1,16 +1,18 @@
 //! AuthZEN HTTPS JSON facade: PEP service-CWT authn + OpenTDF v2 client.
 
 use crate::modules::authzen::cose_keys::CoseKeyCache;
-use crate::modules::authzen::cwt_subject::{parse_client_ids, service_client_id, DecodedClaims};
+use crate::modules::authzen::cwt_subject::{
+    devices_from_context, parse_client_ids, service_client_id, DecodedClaims, DEVICECHECK_AUD,
+};
 use crate::modules::authzen::cwt_verify::{
     header_kid, verify_header_token, VerifyError, VerifyOpts,
 };
 use crate::modules::authzen::discovery;
 use crate::modules::authzen::translate::{
-    authzen_decision, bulk_request, deny_closed, fulfillable_from_context, get_decision_request,
-    map_action, map_resource, multi_resource_request, parse_bulk_responses,
+    authzen_decision, bulk_request, chain_len, deny_closed, fulfillable_from_context,
+    get_decision_request, map_action, map_resource, multi_resource_request, parse_bulk_responses,
     parse_get_decision_response, parse_resource_decisions, reconstruct_chain, ChainMap,
-    ResourceMap, TranslateError, MAX_EVALUATIONS,
+    ResourceMap, TranslateError, VerifiedDevice, VerifiedDevices, MAX_CHAIN, MAX_EVALUATIONS,
 };
 use axum::extract::rejection::JsonRejection;
 use axum::extract::State;
@@ -248,16 +250,113 @@ async fn authenticate_pep(
     Ok((claims, token.to_string()))
 }
 
+/// Verifies a DeviceCheck token as the PEP's service CWT is verified (the
+/// issuer's COSE key for its kid, ES256, `iss`, `exp`), and requires an `aud`
+/// naming `arkavo:devicecheck`.
+async fn verify_device_token(
+    state: &FacadeState,
+    token: &str,
+    now: i64,
+) -> Result<DecodedClaims, VerifyError> {
+    let kid = header_kid(token)?;
+    let key = state.keys.resolve(&kid).await?;
+    verify_header_token(
+        token,
+        &key,
+        VerifyOpts {
+            expected_iss: Some(&state.issuer),
+            expected_aud: Some(DEVICECHECK_AUD),
+            expected_kid: Some(kid.as_slice()),
+            now,
+        },
+    )
+}
+
+/// The contexts a request's evaluations read (see `field`): the top-level one
+/// and each evaluation's own, so a context the evaluations share is seen once.
+fn request_contexts<'a>(body: &'a Value, entries: &'a [Value]) -> Vec<&'a Value> {
+    let own = entries
+        .iter()
+        .filter_map(|e| e.get("context").filter(|v| !v.is_null()));
+    body.get("context")
+        .filter(|v| !v.is_null())
+        .into_iter()
+        .chain(own)
+        .collect()
+}
+
+/// Verifies each device token in `contexts` once and returns the verified
+/// `sub` of every token that verified. The platform verifies the token again
+/// and is the authority on it; verifying here lets a token that would deny
+/// the platform's whole chain deny its evaluations instead, and binds the
+/// device to the subject as the platform does. A context whose devices do not
+/// parse, or are more than its chain can hold, is left for `prepare_one` to
+/// refuse, so no request verifies more than `MAX_CHAIN - 1` tokens per
+/// context. Only an unavailable key set fails the request: a deny would pass
+/// an outage off as a policy decision. A device sent without a token is
+/// counted and logged once per request; no device or token is ever logged.
+async fn verify_device_tokens(
+    state: &FacadeState,
+    contexts: &[&Value],
+    rid: &str,
+) -> Result<VerifiedDevices, VerifyError> {
+    let now = chrono::Utc::now().timestamp();
+    let mut verified = VerifiedDevices::new();
+    let mut refused = HashSet::new();
+    let mut tokenless = 0usize;
+    for ctx in contexts {
+        let Ok(devices) = devices_from_context(ctx) else {
+            continue;
+        };
+        if chain_len(devices.len(), Some(ctx)) > MAX_CHAIN {
+            continue;
+        }
+        for d in devices {
+            let Some(token) = d.token else {
+                tokenless += 1;
+                continue;
+            };
+            if verified.contains_key(&token) || refused.contains(&token) {
+                continue;
+            }
+            match verify_device_token(state, &token, now).await {
+                Ok(claims) => {
+                    verified.insert(token, VerifiedDevice::from(&claims));
+                }
+                Err(VerifyError::KeySet) => return Err(VerifyError::KeySet),
+                Err(e) => {
+                    log::warn!(
+                        "authzen: evaluation_id={rid} a device token does not verify ({e:?}); \
+                         its evaluations are denied"
+                    );
+                    refused.insert(token);
+                }
+            }
+        }
+    }
+    if tokenless > 0 {
+        log::warn!(
+            "authzen: evaluation_id={rid} dropped {tokenless} device(s) sent without a \
+             DeviceCheck token; the platform binds a device only by its signed token"
+        );
+    }
+    Ok(verified)
+}
+
 fn pep_fail(e: PepAuth, rid: &str) -> Response {
     match e {
         PepAuth::Unauthorized => err_json(StatusCode::UNAUTHORIZED, "invalid pep credential", rid),
         PepAuth::Forbidden => err_json(StatusCode::FORBIDDEN, "pep client not allowlisted", rid),
-        PepAuth::KeySet => err_json(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "key set unavailable",
-            rid,
-        ),
+        PepAuth::KeySet => key_set_unavailable(rid),
     }
+}
+
+fn key_set_unavailable(rid: &str) -> Response {
+    err_json(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "key set unavailable",
+        rid,
+    )
 }
 
 fn translate_err(e: TranslateError, rid: &str) -> Response {
@@ -299,6 +398,7 @@ fn prepare_one(
     action_obj: &Value,
     resource: &Value,
     context: Option<&Value>,
+    verified: &VerifiedDevices,
 ) -> Result<Prepared, TranslateError> {
     let action_name = action_obj
         .get("name")
@@ -307,7 +407,7 @@ fn prepare_one(
     check_tools_list(action_name, resource)?;
     let action = map_action(action_name)?;
     let resource_map = map_resource(resource)?;
-    let (chain, chain_deny) = match reconstruct_chain(subject, context)? {
+    let (chain, chain_deny) = match reconstruct_chain(subject, context, verified)? {
         ChainMap::Ok(c) => (c, None),
         ChainMap::DenyClosed(msg) => (json!({}), Some(msg)),
     };
@@ -507,7 +607,11 @@ async fn evaluation(
         Some(s) => s,
         None => return translate_err(TranslateError::Malformed("resource"), &rid),
     };
-    let prepared = match prepare_one(0, subject, action, resource, body.get("context")) {
+    let verified = match verify_device_tokens(&state, &request_contexts(&body, &[]), &rid).await {
+        Ok(v) => v,
+        Err(_) => return key_set_unavailable(&rid),
+    };
+    let prepared = match prepare_one(0, subject, action, resource, body.get("context"), &verified) {
         Ok(p) => p,
         Err(e) => return translate_err(e, &rid),
     };
@@ -605,6 +709,11 @@ async fn evaluations(
             &rid,
         );
     }
+    let verified =
+        match verify_device_tokens(&state, &request_contexts(&body, &entries), &rid).await {
+            Ok(v) => v,
+            Err(_) => return key_set_unavailable(&rid),
+        };
     let mut prepared = Vec::with_capacity(entries.len());
     for (i, entry) in entries.iter().enumerate() {
         let subject = match field(entry, &body, "subject") {
@@ -620,7 +729,7 @@ async fn evaluations(
             None => return translate_err(TranslateError::Malformed("resource"), &rid),
         };
         let context = field(entry, &body, "context");
-        match prepare_one(i, subject, action, resource, context) {
+        match prepare_one(i, subject, action, resource, context, &verified) {
             Ok(p) => prepared.push(p),
             Err(e) => return translate_err(e, &rid),
         }

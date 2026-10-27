@@ -157,6 +157,9 @@ mod tests {
             scope: None,
             auth_time: None,
             agent_marker: false,
+            non_device_agent_marker: false,
+            arkavo_npe: None,
+            cnf: false,
         }
     }
 

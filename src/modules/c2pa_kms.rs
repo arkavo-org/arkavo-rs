@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aws_sdk_kms::primitives::Blob;
-use aws_sdk_kms::types::{MessageType, SigningAlgorithmSpec};
+use aws_sdk_kms::types::{KeySpec, KeyUsageType, MessageType, SigningAlgorithmSpec};
 use c2pa::{Signer, SigningAlg};
 use log::warn;
 use sha2::{Digest, Sha256};
@@ -154,13 +154,28 @@ impl KmsKey {
     /// Load AWS credentials from the environment and check that `key_id` is the key
     /// whose public half is in the signer certificate.
     pub async fn connect(key_id: String, signer_cert_der: &[u8]) -> Result<Self, ConnectError> {
-        let shared = aws_config::load_from_env().await;
+        let (key, spki) = Self::open(key_id).await?;
+        if spki != cert_spki(signer_cert_der).map_err(ConnectError::Invalid)? {
+            return Err(ConnectError::Invalid(
+                "The KMS key does not match the signer certificate's public key".to_string(),
+            ));
+        }
+        Ok(key)
+    }
+
+    /// Load AWS credentials from the environment; returns the key and its DER
+    /// SubjectPublicKeyInfo from `GetPublicKey`.
+    pub async fn open(key_id: String) -> Result<(Self, Vec<u8>), ConnectError> {
+        let shared = crate::modules::aws::shared_config().await;
         let timeouts = aws_config::timeout::TimeoutConfig::builder()
             .operation_timeout(KMS_CALL_TIMEOUT)
             .build();
-        let conf = aws_sdk_kms::config::Builder::from(&shared)
-            .timeout_config(timeouts)
-            .build();
+        let mut builder = aws_sdk_kms::config::Builder::from(shared).timeout_config(timeouts);
+        // A key ARN names its region; the ambient region may be another one
+        if let Some(region) = crate::modules::aws::arn_region(&key_id) {
+            builder = builder.region(aws_config::Region::new(region.to_string()));
+        }
+        let conf = builder.build();
         let key = Self {
             client: aws_sdk_kms::Client::from_conf(conf),
             key_id,
@@ -179,16 +194,36 @@ impl KmsKey {
                     aws_sdk_kms::error::DisplayErrorContext(e)
                 ))
             })?;
+        check_key_type(
+            public_key.key_spec(),
+            public_key.key_usage(),
+            public_key.signing_algorithms(),
+        )
+        .map_err(ConnectError::Invalid)?;
         let spki = public_key.public_key().ok_or_else(|| {
             ConnectError::Unavailable("KMS GetPublicKey returned no public key".to_string())
         })?;
-        if spki.as_ref() != cert_spki(signer_cert_der).map_err(ConnectError::Invalid)? {
-            return Err(ConnectError::Invalid(
-                "The KMS key does not match the signer certificate's public key".to_string(),
-            ));
-        }
-        Ok(key)
+        Ok((key, spki.as_ref().to_vec()))
     }
+}
+
+/// A P-256 key created for signing: a key with the right public key but made for
+/// key agreement would pass the certificate match and then fail every sign call.
+fn check_key_type(
+    spec: Option<&KeySpec>,
+    usage: Option<&KeyUsageType>,
+    algorithms: &[SigningAlgorithmSpec],
+) -> Result<(), String> {
+    if spec != Some(&KeySpec::EccNistP256) {
+        return Err(format!("The KMS key is {:?}, not ECC_NIST_P256", spec));
+    }
+    if usage != Some(&KeyUsageType::SignVerify) {
+        return Err(format!("The KMS key usage is {:?}, not SIGN_VERIFY", usage));
+    }
+    if !algorithms.contains(&SigningAlgorithmSpec::EcdsaSha256) {
+        return Err("The KMS key does not support ECDSA_SHA_256".to_string());
+    }
+    Ok(())
 }
 
 impl DigestSigner for KmsKey {
@@ -227,6 +262,36 @@ pub fn cert_spki(cert_der: &[u8]) -> Result<Vec<u8>, String> {
 pub mod tests {
     use super::*;
     use p256::ecdsa::signature::hazmat::PrehashSigner;
+
+    #[test]
+    fn only_a_p256_signing_key_is_accepted() {
+        let ok = [SigningAlgorithmSpec::EcdsaSha256];
+        assert!(check_key_type(
+            Some(&KeySpec::EccNistP256),
+            Some(&KeyUsageType::SignVerify),
+            &ok
+        )
+        .is_ok());
+        assert!(check_key_type(
+            Some(&KeySpec::EccNistP256),
+            Some(&KeyUsageType::KeyAgreement),
+            &[]
+        )
+        .is_err());
+        assert!(check_key_type(
+            Some(&KeySpec::EccNistP384),
+            Some(&KeyUsageType::SignVerify),
+            &[SigningAlgorithmSpec::EcdsaSha384]
+        )
+        .is_err());
+        assert!(check_key_type(
+            Some(&KeySpec::EccNistP256),
+            Some(&KeyUsageType::SignVerify),
+            &[]
+        )
+        .is_err());
+        assert!(check_key_type(None, Some(&KeyUsageType::SignVerify), &ok).is_err());
+    }
 
     /// A local P-256 key standing in for KMS: signs digests, returns DER.
     pub struct LocalKey(pub p256::ecdsa::SigningKey);
