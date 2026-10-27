@@ -25,12 +25,11 @@ use crate::contracts::content_rating::content_rating::{
 };
 use crate::contracts::geo_fence_contract::geo_fence_contract::Geofence3D;
 use crate::contracts::{contract_simple_abac, geo_fence_contract};
-use crate::schemas::event_generated::arkavo::{Action, Event, EventData};
+use crate::schemas::event_generated::arkavo::{Event, EventData};
 use crate::schemas::metadata_generated::arkavo;
 use crate::schemas::metadata_generated::arkavo::{root_as_metadata, Metadata};
 use async_nats::Message as NatsMessage;
 use async_nats::{Client as NatsClient, PublishError};
-use aws_sdk_s3 as s3;
 use axum::extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::header::AUTHORIZATION;
@@ -645,6 +644,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(load_tls_config(
             &settings.tls_cert_path,
             &settings.tls_key_path,
+            settings.tls_allow_tls12,
         )?)
     } else {
         None
@@ -881,13 +881,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize C2PA signing state (optional - only if configured)
     #[cfg(feature = "c2pa_signing")]
-    let c2pa_signing_state = match c2pa_signing::C2paConfig::from_env() {
+    let c2pa_signing_state = match c2pa_signing::C2paConfig::from_env().await {
         Ok(config) => {
             info!("C2PA signing enabled");
-            Some(Arc::new(c2pa_signing::C2paSigningState::new(config)))
+            Some(Arc::new(c2pa_signing::C2paSigningState::new(
+                config,
+                Arc::new(modules::license::config::person_verifier_from_env()),
+            )))
         }
         Err(e) => {
-            info!("C2PA signing disabled: {}", e);
+            // C2PA_SIGNER set, or a key file left from before C2PA_SIGNER existed, means
+            // the operator wants C2PA, so its failure is an error, not routine startup
+            // noise: /c2pa/v1/* stays unmounted until restart.
+            if std::env::var_os("C2PA_SIGNER").is_some()
+                || std::env::var_os("C2PA_SIGNING_KEY_PATH").is_some()
+            {
+                error!("C2PA signing disabled: {}", e);
+            } else {
+                info!("C2PA signing disabled: {}", e);
+            }
             None
         }
     };
@@ -1010,8 +1022,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let dynamodb = match &s.dynamodb_endpoint {
                 // DynamoDB Local ignores credentials but the SDK signs
                 // every request, so give it fixed placeholders here rather
-                // than in the process environment, where S3 would pick
-                // them up.
+                // than in the process environment, where the KMS signer
+                // would pick them up.
                 Some(endpoint) => {
                     info!("Moderation store: DynamoDB at {endpoint}");
                     let conf = aws_sdk_dynamodb::config::Builder::new()
@@ -1031,10 +1043,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None => aws_sdk_dynamodb::Client::new(&aws_config::load_from_env().await),
             };
             let store = moderation::store::DynamoReportStore::new(
-                dynamodb,
+                dynamodb.clone(),
                 s.table.clone(),
                 s.status_index.clone(),
             );
+            let suspensions =
+                moderation::store::DynamoSuspensionStore::new(dynamodb, s.table.clone());
+            if s.suspension_readers.is_empty() {
+                warn!("MODERATION_SUSPENSION_READER_IDS is empty: no service can read suspensions");
+            }
             if s.moderators.is_empty() {
                 warn!(
                     "MODERATION_MODERATORS is empty: reports are accepted but no one can read them"
@@ -1046,6 +1063,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             moderation::api::router(Arc::new(moderation::api::ModerationState {
                 store: Arc::new(store),
+                suspensions: Arc::new(suspensions),
+                suspension_readers: s.suspension_readers,
+                suspension_reader_audience: s.suspension_reader_audience,
                 verifier: moderation::auth::SessionVerifier {
                     issuer: s.issuer,
                     audience: s.audience,
@@ -1062,7 +1082,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 subject_prefix: s.subject_prefix,
             }))
         }
-        None => Router::new(),
+        None => moderation::api::unconfigured_router(),
     };
 
     // Media DRM router
@@ -1324,8 +1344,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn load_tls_config(
     cert_path: &str,
     key_path: &str,
+    allow_tls12: bool,
 ) -> Result<TlsAcceptor, Box<dyn std::error::Error>> {
-    let config = load_rustls_config(cert_path, key_path)?;
+    let config = load_rustls_config(cert_path, key_path, allow_tls12)?;
     let acceptor = TlsAcceptor::from(std::sync::Arc::new(config));
     Ok(acceptor)
 }
@@ -1333,6 +1354,7 @@ fn load_tls_config(
 fn load_rustls_config(
     cert_path: &str,
     key_path: &str,
+    allow_tls12: bool,
 ) -> Result<rustls::ServerConfig, Box<dyn std::error::Error>> {
     use std::io::BufReader;
 
@@ -1363,8 +1385,28 @@ fn load_rustls_config(
     let private_key = rustls::pki_types::PrivateKeyDer::Pkcs8(keys.remove(0));
     info!("Private key loaded successfully");
 
-    // Create rustls server configuration
-    let mut config = ServerConfig::builder()
+    let config = rustls_server_config(cert_chain, private_key, allow_tls12)?;
+    if allow_tls12 {
+        warn!("TLS_ALLOW_TLS12=true: the listener accepts TLS 1.2 as well as TLS 1.3");
+    } else {
+        info!("TLS configuration created successfully (TLS 1.3 only)");
+    }
+    Ok(config)
+}
+
+/// The listener's TLS: TLS 1.3 only, unless `allow_tls12` (the `TLS_ALLOW_TLS12`
+/// rollback) also admits TLS 1.2. See docs/tls.md.
+fn rustls_server_config(
+    cert_chain: Vec<rustls::pki_types::CertificateDer<'static>>,
+    private_key: rustls::pki_types::PrivateKeyDer<'static>,
+    allow_tls12: bool,
+) -> Result<rustls::ServerConfig, Box<dyn std::error::Error>> {
+    let versions: &[&rustls::SupportedProtocolVersion] = if allow_tls12 {
+        &[&rustls::version::TLS13, &rustls::version::TLS12]
+    } else {
+        &[&rustls::version::TLS13]
+    };
+    let mut config = ServerConfig::builder_with_protocol_versions(versions)
         .with_no_client_auth()
         .with_single_cert(cert_chain, private_key)
         .map_err(|e| format!("Failed to create TLS config: {}", e))?;
@@ -1372,8 +1414,6 @@ fn load_rustls_config(
     // Negotiate HTTP/2 for REST clients while keeping HTTP/1.1 for the WebSocket
     // upgrade (/ws). Without ALPN, clients silently fall back to HTTP/1.1 only.
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-
-    info!("TLS configuration created successfully");
     Ok(config)
 }
 
@@ -2665,49 +2705,6 @@ async fn handle_event(
         println!("Event Timestamp: {:?}", event.timestamp());
         println!("Event Status: {:?}", event.status());
         println!("Event Data Type: {:?}", event.data_type());
-        // S3 store
-        match event.action() {
-            Action::store => {
-                if let Some(cache_event) = event.data_as_cache_event() {
-                    if let (Some(target_id), Some(target_payload)) =
-                        (cache_event.target_id(), cache_event.target_payload())
-                    {
-                        // Create S3 key using target_id
-                        let target_id_str = bs58::encode(target_id.bytes()).into_string();
-                        let s3_key = format!("{}/data", target_id_str);
-
-                        // Upload to S3
-                        return match server_state
-                            .s3_client
-                            .put_object()
-                            .bucket(&server_state.settings.s3_bucket)
-                            .key(&s3_key)
-                            .body(aws_sdk_s3::primitives::ByteStream::from(
-                                target_payload.bytes().to_vec(),
-                            ))
-                            .send()
-                            .await
-                        {
-                            Ok(_) => {
-                                info!("Successfully stored object in S3: {}", s3_key);
-                                let mut response = Vec::new();
-                                response.push(MessageType::Event as u8);
-                                response.extend_from_slice(b"Successfully stored");
-                                Some(Message::Binary(response))
-                            }
-                            Err(e) => {
-                                error!("Failed to store object in S3: {}", e);
-                                None
-                            }
-                        };
-                    }
-                }
-            }
-            _ => {
-                error!("Unhandled action: {:?}", event.action());
-                drop(None::<Message>);
-            }
-        }
         // redis connection
         let mut redis_conn = match server_state
             .redis_client
@@ -2940,7 +2937,6 @@ fn get_kas_private_key_bytes() -> Option<Vec<u8>> {
 struct ServerState {
     settings: ServerSettings,
     redis_client: RedisClient,
-    s3_client: s3::Client,
     chain_validator: Option<Arc<dyn chain::SessionValidator>>,
 }
 
@@ -2958,17 +2954,9 @@ impl ServerState {
         redis_client: RedisClient,
         chain_validator: Option<Arc<dyn chain::SessionValidator>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Initialize AWS S3 client
-        info!("Loading AWS configuration...");
-        let config = aws_config::load_from_env().await;
-        info!("AWS configuration loaded successfully");
-        let s3_client = s3::Client::new(&config);
-        info!("S3 client initialized");
-
         Ok(ServerState {
             settings,
             redis_client,
-            s3_client,
             chain_validator,
         })
     }
@@ -2980,6 +2968,8 @@ struct ServerSettings {
     tls_enabled: bool,
     tls_cert_path: String,
     tls_key_path: String,
+    /// `TLS_ALLOW_TLS12`: ops rollback that re-admits TLS 1.2 on the listener
+    tls_allow_tls12: bool,
     kas_key_path: String,
     enable_timing_logs: bool,
     nats_url: String,
@@ -2987,7 +2977,6 @@ struct ServerSettings {
     redis_url: String,
     jwt_validation_disabled: bool,
     jwt_public_key_path: Option<String>,
-    s3_bucket: String,
     /// Chain RPC URL for blockchain connectivity (optional - disables chain validation if not set)
     chain_rpc_url: Option<String>,
     /// Expected audience for NTDF token validation
@@ -3021,6 +3010,7 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
                 .unwrap()
                 .to_string()
         }),
+        tls_allow_tls12: modules::env_flag::from_env("TLS_ALLOW_TLS12")?,
         kas_key_path: env::var("KAS_KEY_PATH").unwrap_or_else(|_| {
             current_dir
                 .join("recipient_private_key.pem")
@@ -3040,7 +3030,6 @@ fn load_config() -> Result<ServerSettings, Box<dyn std::error::Error>> {
             .parse()
             .unwrap_or(true),
         jwt_public_key_path: env::var("JWT_PUBLIC_KEY_PATH").ok(),
-        s3_bucket: env::var("S3_BUCKET").unwrap_or_else(|_| "default-bucket".to_string()),
         chain_rpc_url: env::var("CHAIN_RPC_URL").ok(),
         ntdf_expected_audience: env::var("NTDF_EXPECTED_AUDIENCE")
             .unwrap_or_else(|_| "https://platform.arkavo.net".to_string()),
@@ -3115,11 +3104,6 @@ fn validate_config(settings: &ServerSettings) -> Result<(), Box<dyn std::error::
         }
     }
 
-    // Validate S3 bucket name
-    if settings.s3_bucket.is_empty() {
-        return Err("S3_BUCKET must not be empty".into());
-    }
-
     // Validate Chain RPC URL format (only if configured)
     if let Some(ref chain_url) = settings.chain_rpc_url {
         if !chain_url.starts_with("ws://")
@@ -3184,6 +3168,75 @@ fn convert_rating_level(level: arkavo::RatingLevel) -> RatingLevel {
         x if x == arkavo::RatingLevel::moderate.0 => RatingLevel::Moderate,
         x if x == arkavo::RatingLevel::severe.0 => RatingLevel::Severe,
         _ => RatingLevel::Unused, // Default to Unused for any invalid values
+    }
+}
+
+#[cfg(test)]
+mod tls_version_tests {
+    use super::*;
+    use tokio_rustls::TlsConnector;
+
+    /// Handshakes a client limited to `client_versions` against the listener
+    /// config; returns the negotiated version.
+    async fn handshake(
+        allow_tls12: bool,
+        client_versions: &[&'static rustls::SupportedProtocolVersion],
+    ) -> Result<rustls::ProtocolVersion, std::io::Error> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert = ck.cert.der().clone();
+        let key = rustls::pki_types::PrivateKeyDer::Pkcs8(
+            rustls::pki_types::PrivatePkcs8KeyDer::from(ck.key_pair.serialize_der()),
+        );
+        let server = rustls_server_config(vec![cert.clone()], key, allow_tls12).unwrap();
+
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(cert).unwrap();
+        let client = rustls::ClientConfig::builder_with_protocol_versions(client_versions)
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let acceptor = TlsAcceptor::from(Arc::new(server));
+        let server_task = tokio::spawn(async move { acceptor.accept(server_io).await.is_ok() });
+        let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+        let result = TlsConnector::from(Arc::new(client))
+            .connect(name, client_io)
+            .await
+            .map(|s| s.get_ref().1.protocol_version().unwrap());
+        let _ = server_task.await;
+        result
+    }
+
+    #[tokio::test]
+    async fn listener_negotiates_tls13() {
+        let v = handshake(false, &[&rustls::version::TLS13]).await.unwrap();
+        assert_eq!(v, rustls::ProtocolVersion::TLSv1_3);
+    }
+
+    #[tokio::test]
+    async fn listener_refuses_a_tls12_only_client() {
+        let err = handshake(false, &[&rustls::version::TLS12])
+            .await
+            .unwrap_err();
+        let tls = err
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<rustls::Error>())
+            .unwrap_or_else(|| panic!("not a TLS error: {err:?}"));
+        assert_eq!(
+            tls,
+            &rustls::Error::AlertReceived(rustls::AlertDescription::ProtocolVersion)
+        );
+    }
+
+    #[tokio::test]
+    async fn rollback_admits_tls12_and_still_prefers_tls13() {
+        let v = handshake(true, &[&rustls::version::TLS12]).await.unwrap();
+        assert_eq!(v, rustls::ProtocolVersion::TLSv1_2);
+        let v = handshake(true, &[&rustls::version::TLS13, &rustls::version::TLS12])
+            .await
+            .unwrap();
+        assert_eq!(v, rustls::ProtocolVersion::TLSv1_3);
     }
 }
 

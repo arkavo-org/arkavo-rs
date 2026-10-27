@@ -270,12 +270,14 @@ fn pe_claims(subject: &Value) -> Result<Value, TranslateError> {
     // `cwt_subject::subject()` emits email_verified, idp, arkavo_account_id,
     // arkavo_roles and arkavo_entitlements. arkavo_entitlements is forwarded,
     // filtered to the Patreon definitions the platform's composite `patreon`
-    // source owns (pep_assertable). iss and arkavo_account_id are forwarded as
-    // sent: the platform binds a device token to the person only when both
-    // equal the token's, compared exactly, so neither is ever rewritten.
-    // email_verified, idp and arkavo_roles are still dropped (see the explicit
-    // assertion in chain_pe_then_devices_then_env_mismatched_prefix_bind). If
-    // any OpenTDF subject mapping keys on a dropped claim it can never match,
+    // source owns and the publish entitlement its `identity-core` source owns
+    // (arkavo-rs#95); the platform's pep_assertable setting stays the binding
+    // guard, this filter is defence in depth. iss and arkavo_account_id are
+    // forwarded as sent: the platform binds a device token to the person only
+    // when both equal the token's, compared exactly, so neither is ever
+    // rewritten. email_verified, idp and arkavo_roles are still dropped (see the
+    // explicit assertion in chain_pe_then_devices_then_env_mismatched_prefix_bind).
+    // If any OpenTDF subject mapping keys on a dropped claim it can never match,
     // so the two halves need to agree (draft-arkavo-authzen-cwt-00).
     let mut m = Map::new();
     m.insert("sub".into(), json!(id));
@@ -1212,6 +1214,9 @@ mod tests {
                 "tdf:decrypt",
                 "https://arkavo.ai/attr/tdf/value/decrypt",
                 "https://patreon.arkavo.com/attr/arkavo-creator/value/publish",
+                "https://patreon.arkavo.com/attr/arkavo-creator/value/admin",
+                "https://patreon.arkavo.com/attr/arkavo-creator/value/publish/1",
+                "https://patreon.arkavo.com.evil/attr/arkavo-creator/value/publish",
                 42,
                 "HTTPS://PATREON.ARKAVO.COM/attr/campaign/value/7237273",
                 "https://patreon.arkavo.com/attr/campaign/value/abc",
@@ -1232,6 +1237,7 @@ mod tests {
                 "https://patreon.arkavo.com/attr/campaign-tier/value/13167240_supporter",
                 "https://patreon.arkavo.com/attr/campaign-tier/value/13167240_tier-555",
                 "https://patreon.arkavo.com/attr/campaign-tier/value/7237273_supporter",
+                "https://patreon.arkavo.com/attr/arkavo-creator/value/publish",
                 "https://patreon.arkavo.com/attr/campaign/value/7237273"
             ])
         );
@@ -1273,14 +1279,24 @@ mod tests {
         let mut padded = fqns(256).as_array().unwrap().clone();
         padded.push(json!("https://patreon.arkavo.com/attr/campaign/value/0"));
         padded.push(json!("tdf:decrypt"));
-        padded.push(json!(
-            "https://patreon.arkavo.com/attr/arkavo-creator/value/publish"
-        ));
+        padded.push(json!("https://arkavo.ai/attr/tdf/value/decrypt"));
         let deduped = pe_claims(&pe_with_entitlements(Value::Array(padded), "consumer")).unwrap();
         assert_eq!(
             deduped["arkavo_entitlements"].as_array().unwrap().len(),
             256
         );
+
+        // The publish entitlement counts toward the cap like any survivor.
+        let mut with_publish = fqns(256).as_array().unwrap().clone();
+        with_publish.push(json!(
+            "https://patreon.arkavo.com/attr/arkavo-creator/value/publish"
+        ));
+        let over = pe_claims(&pe_with_entitlements(
+            Value::Array(with_publish),
+            "consumer",
+        ))
+        .unwrap();
+        assert!(over.get("arkavo_entitlements").is_none());
     }
 
     #[test]

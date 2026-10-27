@@ -16,7 +16,8 @@
               "patreon_user_id": "12345678",
               "arkavo_entitlements": [
                 "https://patreon.arkavo.com/attr/campaign/value/87654321",
-                "https://patreon.arkavo.com/attr/campaign-tier/value/87654321_supporter"
+                "https://patreon.arkavo.com/attr/campaign-tier/value/87654321_supporter",
+                "https://patreon.arkavo.com/attr/arkavo-creator/value/publish"
               ],
               "arkavo_patreon": {
                 "role": "consumer",

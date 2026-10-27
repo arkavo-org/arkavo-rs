@@ -61,11 +61,15 @@ fn issuer() -> String {
     std::env::var("OIDC_ISSUER").unwrap_or_else(|_| "https://identity.arkavo.net".to_string())
 }
 
+/// This host's platform audience when `MEDIA_PLATFORM_AUDIENCE` is unset. Viewer
+/// tokens and suspension readers' tokens must name it.
+pub const DEFAULT_PLATFORM_AUDIENCE: &str = "https://platform.arkavo.net";
+
 pub fn person_verifier_from_env() -> PersonTokenVerifier {
     let iss = issuer();
     let keys_url = format!("{}/.well-known/cose-keys", iss.trim_end_matches('/'));
     let aud = std::env::var("MEDIA_PLATFORM_AUDIENCE")
-        .unwrap_or_else(|_| "https://platform.arkavo.net".to_string());
+        .unwrap_or_else(|_| DEFAULT_PLATFORM_AUDIENCE.to_string());
     PersonTokenVerifier::new(CoseKeyCache::new(keys_url), iss, aud)
 }
 

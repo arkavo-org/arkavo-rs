@@ -2,7 +2,7 @@
 
 use crate::modules::authzen::cose_keys::CoseKeyCache;
 use crate::modules::authzen::cwt_subject::{
-    devices_from_context, Aud, DecodedClaims, DEVICECHECK_AUD,
+    devices_from_context, parse_client_ids, service_client_id, DecodedClaims, DEVICECHECK_AUD,
 };
 use crate::modules::authzen::cwt_verify::{
     header_kid, verify_header_token, VerifyError, VerifyOpts,
@@ -71,11 +71,7 @@ impl FacadeState {
         let keys_url = std::env::var("AUTHZEN_COSE_KEYS_URL")
             .unwrap_or_else(|_| format!("{}/.well-known/cose-keys", issuer.trim_end_matches('/')));
         let pep_client_ids = std::env::var("AUTHZEN_PEP_CLIENT_IDS").ok().and_then(|s| {
-            let set: HashSet<String> = s
-                .split(',')
-                .map(|x| x.trim().to_string())
-                .filter(|x| !x.is_empty())
-                .collect();
+            let set = parse_client_ids(&s);
             if set.is_empty() {
                 None
             } else {
@@ -125,7 +121,7 @@ impl FacadeState {
                 parsed.scheme()
             ));
         }
-        let http = reqwest::Client::builder()
+        let http = crate::modules::http_client::builder()
             .timeout(Duration::from_secs(UPSTREAM_TIMEOUT_SECS))
             .redirect(Policy::none())
             .build()
@@ -238,29 +234,11 @@ async fn authenticate_pep(
         },
     )
     .map_err(|_| PepAuth::Unauthorized)?;
-    let Some(client_id) = claims.sub.strip_prefix("client:").filter(|s| !s.is_empty()) else {
+    let Some(client_id) = service_client_id(&claims) else {
         return Err(PepAuth::Unauthorized);
     };
-    let has_role = claims
-        .arkavo_roles
-        .as_ref()
-        .is_some_and(|r| r.iter().any(|x| x == "service-account"));
-    if !has_role {
-        return Err(PepAuth::Unauthorized);
-    }
-    let aud_ok = match &claims.aud {
-        Aud::One(s) => s == client_id,
-        Aud::Many(v) => v.iter().any(|s| s == client_id),
-    };
-    if !aud_ok {
-        return Err(PepAuth::Unauthorized);
-    }
     if let Some(want) = &state.expected_aud {
-        let bound = match &claims.aud {
-            Aud::One(s) => s == want,
-            Aud::Many(v) => v.iter().any(|s| s == want),
-        };
-        if !bound {
+        if !claims.aud.contains(want) {
             return Err(PepAuth::Unauthorized);
         }
     }

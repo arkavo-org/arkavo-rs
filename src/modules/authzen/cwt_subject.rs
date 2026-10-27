@@ -26,6 +26,39 @@ pub enum Aud {
     Many(Vec<String>),
 }
 
+impl Aud {
+    pub fn contains(&self, want: &str) -> bool {
+        match self {
+            Aud::One(s) => s == want,
+            Aud::Many(v) => v.iter().any(|s| s == want),
+        }
+    }
+}
+
+/// Service client IDs from a comma-separated list: trimmed, empty entries dropped.
+pub fn parse_client_ids(raw: &str) -> std::collections::HashSet<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The client ID of a service account's `client_credentials` token: `sub`
+/// `client:<id>`, role `service-account`, and `<id>` in `aud`. `None` for any
+/// other kind of token. Shared by every service-credential check.
+pub fn service_client_id(claims: &DecodedClaims) -> Option<&str> {
+    let id = claims
+        .sub
+        .strip_prefix("client:")
+        .filter(|s| !s.is_empty())?;
+    let service = claims
+        .arkavo_roles
+        .as_ref()
+        .is_some_and(|r| r.iter().any(|x| x == "service-account"));
+    (service && claims.aud.contains(id)).then_some(id)
+}
+
 /// Already-verified CWT claims. Mapping only — no COSE verify here.
 #[derive(Debug, Clone)]
 pub struct DecodedClaims {
@@ -186,10 +219,17 @@ fn is_slug(s: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// True for exactly `campaign/value/<digits>` and
-/// `campaign-tier/value/<digits>_<[a-z0-9-]+>` under the Patreon attr namespace.
-/// Expects an already ASCII-lowercased FQN.
+/// The creator-publishing entitlement, granted by the platform's `identity-core`
+/// source (arkavo-rs#95). Patreon and App Store Creator Membership both mint it.
+const PUBLISH_ENTITLEMENT: &str = "https://patreon.arkavo.com/attr/arkavo-creator/value/publish";
+
+/// True for exactly `campaign/value/<digits>`,
+/// `campaign-tier/value/<digits>_<[a-z0-9-]+>` and `arkavo-creator/value/publish`
+/// under the Patreon attr namespace. Expects an already ASCII-lowercased FQN.
 fn is_patreon_entitlement(fqn: &str) -> bool {
+    if fqn == PUBLISH_ENTITLEMENT {
+        return true;
+    }
     let Some(rest) = fqn.strip_prefix(PATREON_ATTR_PREFIX) else {
         return false;
     };
@@ -205,7 +245,8 @@ fn is_patreon_entitlement(fqn: &str) -> bool {
 }
 
 /// Filter PEP-supplied `arkavo_entitlements` down to the Patreon definitions the
-/// platform's composite `patreon` source owns. Lowercases, de-duplicates (input
+/// platform's composite `patreon` source owns, plus the publish entitlement its
+/// `identity-core` source owns. Lowercases, de-duplicates (input
 /// order), and returns `Ok(None)` when the input is not an array or nothing
 /// survives. More than `MAX_FORWARDED_ENTITLEMENTS` survivors is `Err(count)`
 /// (never truncates); the caller owns logging so one subject yields one line.

@@ -9,7 +9,8 @@ responses to concerns". The viewer side is arkavo-ios ADR-0040 and ADR-0043
 (`specs/moderation.spec.yaml`, ARK-280..ARK-294).
 
 The intake is off unless `MODERATION_INTAKE=on`. When it is off, every route
-below returns 404.
+below returns 404, except the suspension read route, which returns 503 (see
+[Suspensions](#suspensions)).
 
 ## Decisions
 
@@ -23,6 +24,7 @@ below returns 404.
 | Abuse limits | 10 reports per account per hour and 50 per day, counted in Redis. Over a limit returns 429 with `Retry-After`. Only new reports are counted: a retry of a stored report, or a request that fails because the store is down, uses no quota. If Redis is unreachable, the report is accepted, because losing a report is worse than accepting one more. The body is capped at 64 KiB, which holds any note the viewer accepts. |
 | Retention | 365 days after the report is resolved (`MODERATION_RETENTION_DAYS`), enforced by DynamoDB TTL on `expires_at`. An open report never expires. |
 | Notification | NATS `moderation.reports.received`. The alert names the report and its target and carries neither the note nor the reporter. |
+| Suspensions | `suspend` also records a per-account suspension, read by the OpenTDF platform's `constraints.publishing_status` (opentdf-platform#59) and lifted by a moderator. See [Suspensions](#suspensions) (arkavo-rs#93). |
 | Actions | Takedown and suspend are published to NATS as `moderation.actions.takedown` and `moderation.actions.suspend` for the enforcing services (tdf-iroh-s3#17, authnz-rs#91). They are sent before the report is stored as actioned; if they cannot be delivered, the PATCH returns 503 and the report is unchanged. |
 
 ## Report payload (frozen contract)
@@ -68,6 +70,12 @@ These are the keys of the viewer's `ModerationReport.jsonPayload()` plus
 
 A moderator is a person whose account ID is listed in `MODERATION_MODERATORS`.
 They authenticate with their own session CWT, the same way a reporter does.
+Agent tokens are refused here as everywhere in the intake; letting AI agents
+moderate needs its own credential decision first.
+
+A moderator never acts for themselves (403): they can't respond in any way to
+a report they filed or one about their own account, and can't lift their own
+suspension.
 
 - `GET /moderation/v1/reports?status=received&limit=50&cursor=…` lists a status
   queue, oldest first. `limit` is at most 100. Pass `nextCursor` as `cursor` to
@@ -81,7 +89,10 @@ from `received` straight to `actioned` or `dismissed`. `actioned` and
 `dismissed` are final (409).
 
 - `actioned` needs at least one action. `takedown` needs a reported `contentId`,
-  and `suspend` needs a reported creator. Other statuses take no actions.
+  and `suspend` needs a reported creator and a `note` in the same request, of
+  at most 1,024 characters, which becomes the suspension's reason (identity's
+  publishing-suspension API takes no longer reason). A note left by an earlier
+  response doesn't count. Other statuses take no actions.
 - The first change out of `received` records `firstResponseAt` and
   `responseSeconds`. This is the response-time measure for the committed
   response time ("Arkavo reviews reports within 24 hours").
@@ -102,13 +113,106 @@ curl -s -X PATCH -H "Authorization: Bearer $CWT" -H 'content-type: application/j
   https://platform.arkavo.net/moderation/v1/reports/<id>
 ```
 
+## Suspensions
+
+`PATCH … {"status":"actioned","actions":["suspend"],"note":"…"}` publishes the
+action events, then stores the actioned report and the suspension (with the
+note as its reason) in one atomic DynamoDB transaction. So an account is never
+suspended by a report that wasn't actioned:
+- **Events not delivered:** 503, and nothing is stored.
+- **Report changed meanwhile** (another moderator responded): 409, and neither
+  is stored.
+- **Store unavailable:** 503, and neither is stored.
+
+A retry sends the events again, so enforcers treat them as idempotent. A creator
+subject that is only the `arkavo:` prefix names no account, and gets 400. An
+account already suspended keeps its first record, so `since` and `reportId` name
+the original action.
+
+Nothing is deleted. A lift is recorded on the suspension (who, when, why), and
+a later suspension of the same account keeps the lifted ones as its history
+(the last 20).
+
+The key is the account's token `sub` with any `arkavo:` prefix removed, and a
+hyphenated UUID lowercased, so `arkavo:<UUID>` and `<uuid>` name the same
+account. Other UUID spellings (braced, `urn:uuid:`, no hyphens) are kept as
+they are and name no account a token carries. A report's creator is the catalog subject, which is that same
+`sub`. The action events carry this key as `account` (see [NATS events](#nats-events)).
+
+The stored suspension is authoritative: the platform reads it directly. The
+NATS action events are notifications, not enforcement, and under concurrent
+moderators they can lead or lag the store. Enforcement outside arks is #93
+phase 2: synchronous calls to identity and the node, with each outcome
+recorded on the report. One suspension record covers an account however many
+reports suspended it, and a lift clears it.
+
+### Read: `GET /moderation/v1/suspensions/{subject}`
+
+For the platform's `constraints.publishing_status`, which drops the
+`arkavo-creator` grants of a suspended account. `{subject}` is the token `sub`,
+percent-encoded as one path segment.
+
+- **Credential:** `Authorization: Bearer <service CWT>` from identity's
+  `client_credentials`. `iss` must be `OIDC_ISSUER`, `sub` `client:<id>`,
+  `arkavo_roles` must include `service-account`, `aud` must contain `<id>` and
+  this server (`MEDIA_PLATFORM_AUDIENCE`, the media routes' platform audience,
+  default `https://platform.arkavo.net`), and `<id>` must be in
+  `MODERATION_SUSPENSION_READER_IDS`. These are the AuthZEN facade's PEP rules,
+  from the same helper.
+
+| Response | Meaning |
+|---|---|
+| `200 {"subject","suspended":true,"since","reportId"}` | Suspended. `since` is RFC 3339. |
+| `200 {"subject","suspended":false}` | Not suspended. |
+| `400` | Malformed subject: empty, over 256 bytes, or holding whitespace or control characters. |
+| `401` | Missing or invalid service CWT, one not minted for this server, or a person's token. |
+| `403` | The client isn't in `MODERATION_SUSPENSION_READER_IDS`. |
+| `503` | The suspension store or key set is unavailable, or the intake is off. |
+
+The reader must fail closed: anything other than a 200 with a boolean
+`suspended` counts as suspended, including 404, a timeout and a TLS error. "Not
+suspended" is never a 404, so a missing route can't fail open.
+
+- **Same host:** the platform runs on the same host and calls
+  `https://platform.arkavo.net` with its connection pinned to 127.0.0.1:443. arks
+  has no plaintext loopback listener.
+- **Public route:** it is reachable from outside, so the service CWT is the
+  only gate.
+
+### Lift: `DELETE /moderation/v1/suspensions/{subject}`
+
+A moderator, with their own session CWT, lifts the suspension. The body,
+`{"reason": "…"}`, is required: up to 1,024 characters, normalised like a note,
+and no other keys (400 otherwise). The lift is recorded on the suspension, not
+deleted. The response is `200 {"subject","suspended":false,"lifted"}`, where
+`lifted` is false if nothing was suspended. It is idempotent; a concurrent
+change returns 409. The `moderation.actions.lift` event is published before the
+lift is stored: if it can't be delivered, the response is 503 and the
+suspension is unchanged, so a retry sends it again. It is published even when
+no suspension is stored, so an enforcer that acted on a suspend event whose
+store write then failed can still be told to lift. The stored lift applies only
+to the suspension version read before the event went out; if another moderator
+changed it in between, the response is 409 and a retry announces again.
+
+```sh
+curl -s -X DELETE -H "Authorization: Bearer $CWT" -H 'content-type: application/json' \
+  -d '{"reason":"appeal upheld"}' \
+  https://platform.arkavo.net/moderation/v1/suspensions/<subject>
+```
+
 ## NATS events
 
 | Subject | When | Body |
 |---|---|---|
 | `moderation.reports.received` | A new report is stored | `type`, `id`, `reasons`, `creatorSubject`, `contentId`, `receivedAt` |
-| `moderation.actions.takedown` | A report is actioned with `takedown` | `type`, `action`, `reportId`, `creatorSubject`, `contentId`, `moderator`, `at` |
+| `moderation.actions.takedown` | A report is actioned with `takedown` | `type`, `action`, `reportId`, `creatorSubject`, `account`, `contentId`, `moderator`, `reason`, `at` |
 | `moderation.actions.suspend` | A report is actioned with `suspend` | same |
+| `moderation.actions.lift` | A moderator lifts a suspension | `type`, `action`, `creatorSubject`, `account`, `reportId` (the lifted suspension's, if one was stored), `moderator`, `reason`, `at` |
+
+`creatorSubject` is the subject as reported (for a lift, as given in the path).
+`account` is the account key (see [Suspensions](#suspensions)): pair a suspend
+with its lift on `account`. `reason` is the moderator's note: a suspend's or a
+lift's reason, which #93 sends on to identity's publishing-suspension API.
 
 `MODERATION_NATS_PREFIX` changes the `moderation` prefix. Each publish is
 flushed to the NATS server within 2 seconds.
@@ -118,23 +222,64 @@ flushed to the NATS server within 2 seconds.
 - The action subjects are the hand-off to the enforcing services. A successful
   publish means the NATS server has the event, not that a subscriber took it:
   core NATS keeps nothing for a subscriber that is down. Until the enforcing
-  services subscribe, a moderator must also carry out the takedown or
-  suspension by hand.
+  services subscribe, a moderator must also carry out the takedown, and the
+  node's catalog block for a suspension, by hand. The publishing refusal
+  itself comes from the suspension record (see [Suspensions](#suspensions)).
 
 ## Storage
 
-The table is DynamoDB `prod-moderation-reports` in `us-east-1`.
+One DynamoDB table in `us-east-1`, `prod-moderation-reports`, holds the reports
+and the suspensions.
 
 | Attribute | Use |
 |---|---|
-| `report_id` (S, hash key) | Report ID |
-| `status` (S), `received_at` (N) | GSI `status-received_at-index` (projection ALL), the moderator queue |
-| `expires_at` (N) | TTL (retention); written only when the report is resolved |
-| `record` (S) | The full record as JSON |
+| `report_id` (S, hash key) | Report ID; for a suspension, `suspension#<subject>`, which no report ID (a UUID) can take |
+| `status` (S), `received_at` (N) | GSI `status-received_at-index` (projection ALL), the moderator queue. Suspension items have neither, so they stay out of it |
+| `expires_at` (N) | TTL (retention); written only when a report is resolved. Suspension items never expire |
+| `record` (S) | The full record as JSON: a report, or an account's current suspension and its history |
+| `version` (N) | Suspension items only: guards the read-modify-write of a suspend or lift |
 
-### On this server: DynamoDB Local
+### Production: AWS DynamoDB
 
-Production on the Arkavo server runs the table in a DynamoDB Local container, not in AWS. arks then needs no AWS credentials for moderation. `MODERATION_DYNAMODB_ENDPOINT` points only the moderation client at the container, with fixed placeholder credentials, so the S3 client's AWS credentials are not affected.
+Production uses AWS DynamoDB in the Arkavo account (976193232136), reached with
+the `arks-prod` IAM user that also signs C2PA claims with KMS. Leave
+`MODERATION_DYNAMODB_ENDPOINT` unset. The table was created with the CLI below,
+as in authnz-rs `docs/app-attest-gate-deployment.md`, with deletion protection
+on. devsecops defines it as `ModerationReportsTable` in `lambdas/template.yaml`;
+bring the existing table under that stack with a CloudFormation IMPORT change
+set, never by letting the stack create a new one.
+
+```sh
+aws dynamodb create-table \
+    --region us-east-1 \
+    --table-name prod-moderation-reports \
+    --attribute-definitions \
+        AttributeName=report_id,AttributeType=S \
+        AttributeName=status,AttributeType=S \
+        AttributeName=received_at,AttributeType=N \
+    --key-schema AttributeName=report_id,KeyType=HASH \
+    --global-secondary-indexes \
+        'IndexName=status-received_at-index,KeySchema=[{AttributeName=status,KeyType=HASH},{AttributeName=received_at,KeyType=RANGE}],Projection={ProjectionType=ALL}' \
+    --billing-mode PAY_PER_REQUEST \
+    --sse-specification Enabled=true \
+    --deletion-protection-enabled
+aws dynamodb wait table-exists --region us-east-1 --table-name prod-moderation-reports
+
+# Retention.
+aws dynamodb update-time-to-live --region us-east-1 \
+    --table-name prod-moderation-reports \
+    --time-to-live-specification Enabled=true,AttributeName=expires_at
+
+# Point-in-time recovery is off by default. These records are the evidence of
+# timely responses, so turn it on.
+aws dynamodb update-continuous-backups --region us-east-1 \
+    --table-name prod-moderation-reports \
+    --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true
+```
+
+### Development: DynamoDB Local
+
+For development, the table can run in a DynamoDB Local container instead of AWS. arks then needs no AWS credentials for moderation. `MODERATION_DYNAMODB_ENDPOINT` points only the moderation client at the container, with fixed placeholder credentials, so the process's AWS credentials, used by C2PA KMS signing, are not affected.
 
 ```sh
 docker volume create arks-dynamodb-data
@@ -163,46 +308,15 @@ ddb dynamodb update-time-to-live --table-name prod-moderation-reports \
 What DynamoDB Local does not give you:
 
 - **Backups.** There is no point-in-time recovery. The data is one SQLite file in the `arks-dynamodb-data` volume. Back it up, for example nightly with `docker run --rm -v arks-dynamodb-data:/d -v "$PWD":/b alpine tar czf /b/arks-dynamodb-$(date +%F).tgz -C /d .`. These records are the evidence of timely responses.
-- **Availability while Docker is down.** The container restarts with Docker, so Docker Desktop must start at login. While it is down, intake returns 503.
-- **A service AWS supports for production use.** AWS supports DynamoDB Local for development only. To move to AWS later, use the next section and unset `MODERATION_DYNAMODB_ENDPOINT`.
-
-### Create the table (AWS)
-
-Production tables are created with the CLI, as in authnz-rs
-`docs/app-attest-gate-deployment.md`; nothing in `devsecops` provisions this
-one.
-
-```sh
-aws dynamodb create-table \
-    --region us-east-1 \
-    --table-name prod-moderation-reports \
-    --attribute-definitions \
-        AttributeName=report_id,AttributeType=S \
-        AttributeName=status,AttributeType=S \
-        AttributeName=received_at,AttributeType=N \
-    --key-schema AttributeName=report_id,KeyType=HASH \
-    --global-secondary-indexes \
-        'IndexName=status-received_at-index,KeySchema=[{AttributeName=status,KeyType=HASH},{AttributeName=received_at,KeyType=RANGE}],Projection={ProjectionType=ALL}' \
-    --billing-mode PAY_PER_REQUEST \
-    --sse-specification Enabled=true
-aws dynamodb wait table-exists --region us-east-1 --table-name prod-moderation-reports
-
-# Retention.
-aws dynamodb update-time-to-live --region us-east-1 \
-    --table-name prod-moderation-reports \
-    --time-to-live-specification Enabled=true,AttributeName=expires_at
-
-# Point-in-time recovery is off by default. These records are the evidence of
-# timely responses, so turn it on.
-aws dynamodb update-continuous-backups --region us-east-1 \
-    --table-name prod-moderation-reports \
-    --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true
-```
+- **Availability while Docker is down.** The container restarts with Docker. While Docker is down, intake returns 503.
+- **A service AWS supports for production use.** AWS supports DynamoDB Local for development only, which is why production uses AWS.
 
 ### Credentials
 
 The arks host needs `dynamodb:PutItem`, `GetItem` and `Query` on the table and
-its index:
+its index. A suspend writes the report and the suspension with
+`TransactWriteItems`, which IAM authorises as the `PutItem` of each item. arks
+never deletes anything:
 
 ```json
 {
@@ -218,16 +332,19 @@ its index:
 }
 ```
 
-arks uses the default AWS credential chain, as the S3 client does. It runs
-under `sudo start.sh`, so check which credentials that chain finds there
-(`sudo sh -c 'echo $HOME'`), and prefer a dedicated IAM user's keys exported in
-`production/start.sh` over SSO credentials, which expire.
+Production attaches this as the inline policy `arks-moderation-dynamodb` on the
+`arks-prod` IAM user. arks uses the default AWS credential chain, as the C2PA KMS
+signer does: `production/start.sh` exports `AWS_PROFILE=arks-prod`,
+`AWS_SHARED_CREDENTIALS_FILE` and `AWS_REGION=us-east-1`, which also works under
+`sudo`. Prefer that IAM user's keys over SSO credentials, which expire.
 
 ## Configuration
 
 ```sh
 MODERATION_INTAKE=on                              # off (default) | on
 MODERATION_REPORTS_TABLE=prod-moderation-reports  # required when on
+MODERATION_SUSPENSION_READER_IDS=opentdf-platform  # service clients that may read suspensions; empty = none
+MEDIA_PLATFORM_AUDIENCE=https://platform.arkavo.net  # default shown; also required in a suspension reader token's aud
 MODERATION_STATUS_INDEX=status-received_at-index  # default shown
 MODERATION_MODERATORS=<account-uuid>,<account-uuid>  # who may read and respond; `arkavo:` prefix optional
 MODERATION_EXPECTED_AUD=arkavo                    # default shown
@@ -238,7 +355,7 @@ MODERATION_RATE_LIMIT_HOURLY=10                   # 0 disables
 MODERATION_RATE_LIMIT_DAILY=50                    # 0 disables
 MODERATION_NATS_PREFIX=moderation
 AWS_REGION=us-east-1                              # for DynamoDB, if not already set
-MODERATION_DYNAMODB_ENDPOINT=http://127.0.0.1:8000 # optional: DynamoDB Local instead of AWS
+MODERATION_DYNAMODB_ENDPOINT=http://127.0.0.1:8000 # development only: DynamoDB Local instead of AWS; unset in production
 ```
 
 ## Privacy

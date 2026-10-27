@@ -30,7 +30,7 @@ pub struct CoseKeyCache {
 }
 
 fn bounded_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
+    crate::modules::http_client::builder()
         .timeout(KEY_FETCH_TIMEOUT)
         .build()
         .expect("reqwest client")

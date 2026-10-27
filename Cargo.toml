@@ -47,7 +47,7 @@ env_logger = "0.11.5"
 log = "0.4.22"
 ink = "5.0.0"
 jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
-async-nats = "0.38.0"
+async-nats = "0.51"
 redis = { version = "0.27.2", features = ["tokio-comp"] }
 flatbuffers = "24.12.23"
 scale = { package = "parity-scale-codec", version = "3.6.12", default-features = false, features = ["derive"] }
@@ -61,26 +61,28 @@ http-body-util = "0.1"
 base64 = "0.22"
 chrono = "0.4"
 aws-config = { version = "1.5.13", features = ["behavior-version-latest"] }
-aws-sdk-s3 = "1.68.0"
-aws-sdk-dynamodb = "1"
+# default-features off: the SDKs' "rustls" default pulls the legacy rustls 0.21 client (#135)
+aws-sdk-dynamodb = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 unicode-segmentation = "1"
 uuid = { version = "1.11", features = ["v4"] }
 fairplay-wrapper = { path = "crates/fairplay-wrapper", optional = true }
-c2pa = { version = "0.75", features = ["file_io"], optional = true }
+c2pa = { version = "0.91", default-features = false, features = ["file_io", "rust_native_crypto", "http_ureq"], optional = true }
+x509-parser = { version = "0.18", optional = true }
+aws-sdk-kms = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 mp4parse = { version = "0.17", optional = true }
-# opentdf-rs v0.11.0 - NanoTDF and KAS support
-# Source: https://github.com/arkavo-org/opentdf-rs/releases/tag/0.11.0
-opentdf = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.0" }
-opentdf-crypto = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.0", features = ["kem-ec"] }
-opentdf-protocol = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.0" }
-opentdf-kas = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.11.2" }
+# opentdf-rs v0.16.1 - NanoTDF and KAS support
+# Source: https://github.com/arkavo-org/opentdf-rs/releases/tag/0.16.1
+opentdf = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.16.1" }
+opentdf-crypto = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.16.1", features = ["kem-ec"] }
+opentdf-protocol = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.16.1" }
+opentdf-kas = { git = "https://github.com/arkavo-org/opentdf-rs", tag = "0.16.1" }
 rsa = { version = "0.9", features = ["sha2"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
 sha1 = "0.10"
 z85 = "3.0"
 
 # Chain-driven KAS dependencies
-subxt = { version = "0.37", features = ["jsonrpsee"] }
+subxt = { version = "0.51", features = ["jsonrpsee"] }
 twox-hash = "1.6"
 blake2 = "0.10"
 secrecy = { version = "0.8", features = ["serde"] }
@@ -98,7 +100,7 @@ serde_bytes = "0.11"
 rml_rtmp = { git = "https://github.com/arkavo-org/rust-media-libs.git", tag = "v0.9.0" }
 rml_amf0 = { git = "https://github.com/arkavo-org/rust-media-libs.git", tag = "v0.9.0" }
 bytes = "1.0"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "http2", "charset"] }
 url = "2"
 
 # HTTP/3 (QUIC) — optional, enabled by the `http3` feature.
@@ -113,14 +115,16 @@ http = { version = "1", optional = true }
 default = []
 http3 = ["h3", "h3-quinn", "quinn", "http-body", "http"]
 fairplay = ["fairplay-wrapper"]
-c2pa_signing = ["c2pa", "mp4parse"]
+c2pa_signing = ["c2pa", "mp4parse", "x509-parser", "aws-sdk-kms"]
 
 [dev-dependencies]
 criterion = "0.5.1"
 serial_test = "3.2.0"
 wiremock = "0.6"
-# Self-signed cert generation for the http3 end-to-end smoke test.
+# Self-signed certs for the http3 smoke test and the TLS version tests.
 rcgen = "0.13"
+# Short-lived signer certificates for the C2PA timestamp test.
+time = "0.3"
 
 [[bench]]
 name = "benchmarks"

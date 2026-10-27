@@ -116,11 +116,7 @@ pub fn verify_tagged_bytes(
         }
     }
     if let Some(want) = opts.expected_aud {
-        let ok = match &claims.aud {
-            Aud::One(s) => s == want,
-            Aud::Many(v) => v.iter().any(|s| s == want),
-        };
-        if !ok {
+        if !claims.aud.contains(want) {
             return Err(VerifyError::Audience);
         }
     }
