@@ -1,4 +1,5 @@
 pub mod authzen;
+pub mod aws;
 #[cfg(feature = "c2pa_signing")]
 pub mod c2pa_csr;
 #[cfg(feature = "c2pa_signing")]

@@ -1047,7 +1047,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .build();
                     aws_sdk_dynamodb::Client::from_conf(conf)
                 }
-                None => aws_sdk_dynamodb::Client::new(&aws_config::load_from_env().await),
+                None => aws_sdk_dynamodb::Client::new(modules::aws::shared_config().await),
             };
             let store = moderation::store::DynamoReportStore::new(
                 dynamodb.clone(),
