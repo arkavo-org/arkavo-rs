@@ -67,6 +67,12 @@ struct PublicKeyMessage {
 }
 
 const MAX_NANOTDF_SIZE: usize = 16 * 1024 * 1024; // 16 MB
+/// The largest header list an HTTP/2 client may send, in bytes (hyper's
+/// default is 16 KiB). An Arkavo CWT names every active Patreon membership
+/// with its campaign and tiers, and travels with DeviceCheck CWTs, so a
+/// heavy patron's headers outgrow 16 KiB (#161). HTTP/1.1 already allows
+/// hyper's ~400 KiB read buffer; HTTP/3 (h3 crate) sets no cap.
+const MAX_HEADER_LIST_BYTES: u32 = 64 * 1024;
 const NATS_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 struct NatsConnection {
@@ -1343,65 +1349,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
         let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-        loop {
-            let (tcp_stream, remote_addr) = match listener.accept().await {
-                Ok(conn) => conn,
-                Err(e) => {
-                    error!("TCP accept error: {}", e);
-                    continue;
-                }
-            };
-            let tls_acceptor = tls_acceptor.clone();
-            let app = app.clone();
-
-            tokio::spawn(async move {
-                // TLS handshake with 10-second timeout - never blocks the accept loop
-                let tls_stream = match tokio::time::timeout(
-                    Duration::from_secs(10),
-                    tls_acceptor.accept(tcp_stream),
-                )
-                .await
-                {
-                    Ok(Ok(stream)) => stream,
-                    Ok(Err(e)) => {
-                        error!("TLS handshake failed from {}: {}", remote_addr, e);
-                        return;
-                    }
-                    Err(_) => {
-                        warn!("TLS handshake timeout from {}", remote_addr);
-                        return;
-                    }
-                };
-
-                let io = hyper_util::rt::TokioIo::new(tls_stream);
-
-                let hyper_service = hyper::service::service_fn(
-                    move |mut request: hyper::Request<hyper::body::Incoming>| {
-                        // Inject ConnectInfo so handlers can extract the client address
-                        request
-                            .extensions_mut()
-                            .insert(axum::extract::ConnectInfo(remote_addr));
-                        let tower_service = app.clone();
-                        async move { tower_service.oneshot(request).await }
-                    },
-                );
-
-                if let Err(e) = hyper_util::server::conn::auto::Builder::new(
-                    hyper_util::rt::TokioExecutor::new(),
-                )
-                .serve_connection_with_upgrades(io, hyper_service)
-                .await
-                {
-                    let err_str = e.to_string();
-                    if !err_str.contains("reset")
-                        && !err_str.contains("closed")
-                        && !err_str.contains("shutting down")
-                    {
-                        error!("HTTP connection error from {}: {}", remote_addr, e);
-                    }
-                }
-            });
-        }
+        serve_tls_listener(listener, tls_acceptor, app).await;
     } else {
         // TLS disabled - plain HTTP
         info!("TLS disabled - using plain HTTP");
@@ -1414,6 +1362,86 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Accepts TLS connections forever and serves each on its own task.
+async fn serve_tls_listener(
+    listener: tokio::net::TcpListener,
+    tls_acceptor: TlsAcceptor,
+    app: axum::Router,
+) {
+    loop {
+        let (tcp_stream, remote_addr) = match listener.accept().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                error!("TCP accept error: {}", e);
+                continue;
+            }
+        };
+        let tls_acceptor = tls_acceptor.clone();
+        let app = app.clone();
+        tokio::spawn(serve_tls_connection(
+            tls_acceptor,
+            tcp_stream,
+            remote_addr,
+            app,
+        ));
+    }
+}
+
+/// Handshakes one accepted TCP connection and serves HTTP/1.1 or HTTP/2 on it
+/// (ALPN from `rustls_server_config`), including the `/ws` upgrade.
+async fn serve_tls_connection(
+    tls_acceptor: TlsAcceptor,
+    tcp_stream: tokio::net::TcpStream,
+    remote_addr: std::net::SocketAddr,
+    app: axum::Router,
+) {
+    // TLS handshake with 10-second timeout - never blocks the accept loop
+    let tls_stream = match tokio::time::timeout(
+        Duration::from_secs(10),
+        tls_acceptor.accept(tcp_stream),
+    )
+    .await
+    {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(e)) => {
+            error!("TLS handshake failed from {}: {}", remote_addr, e);
+            return;
+        }
+        Err(_) => {
+            warn!("TLS handshake timeout from {}", remote_addr);
+            return;
+        }
+    };
+
+    let io = hyper_util::rt::TokioIo::new(tls_stream);
+
+    let hyper_service =
+        hyper::service::service_fn(move |mut request: hyper::Request<hyper::body::Incoming>| {
+            // Inject ConnectInfo so handlers can extract the client address
+            request
+                .extensions_mut()
+                .insert(axum::extract::ConnectInfo(remote_addr));
+            let tower_service = app.clone();
+            async move { tower_service.oneshot(request).await }
+        });
+
+    if let Err(e) =
+        hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+            .http2()
+            .max_header_list_size(MAX_HEADER_LIST_BYTES)
+            .serve_connection_with_upgrades(io, hyper_service)
+            .await
+    {
+        let err_str = e.to_string();
+        if !err_str.contains("reset")
+            && !err_str.contains("closed")
+            && !err_str.contains("shutting down")
+        {
+            error!("HTTP connection error from {}: {}", remote_addr, e);
+        }
+    }
 }
 
 fn load_tls_config(
@@ -3339,6 +3367,62 @@ mod ws_session_token_tests {
         assert_eq!(
             status(Some(&no_platform)).await,
             Some(StatusCode::UNAUTHORIZED)
+        );
+    }
+}
+
+#[cfg(test)]
+mod h2_header_limit_tests {
+    use super::*;
+
+    /// Serves `/healthz` over the production TLS connection path on a loopback
+    /// port; returns the port and the self-signed certificate (DER).
+    async fn spawn_listener() -> (u16, Vec<u8>) {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert = ck.cert.der().clone();
+        let key = rustls::pki_types::PrivateKeyDer::Pkcs8(
+            rustls::pki_types::PrivatePkcs8KeyDer::from(ck.key_pair.serialize_der()),
+        );
+        let server = rustls_server_config(vec![cert.clone()], key, false).unwrap();
+        let acceptor = TlsAcceptor::from(Arc::new(server));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let app = axum::Router::new().route("/healthz", axum::routing::get(|| async { "ok" }));
+        tokio::spawn(serve_tls_listener(listener, acceptor, app));
+        (port, cert.to_vec())
+    }
+
+    /// An HTTP/2 request carries a bearer far past hyper's default 16 KiB
+    /// header list: a patron's CWT naming many Patreon memberships, with a
+    /// DeviceCheck CWT beside it. Headers past `MAX_HEADER_LIST_BYTES` are
+    /// still refused.
+    #[tokio::test]
+    async fn tls_listener_takes_large_headers_over_h2() {
+        let (port, cert) = spawn_listener().await;
+        let client = reqwest::Client::builder()
+            .use_rustls_tls()
+            .add_root_certificate(reqwest::Certificate::from_der(&cert).unwrap())
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+        let send = |bearer_bytes: usize| {
+            client
+                .get(format!("https://localhost:{port}/healthz"))
+                .header(
+                    "authorization",
+                    format!("Bearer {}", "a".repeat(bearer_bytes)),
+                )
+                .header("x-entity-token", "b".repeat(2048))
+                .send()
+        };
+        let r = send(48 * 1024).await.expect("a 48 KiB bearer is accepted");
+        assert_eq!(r.version(), reqwest::Version::HTTP_2);
+        assert_eq!(r.status(), reqwest::StatusCode::OK);
+        let over = send(MAX_HEADER_LIST_BYTES as usize).await;
+        assert!(
+            over.is_err() || !over.unwrap().status().is_success(),
+            "headers over the limit must be refused"
         );
     }
 }
