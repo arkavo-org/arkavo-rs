@@ -14,6 +14,17 @@ One listener serves every client (`/ws`, `/media`, KAS, `/c2pa`, `.well-known`),
 client without TLS 1.3 fails the handshake on all of them. ArkavoKit also requires TLS 1.3
 on its side for C2PA and identity calls (ArkavoKit#38).
 
+### Request header size
+
+The TCP listener caps an HTTP/2 request's header list (every header together,
+so the `Authorization` CWT plus any `X-Entity-Token` device CWTs) at 64 KiB
+(`MAX_HEADER_LIST_BYTES` in `src/bin/main.rs`; hyper's default is 16 KiB). An
+Arkavo CWT names every active Patreon membership with its campaign and tiers,
+about 581 base64 characters each, and identity caps the claim at 75
+memberships (about 44 KB), so 64 KiB leaves room for a device token (#161).
+A request over the cap is refused by hyper before any handler runs. HTTP/1.1
+already allows hyper's ~400 KiB read buffer; the HTTP/3 listener sets no cap.
+
 `TLS_ALLOW_TLS12` (default `false`; `true`/`false`, `1`/`0`, `yes`/`no`, anything else
 stops startup) re-admits TLS 1.2 as an ops rollback if a client turns out to need it.
 arks logs a warning at startup while it is on. A 1.3-capable client still gets 1.3: TLS
