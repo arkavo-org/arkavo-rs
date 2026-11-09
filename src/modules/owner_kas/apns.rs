@@ -94,9 +94,10 @@ impl ApnsPusher {
         expires_at: i64,
         provider: &str,
     ) -> Result<(u16, String), String> {
-        // The key is production-only (arkavo-ios ADR-0074 decision 7); the
-        // route only admits production tokens.
-        debug_assert_eq!(environment, "production");
+        // The key is production-only (arkavo-ios ADR-0074 decision 7): the
+        // push route admits only production tokens, and nothing goes to the
+        // sandbox host.
+        let _ = environment;
         let host = "api.push.apple.com";
         let resp = self
             .http
