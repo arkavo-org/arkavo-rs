@@ -288,7 +288,8 @@ export MODERATION_DYNAMODB_ENDPOINT=http://127.0.0.1:8000  # development only: D
 
 # Owner KAS address (arkavo-rs#163) — see docs/owner-kas.md
 export OWNER_KAS=on                                    # off (default) | on; off -> /owner-kas/* 503
-export OWNER_KAS_ROUTES_TABLE=prod-owner-kas-routes    # DynamoDB, key route_id; route records and APNs tokens. Requests live in Redis (deadline + 10 min)
+export OWNER_KAS_RELAY_CLIENT_SECRET=...               # required when on: the owner-kas-relay client at identity (not arks-media); reads route owner + push token, deletes unregistered tokens
+# Route records and APNs tokens live at identity (authnz-rs 0.31.0); arks keeps only the Redis queue (deadline + 10 min)
 export APNS_KEY_PATH=/path/to/AuthKey_W3CY524V6Y.p8    # with APNS_KEY_ID and APNS_TEAM_ID, all or none; production-only key, alerts go to api.push.apple.com only
 export APNS_KEY_ID=W3CY524V6Y
 export APNS_TEAM_ID=M8GS7ZT95Y
@@ -367,7 +368,7 @@ Generated files are in `src/bin/schemas/`.
 - `src/modules/fairplay.rs` - FairPlay Streaming integration (optional feature)
 - `src/modules/crypto.rs` - Cryptographic primitives
 - `src/modules/moderation/` - Report intake, moderator queue and actions (DynamoDB + NATS); see `docs/moderation.md`
-- `src/modules/owner_kas/` - Owner KAS relay: Rewrap queue (Redis), route records (DynamoDB), APNs hint; see `docs/owner-kas.md`
+- `src/modules/owner_kas/` - Owner KAS relay: Rewrap queue (Redis), route owner and push token read from identity, APNs hint; see `docs/owner-kas.md`
 - `vendor/fpssdk/` - Apple FairPlay SDK Rust module (optional)
 - `crates/fairplay-wrapper/` - Safe Rust wrapper for FairPlay SDK (optional)
 - `docs/c2pa_video_drm.md` - C2PA + TDF3 integration documentation
@@ -400,8 +401,7 @@ The server implements a TDF3-based DRM system for HLS/DASH streaming media. Each
 **Owner KAS Endpoints** (`OWNER_KAS=on`, see `docs/owner-kas.md`): a relay, never an access decision
 - `POST /owner-kas/v1/routes/:route_id/kas.AccessService/Rewrap` - Receiver's OpenTDF Rewrap (owner-KAS token + signed request under its `cnf`); 202 + `Location`
 - `GET /owner-kas/v1/requests/:request_id` - Receiver polls: 202 pending, 200 the owner's answer, 410 expired
-- `GET|PUT /owner-kas/v1/routes/:route_id` - Route record: receiver reads it; owner admits a passkey-signed one
-- `GET /owner-kas/v1/routes/:route_id/requests`, `PUT /owner-kas/v1/requests/:request_id/response`, `PUT|DELETE /owner-kas/v1/routes/:route_id/push` - Owner (session CWT)
+- `GET /owner-kas/v1/routes/:route_id/requests`, `PUT /owner-kas/v1/requests/:request_id/response` - Owner (session CWT); route records and push tokens are registered at identity
 
 **Media DRM Endpoints:**
 - `POST /media/v1/session/start` - Initialize playback session

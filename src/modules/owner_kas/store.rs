@@ -1,14 +1,9 @@
-//! Storage for the owner-KAS relay.
-//!
-//! - **Routes** (record and APNs token) must outlive a restart until the
-//!   owner turns sharing off: DynamoDB, as moderation's suspensions.
-//! - **Requests** (the queued Rewrap, its bearer and the answer) live only
-//!   until the deadline plus [`RETENTION_AFTER_DEADLINE`]: Redis with
-//!   expiries. Production Redis snapshots but has no append-only log, which
-//!   is fine for data this short-lived and never fine for routes.
+//! The relay's only storage: the queued Rewrap, its bearer, the route's
+//! owner and the answer, in Redis until the deadline plus
+//! [`RETENTION_AFTER_DEADLINE`]. Route records and APNs tokens live at
+//! identity (`super::identity`).
 
 use async_trait::async_trait;
-use aws_sdk_dynamodb::types::AttributeValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -21,50 +16,10 @@ pub struct Push {
     pub environment: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StoredRoute {
-    pub owner_sub: String,
-    pub seq: u64,
-    /// The `PUT` body, exactly as received.
-    pub bundle: String,
-    pub push: Option<Push>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RouteError {
-    NotFound,
-    /// The route belongs to another owner.
-    OtherOwner,
-    /// `seq` is not above the stored one.
-    Stale,
-    Unavailable(String),
-}
-
-#[async_trait]
-pub trait RouteStore: Send + Sync {
-    async fn get(&self, route_id: &str) -> Result<Option<StoredRoute>, RouteError>;
-    /// Create, or replace when `owner_sub` matches and `seq` is higher. The
-    /// push registration is kept.
-    async fn put_record(
-        &self,
-        route_id: &str,
-        owner_sub: &str,
-        seq: u64,
-        bundle: &str,
-    ) -> Result<(), RouteError>;
-    async fn set_push(
-        &self,
-        route_id: &str,
-        owner_sub: &str,
-        push: &Push,
-    ) -> Result<(), RouteError>;
-    async fn clear_push(&self, route_id: &str, owner_sub: &str) -> Result<(), RouteError>;
-    /// Drop the token APNs reported unregistered, unless it was replaced.
-    async fn clear_push_token(&self, route_id: &str, apns_token: &str) -> Result<(), RouteError>;
-}
-
 pub struct NewRequest<'a> {
     pub route_id: &'a str,
+    /// The route's owner at identity when the request arrived.
+    pub owner_sub: &'a str,
     pub sub: &'a str,
     pub body_sha256_hex: &'a str,
     pub deadline: i64,
@@ -86,6 +41,7 @@ pub enum Enqueued {
 pub struct StoredRequest {
     pub request_id: String,
     pub route_id: String,
+    pub owner_sub: String,
     pub sub: String,
     pub deadline: i64,
     pub received_at: i64,
@@ -131,6 +87,8 @@ pub trait QueueStore: Send + Sync {
     async fn respond(&self, request_id: &str, body: &[u8], now: i64) -> Result<(), RespondError>;
     /// True at most once per `interval_secs` per route: the APNs rate limit.
     async fn push_slot(&self, route_id: &str, interval_secs: u64) -> Result<bool, String>;
+    /// Delete everything queued for a route identity reports as retired.
+    async fn drop_route(&self, route_id: &str) -> Result<(), String>;
 }
 
 // ==================== Redis ====================
@@ -148,7 +106,7 @@ fn req_key(id: &str) -> String {
 /// KEYS: dedup, route deadlines, submitter deadlines, route queue, seq
 /// counter, request hash.
 /// ARGV: id, now, deadline, expire_at, route cap, submitter cap, route,
-/// sub, received_at, authorization, body.
+/// sub, received_at, authorization, body, owner_sub.
 const ENQUEUE_LUA: &str = r#"
 local existing = redis.call('GET', KEYS[1])
 if existing and redis.call('EXISTS', 'owner-kas:req:' .. existing) == 1 then
@@ -165,7 +123,8 @@ local id = ARGV[1]
 local expire_at = tonumber(ARGV[4])
 local seq = redis.call('INCR', KEYS[5])
 redis.call('HSET', KEYS[6], 'route', ARGV[7], 'sub', ARGV[8], 'deadline', ARGV[3],
-  'received_at', ARGV[9], 'authorization', ARGV[10], 'body', ARGV[11], 'seq', seq)
+  'received_at', ARGV[9], 'authorization', ARGV[10], 'body', ARGV[11], 'seq', seq,
+  'owner', ARGV[12])
 redis.call('EXPIREAT', KEYS[6], expire_at)
 redis.call('SET', KEYS[1], id, 'EXAT', expire_at)
 redis.call('ZADD', KEYS[2], ARGV[3], id)
@@ -175,6 +134,15 @@ for i = 2, 5 do
   if redis.call('EXPIRETIME', KEYS[i]) < expire_at then redis.call('EXPIREAT', KEYS[i], expire_at) end
 end
 return {1, id}
+"#;
+
+/// Delete a route's requests and indexes. KEYS: queue, route deadlines,
+/// seq counter. Submitter deadline sets expire on their own.
+const DROP_LUA: &str = r#"
+local ids = redis.call('ZRANGE', KEYS[1], 0, -1)
+for _, id in ipairs(ids) do redis.call('DEL', 'owner-kas:req:' .. id) end
+redis.call('DEL', KEYS[1], KEYS[2], KEYS[3])
+return #ids
 "#;
 
 /// KEYS: request hash. ARGV: body, now, id.
@@ -243,6 +211,7 @@ fn stored_from_map(id: &str, mut m: HashMap<String, Vec<u8>>) -> Option<StoredRe
     Some(StoredRequest {
         request_id: id.to_string(),
         route_id: text(&mut m, "route")?,
+        owner_sub: text(&mut m, "owner")?,
         sub: text(&mut m, "sub")?,
         deadline: text(&mut m, "deadline")?.parse().ok()?,
         received_at: text(&mut m, "received_at")?.parse().ok()?,
@@ -284,6 +253,7 @@ impl QueueStore for RedisQueueStore {
             .arg(req.received_at)
             .arg(req.authorization)
             .arg(req.body)
+            .arg(req.owner_sub)
             .invoke_async(&mut conn)
             .await;
         match result {
@@ -385,6 +355,18 @@ impl QueueStore for RedisQueueStore {
         }
     }
 
+    async fn drop_route(&self, route_id: &str) -> Result<(), String> {
+        let mut conn = self.connection().await?;
+        redis::Script::new(DROP_LUA)
+            .key(format!("{PREFIX}:q:{route_id}"))
+            .key(format!("{PREFIX}:dl:{route_id}"))
+            .key(format!("{PREFIX}:seq:{route_id}"))
+            .invoke_async::<i64>(&mut conn)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
     async fn push_slot(&self, route_id: &str, interval_secs: u64) -> Result<bool, String> {
         let mut conn = self.connection().await?;
         let set: Option<String> = redis::cmd("SET")
@@ -400,268 +382,12 @@ impl QueueStore for RedisQueueStore {
     }
 }
 
-// ==================== DynamoDB ====================
-
-pub struct DynamoRouteStore {
-    client: aws_sdk_dynamodb::Client,
-    table: String,
-}
-
-impl DynamoRouteStore {
-    pub fn new(client: aws_sdk_dynamodb::Client, table: String) -> Self {
-        Self { client, table }
-    }
-
-    fn unavailable(e: impl std::fmt::Display) -> RouteError {
-        RouteError::Unavailable(e.to_string())
-    }
-
-    /// After a failed condition: why.
-    async fn refusal(&self, route_id: &str, owner_sub: &str) -> RouteError {
-        match self.get(route_id).await {
-            Ok(None) => RouteError::NotFound,
-            Ok(Some(r)) if r.owner_sub != owner_sub => RouteError::OtherOwner,
-            Ok(Some(_)) => RouteError::Stale,
-            Err(e) => e,
-        }
-    }
-}
-
-fn is_condition_failure<E, R>(e: &aws_sdk_dynamodb::error::SdkError<E, R>) -> bool
-where
-    E: aws_sdk_dynamodb::error::ProvideErrorMetadata,
-{
-    e.as_service_error()
-        .and_then(|s| s.code())
-        .is_some_and(|c| c == "ConditionalCheckFailedException")
-}
-
-#[async_trait]
-impl RouteStore for DynamoRouteStore {
-    async fn get(&self, route_id: &str) -> Result<Option<StoredRoute>, RouteError> {
-        let out = self
-            .client
-            .get_item()
-            .table_name(&self.table)
-            .key("route_id", AttributeValue::S(route_id.into()))
-            .consistent_read(true)
-            .send()
-            .await
-            .map_err(|e| Self::unavailable(aws_sdk_dynamodb::error::DisplayErrorContext(e)))?;
-        let Some(item) = out.item() else {
-            return Ok(None);
-        };
-        let s = |k: &str| item.get(k).and_then(|v| v.as_s().ok()).cloned();
-        let (Some(owner_sub), Some(bundle), Some(seq)) = (
-            s("owner_sub"),
-            s("bundle"),
-            item.get("seq")
-                .and_then(|v| v.as_n().ok())
-                .and_then(|n| n.parse::<u64>().ok()),
-        ) else {
-            return Err(RouteError::Unavailable("route item is incomplete".into()));
-        };
-        let push = match (s("apns_token"), s("apns_env")) {
-            (Some(apns_token), Some(environment)) => Some(Push {
-                apns_token,
-                environment,
-            }),
-            _ => None,
-        };
-        Ok(Some(StoredRoute {
-            owner_sub,
-            seq,
-            bundle,
-            push,
-        }))
-    }
-
-    async fn put_record(
-        &self,
-        route_id: &str,
-        owner_sub: &str,
-        seq: u64,
-        bundle: &str,
-    ) -> Result<(), RouteError> {
-        let result = self
-            .client
-            .update_item()
-            .table_name(&self.table)
-            .key("route_id", AttributeValue::S(route_id.into()))
-            .update_expression("SET owner_sub = :o, seq = :s, bundle = :b")
-            .condition_expression("attribute_not_exists(route_id) OR (owner_sub = :o AND seq < :s)")
-            .expression_attribute_values(":o", AttributeValue::S(owner_sub.into()))
-            .expression_attribute_values(":s", AttributeValue::N(seq.to_string()))
-            .expression_attribute_values(":b", AttributeValue::S(bundle.into()))
-            .send()
-            .await;
-        match result {
-            Ok(_) => Ok(()),
-            Err(e) if is_condition_failure(&e) => {
-                Err(match self.refusal(route_id, owner_sub).await {
-                    RouteError::NotFound => RouteError::Stale,
-                    other => other,
-                })
-            }
-            Err(e) => Err(Self::unavailable(
-                aws_sdk_dynamodb::error::DisplayErrorContext(e),
-            )),
-        }
-    }
-
-    async fn set_push(
-        &self,
-        route_id: &str,
-        owner_sub: &str,
-        push: &Push,
-    ) -> Result<(), RouteError> {
-        let result = self
-            .client
-            .update_item()
-            .table_name(&self.table)
-            .key("route_id", AttributeValue::S(route_id.into()))
-            .update_expression("SET apns_token = :t, apns_env = :e")
-            .condition_expression("owner_sub = :o")
-            .expression_attribute_values(":o", AttributeValue::S(owner_sub.into()))
-            .expression_attribute_values(":t", AttributeValue::S(push.apns_token.clone()))
-            .expression_attribute_values(":e", AttributeValue::S(push.environment.clone()))
-            .send()
-            .await;
-        match result {
-            Ok(_) => Ok(()),
-            Err(e) if is_condition_failure(&e) => Err(self.refusal(route_id, owner_sub).await),
-            Err(e) => Err(Self::unavailable(
-                aws_sdk_dynamodb::error::DisplayErrorContext(e),
-            )),
-        }
-    }
-
-    async fn clear_push(&self, route_id: &str, owner_sub: &str) -> Result<(), RouteError> {
-        let result = self
-            .client
-            .update_item()
-            .table_name(&self.table)
-            .key("route_id", AttributeValue::S(route_id.into()))
-            .update_expression("REMOVE apns_token, apns_env")
-            .condition_expression("owner_sub = :o")
-            .expression_attribute_values(":o", AttributeValue::S(owner_sub.into()))
-            .send()
-            .await;
-        match result {
-            Ok(_) => Ok(()),
-            Err(e) if is_condition_failure(&e) => Err(self.refusal(route_id, owner_sub).await),
-            Err(e) => Err(Self::unavailable(
-                aws_sdk_dynamodb::error::DisplayErrorContext(e),
-            )),
-        }
-    }
-
-    async fn clear_push_token(&self, route_id: &str, apns_token: &str) -> Result<(), RouteError> {
-        let result = self
-            .client
-            .update_item()
-            .table_name(&self.table)
-            .key("route_id", AttributeValue::S(route_id.into()))
-            .update_expression("REMOVE apns_token, apns_env")
-            .condition_expression("apns_token = :t")
-            .expression_attribute_values(":t", AttributeValue::S(apns_token.into()))
-            .send()
-            .await;
-        match result {
-            Ok(_) => Ok(()),
-            Err(e) if is_condition_failure(&e) => Ok(()),
-            Err(e) => Err(Self::unavailable(
-                aws_sdk_dynamodb::error::DisplayErrorContext(e),
-            )),
-        }
-    }
-}
-
 // ==================== In memory (tests) ====================
 
 #[cfg(test)]
 pub(crate) mod memory {
     use super::*;
     use std::sync::Mutex;
-
-    #[derive(Default)]
-    pub struct MemoryRoutes(pub Mutex<HashMap<String, StoredRoute>>);
-
-    #[async_trait]
-    impl RouteStore for MemoryRoutes {
-        async fn get(&self, route_id: &str) -> Result<Option<StoredRoute>, RouteError> {
-            Ok(self.0.lock().unwrap().get(route_id).cloned())
-        }
-        async fn put_record(
-            &self,
-            route_id: &str,
-            owner_sub: &str,
-            seq: u64,
-            bundle: &str,
-        ) -> Result<(), RouteError> {
-            let mut m = self.0.lock().unwrap();
-            match m.get_mut(route_id) {
-                Some(r) if r.owner_sub != owner_sub => Err(RouteError::OtherOwner),
-                Some(r) if r.seq >= seq => Err(RouteError::Stale),
-                Some(r) => {
-                    r.seq = seq;
-                    r.bundle = bundle.into();
-                    Ok(())
-                }
-                None => {
-                    m.insert(
-                        route_id.into(),
-                        StoredRoute {
-                            owner_sub: owner_sub.into(),
-                            seq,
-                            bundle: bundle.into(),
-                            push: None,
-                        },
-                    );
-                    Ok(())
-                }
-            }
-        }
-        async fn set_push(
-            &self,
-            route_id: &str,
-            owner_sub: &str,
-            push: &Push,
-        ) -> Result<(), RouteError> {
-            let mut m = self.0.lock().unwrap();
-            match m.get_mut(route_id) {
-                None => Err(RouteError::NotFound),
-                Some(r) if r.owner_sub != owner_sub => Err(RouteError::OtherOwner),
-                Some(r) => {
-                    r.push = Some(push.clone());
-                    Ok(())
-                }
-            }
-        }
-        async fn clear_push(&self, route_id: &str, owner_sub: &str) -> Result<(), RouteError> {
-            let mut m = self.0.lock().unwrap();
-            match m.get_mut(route_id) {
-                None => Err(RouteError::NotFound),
-                Some(r) if r.owner_sub != owner_sub => Err(RouteError::OtherOwner),
-                Some(r) => {
-                    r.push = None;
-                    Ok(())
-                }
-            }
-        }
-        async fn clear_push_token(
-            &self,
-            route_id: &str,
-            apns_token: &str,
-        ) -> Result<(), RouteError> {
-            if let Some(r) = self.0.lock().unwrap().get_mut(route_id) {
-                if r.push.as_ref().is_some_and(|p| p.apns_token == apns_token) {
-                    r.push = None;
-                }
-            }
-            Ok(())
-        }
-    }
 
     #[derive(Default)]
     pub struct MemoryQueue {
@@ -708,6 +434,7 @@ pub(crate) mod memory {
                 StoredRequest {
                     request_id: request_id.into(),
                     route_id: req.route_id.into(),
+                    owner_sub: req.owner_sub.into(),
                     sub: req.sub.into(),
                     deadline: req.deadline,
                     received_at: req.received_at,
@@ -771,6 +498,14 @@ pub(crate) mod memory {
             Ok(())
         }
 
+        async fn drop_route(&self, route_id: &str) -> Result<(), String> {
+            self.reqs
+                .lock()
+                .unwrap()
+                .retain(|(_, r)| r.route_id != route_id);
+            Ok(())
+        }
+
         async fn push_slot(&self, route_id: &str, _interval_secs: u64) -> Result<bool, String> {
             let mut p = self.pushes.lock().unwrap();
             let n = p.entry(route_id.into()).or_default();
@@ -802,6 +537,7 @@ mod redis_tests {
     fn req<'a>(route: &'a str, sub: &'a str, hash: &'a str, deadline: i64) -> NewRequest<'a> {
         NewRequest {
             route_id: route,
+            owner_sub: "owner",
             sub,
             body_sha256_hex: hash,
             deadline,
@@ -914,6 +650,10 @@ mod redis_tests {
 
         assert!(s.push_slot(&r, 30).await.unwrap());
         assert!(!s.push_slot(&r, 30).await.unwrap());
+
+        s.drop_route(&r).await.unwrap();
+        assert!(s.get(&b).await.unwrap().is_none());
+        assert!(s.pending(&r, None, 64, now).await.unwrap().is_empty());
     }
 
     #[tokio::test]

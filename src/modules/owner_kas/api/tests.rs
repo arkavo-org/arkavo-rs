@@ -1,15 +1,19 @@
 use super::*;
 use crate::modules::authzen::cose_keys::CoseKeyCache;
 use crate::modules::authzen::cwt_verify::test_support::mint_map;
-use crate::modules::owner_kas::record::test_support::{bundle, CREDENTIAL_ID, RP};
-use crate::modules::owner_kas::store::memory::{MemoryQueue, MemoryRoutes};
+use crate::modules::owner_kas::identity::memory::MemoryDirectory;
+use crate::modules::owner_kas::identity::RouteInfo;
+use crate::modules::owner_kas::store::memory::MemoryQueue;
 use crate::modules::owner_kas::token::test_support::{
     identity_key, request_key, Mint, ISS, KID, ROUTE, SUB,
 };
+use crate::modules::owner_kas::token::LIFETIME_SECONDS as LIFETIME;
+use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Method, Request};
 use ciborium::value::Value;
 use std::sync::Mutex;
+use std::time::Duration;
 use tower::ServiceExt;
 
 const OWNER: &str = "0a1b2c3d-0000-4000-8000-0000000000aa";
@@ -37,49 +41,45 @@ impl Pusher for RecordingPusher {
     }
 }
 
-struct StubStatus(Mutex<Result<(), StatusRefusal>>);
-
-#[async_trait]
-impl CredentialStatus for StubStatus {
-    async fn check(&self, id: &[u8], _sub: &str) -> Result<(), StatusRefusal> {
-        assert_eq!(id, CREDENTIAL_ID);
-        self.0.lock().unwrap().clone()
-    }
-}
-
 struct Harness {
     app: Router,
-    routes: Arc<MemoryRoutes>,
+    directory: Arc<MemoryDirectory>,
     pusher: Arc<RecordingPusher>,
-    status: Arc<StubStatus>,
 }
 
 fn keys() -> CoseKeyCache {
     CoseKeyCache::with_static_keys(vec![(KID.to_vec(), *identity_key().verifying_key())])
 }
 
-fn harness() -> Harness {
-    let routes = Arc::new(MemoryRoutes::default());
+fn owner_route(push: Option<Push>) -> RouteInfo {
+    RouteInfo {
+        owner_sub: OWNER.into(),
+        push,
+    }
+}
+
+fn harness_with(push: Option<Push>) -> Harness {
+    let directory = Arc::new(MemoryDirectory::with(ROUTE, owner_route(push)));
     let pusher = Arc::new(RecordingPusher::default());
-    let status = Arc::new(StubStatus(Mutex::new(Ok(()))));
     let state = Arc::new(OwnerKasState {
         receivers: OwnerKasVerifier {
             issuer: ISS.into(),
             keys: keys(),
         },
         owners: PersonTokenVerifier::new(keys(), ISS.into(), PLATFORM.into()),
-        routes: routes.clone(),
+        directory: directory.clone(),
         queue: Arc::new(MemoryQueue::default()),
         pusher: Some(pusher.clone()),
-        status: status.clone(),
-        passkeys: Passkeys::for_rp(RP),
     });
     Harness {
         app: router(state),
-        routes,
+        directory,
         pusher,
-        status,
     }
+}
+
+fn harness() -> Harness {
+    harness_with(None)
 }
 
 /// A passkey session CWT as identity mints it.
@@ -149,42 +149,39 @@ fn rewrap_uri(route: &str) -> String {
     format!("/owner-kas/v1/routes/{route}/kas.AccessService/Rewrap")
 }
 
-async fn put_record(h: &Harness, seq: u64) -> Res {
-    let body = serde_json::to_vec(&bundle(ROUTE, OWNER, seq)).unwrap();
-    call(
-        &h.app,
-        Method::PUT,
-        &format!("/owner-kas/v1/routes/{ROUTE}"),
-        Some(&session(OWNER)),
-        body,
-    )
-    .await
+fn list_uri() -> String {
+    format!("/owner-kas/v1/routes/{ROUTE}/requests")
 }
 
 async fn submit(h: &Harness, m: &Mint<'_>, extra: &str) -> Res {
-    let token = m.token();
     call(
         &h.app,
         Method::POST,
         &rewrap_uri(ROUTE),
-        Some(&token),
+        Some(&m.token()),
         m.rewrap_body(m.exp, extra),
     )
     .await
 }
 
+fn id_of(res: &Res) -> String {
+    res.json()["request_id"].as_str().unwrap().to_string()
+}
+
+fn listed_count(res: &Res) -> usize {
+    res.json()["requests"].as_array().unwrap().len()
+}
+
 #[tokio::test]
 async fn the_whole_exchange() {
     let h = harness();
-    assert_eq!(put_record(&h, 1).await.status, StatusCode::OK);
-
     let m = Mint::new(ROUTE, now());
     let res = submit(&h, &m, "a").await;
     assert_eq!(res.status, StatusCode::ACCEPTED);
     assert_eq!(res.headers["retry-after"], "5");
     assert_eq!(res.headers["cache-control"], "no-store");
     let j = res.json();
-    let id = j["request_id"].as_str().unwrap().to_string();
+    let id = id_of(&res);
     assert_eq!(j["status"], "pending");
     assert_eq!(j["deadline"], m.exp);
     assert_eq!(
@@ -193,8 +190,7 @@ async fn the_whole_exchange() {
     );
 
     // The same body again: the same request.
-    let again = submit(&h, &m, "a").await;
-    assert_eq!(again.json()["request_id"], id.as_str());
+    assert_eq!(id_of(&submit(&h, &m, "a").await), id);
 
     // The receiver polls: pending.
     let poll_uri = format!("/owner-kas/v1/requests/{id}");
@@ -205,7 +201,7 @@ async fn the_whole_exchange() {
     let list = call(
         &h.app,
         Method::GET,
-        &format!("/owner-kas/v1/routes/{ROUTE}/requests"),
+        &list_uri(),
         Some(&session(OWNER)),
         vec![],
     )
@@ -230,12 +226,12 @@ async fn the_whole_exchange() {
     let later = call(
         &h.app,
         Method::GET,
-        &format!("/owner-kas/v1/routes/{ROUTE}/requests?after={id}"),
+        &format!("{}?after={id}", list_uri()),
         Some(&session(OWNER)),
         vec![],
     )
     .await;
-    assert_eq!(later.json()["requests"].as_array().unwrap().len(), 0);
+    assert_eq!(listed_count(&later), 0);
 
     // The owner answers, once.
     let answer = br#"{"responses":[]}"#.to_vec();
@@ -268,21 +264,18 @@ async fn the_whole_exchange() {
     let list = call(
         &h.app,
         Method::GET,
-        &format!("/owner-kas/v1/routes/{ROUTE}/requests"),
+        &list_uri(),
         Some(&session(OWNER)),
         vec![],
     )
     .await;
-    assert_eq!(list.json()["requests"].as_array().unwrap().len(), 0);
+    assert_eq!(listed_count(&list), 0);
 }
 
 #[tokio::test]
-async fn a_rewrap_needs_a_record_a_matching_token_and_its_key() {
+async fn a_rewrap_needs_a_matching_token_and_its_key() {
     let h = harness();
     let m = Mint::new(ROUTE, now());
-    // No record yet.
-    assert_eq!(submit(&h, &m, "a").await.status, StatusCode::NOT_FOUND);
-    put_record(&h, 1).await;
 
     // A token for another route.
     let other = Mint::new("01JC0000000000000000000000", now());
@@ -344,14 +337,49 @@ async fn a_rewrap_needs_a_record_a_matching_token_and_its_key() {
 }
 
 #[tokio::test]
+async fn identity_decides_whether_the_route_exists() {
+    let h = harness();
+    let m = Mint::new(ROUTE, now());
+    // Unknown or retired at identity: 404.
+    h.directory.routes.lock().unwrap().as_mut().unwrap().clear();
+    assert_eq!(submit(&h, &m, "a").await.status, StatusCode::NOT_FOUND);
+    // Retired at identity: 404, and what was queued for it is dropped.
+    *h.directory.routes.lock().unwrap() = Some([(ROUTE.to_string(), owner_route(None))].into());
+    let id = id_of(&submit(&h, &m, "queued").await);
+    h.directory.retired.lock().unwrap().push(ROUTE.into());
+    assert_eq!(submit(&h, &m, "b").await.status, StatusCode::NOT_FOUND);
+    let poll = call(
+        &h.app,
+        Method::GET,
+        &format!("/owner-kas/v1/requests/{id}"),
+        Some(&m.token()),
+        vec![],
+    )
+    .await;
+    assert_eq!(poll.status, StatusCode::NOT_FOUND);
+    h.directory.retired.lock().unwrap().clear();
+    // Identity unreachable: 503 with Retry-After, and nothing queued.
+    *h.directory.routes.lock().unwrap() = None;
+    let res = submit(&h, &m, "a").await;
+    assert_eq!(res.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(res.headers["retry-after"], "5");
+    *h.directory.routes.lock().unwrap() = Some([(ROUTE.to_string(), owner_route(None))].into());
+    let list = call(
+        &h.app,
+        Method::GET,
+        &list_uri(),
+        Some(&session(OWNER)),
+        vec![],
+    )
+    .await;
+    assert_eq!(listed_count(&list), 0);
+}
+
+#[tokio::test]
 async fn polls_reveal_nothing_to_others() {
     let h = harness();
-    put_record(&h, 1).await;
     let m = Mint::new(ROUTE, now());
-    let id = submit(&h, &m, "a").await.json()["request_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let id = id_of(&submit(&h, &m, "a").await);
     let uri = format!("/owner-kas/v1/requests/{id}");
     let mut other = Mint::new(ROUTE, now());
     other.sub = "0a1b2c3d-0000-4000-8000-000000000009";
@@ -364,15 +392,11 @@ async fn polls_reveal_nothing_to_others() {
 #[tokio::test]
 async fn a_late_poll_is_gone_not_unauthorized() {
     let h = harness();
-    put_record(&h, 1).await;
     // A token 30 s past its exp is still inside the skew: it queues a request
     // whose deadline has passed.
     let mut m = Mint::new(ROUTE, now() - LIFETIME - 30);
     m.exp = now() - 30;
-    let id = submit(&h, &m, "a").await.json()["request_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let id = id_of(&submit(&h, &m, "a").await);
     let uri = format!("/owner-kas/v1/requests/{id}");
     let res = call(&h.app, Method::GET, &uri, Some(&m.token()), vec![]).await;
     assert_eq!(res.status, StatusCode::GONE);
@@ -383,16 +407,25 @@ async fn a_late_poll_is_gone_not_unauthorized() {
     let res = call(&h.app, Method::GET, &uri, Some(&late.token()), vec![]).await;
     assert_eq!(res.status, StatusCode::GONE);
     // ...but cannot queue anything.
-    let res = submit(&h, &late, "b").await;
-    assert_eq!(res.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        submit(&h, &late, "b").await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    // The owner's late answer is refused as expired.
+    let res = call(
+        &h.app,
+        Method::PUT,
+        &format!("/owner-kas/v1/requests/{id}/response"),
+        Some(&session(OWNER)),
+        b"{}".to_vec(),
+    )
+    .await;
+    assert_eq!(res.status, StatusCode::GONE);
 }
 
-const LIFETIME: i64 = crate::modules::owner_kas::token::LIFETIME_SECONDS;
-
 #[tokio::test]
-async fn limits_per_submitter_and_route() {
+async fn limits_per_submitter() {
     let h = harness();
-    put_record(&h, 1).await;
     let m = Mint::new(ROUTE, now());
     for i in 0..MAX_PENDING_PER_SUBMITTER {
         assert_eq!(
@@ -406,130 +439,77 @@ async fn limits_per_submitter_and_route() {
 }
 
 #[tokio::test]
-async fn route_records_are_owned_and_monotonic() {
+async fn only_the_owner_sees_and_answers() {
     let h = harness();
-    assert_eq!(put_record(&h, 2).await.status, StatusCode::OK);
-    assert_eq!(put_record(&h, 2).await.status, StatusCode::CONFLICT);
-    assert_eq!(put_record(&h, 1).await.status, StatusCode::CONFLICT);
-    assert_eq!(put_record(&h, 3).await.status, StatusCode::OK);
+    let m = Mint::new(ROUTE, now());
+    let id = id_of(&submit(&h, &m, "a").await);
 
-    // Someone else's session.
-    let body = serde_json::to_vec(&bundle(ROUTE, OWNER, 4)).unwrap();
+    // Someone else's session: an empty list, and their answer is 404.
+    let list = call(
+        &h.app,
+        Method::GET,
+        &list_uri(),
+        Some(&session(SUB)),
+        vec![],
+    )
+    .await;
+    assert_eq!(list.status, StatusCode::OK);
+    assert_eq!(listed_count(&list), 0);
     let res = call(
         &h.app,
         Method::PUT,
-        &format!("/owner-kas/v1/routes/{ROUTE}"),
+        &format!("/owner-kas/v1/requests/{id}/response"),
         Some(&session(SUB)),
-        body,
+        b"{}".to_vec(),
     )
     .await;
-    assert_eq!(res.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(res.status, StatusCode::NOT_FOUND);
 
-    // A revoked passkey.
-    *h.status.0.lock().unwrap() = Err(StatusRefusal::Refused("passkey credential revoked"));
-    assert_eq!(put_record(&h, 5).await.status, StatusCode::FORBIDDEN);
-    *h.status.0.lock().unwrap() = Err(StatusRefusal::Unavailable);
-    assert_eq!(
-        put_record(&h, 5).await.status,
-        StatusCode::SERVICE_UNAVAILABLE
-    );
-
+    // An owner-KAS token is not a session.
+    let res = call(&h.app, Method::GET, &list_uri(), Some(&m.token()), vec![]).await;
+    assert_eq!(res.status, StatusCode::UNAUTHORIZED);
     // A prefixed subject is not the bare form.
     let res = call(
         &h.app,
-        Method::PUT,
-        &format!("/owner-kas/v1/routes/{ROUTE}"),
+        Method::GET,
+        &list_uri(),
         Some(&session(&format!("arkavo:{OWNER}"))),
-        serde_json::to_vec(&bundle(ROUTE, OWNER, 6)).unwrap(),
+        vec![],
     )
     .await;
     assert_eq!(res.status, StatusCode::FORBIDDEN);
-
-    // The receiver reads the record as stored.
-    let m = Mint::new(ROUTE, now());
-    let res = call(
-        &h.app,
-        Method::GET,
-        &format!("/owner-kas/v1/routes/{ROUTE}"),
-        Some(&m.token()),
-        vec![],
-    )
-    .await;
-    assert_eq!(res.status, StatusCode::OK);
-    assert_eq!(
-        serde_json::from_slice::<Bundle>(&res.body).unwrap(),
-        bundle(ROUTE, OWNER, 3)
-    );
-    // ...but not with a session token.
-    let res = call(
-        &h.app,
-        Method::GET,
-        &format!("/owner-kas/v1/routes/{ROUTE}"),
-        Some(&session(OWNER)),
-        vec![],
-    )
-    .await;
-    assert_eq!(res.status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
-async fn owners_only_on_owner_routes() {
+async fn the_route_and_push_routes_are_gone() {
     let h = harness();
-    put_record(&h, 1).await;
     for (method, uri) in [
-        (
-            Method::GET,
-            format!("/owner-kas/v1/routes/{ROUTE}/requests"),
-        ),
-        (Method::DELETE, format!("/owner-kas/v1/routes/{ROUTE}/push")),
+        (Method::GET, format!("/owner-kas/v1/routes/{ROUTE}")),
+        (Method::PUT, format!("/owner-kas/v1/routes/{ROUTE}")),
+        (Method::PUT, format!("/owner-kas/v1/routes/{ROUTE}/push")),
     ] {
-        let res = call(&h.app, method.clone(), &uri, Some(&session(SUB)), vec![]).await;
-        assert_eq!(res.status, StatusCode::FORBIDDEN, "{uri}");
-        // An owner-KAS token is not a session.
-        let m = Mint::new(ROUTE, now());
-        let res = call(&h.app, method, &uri, Some(&m.token()), vec![]).await;
-        assert_eq!(res.status, StatusCode::UNAUTHORIZED, "{uri}");
+        let res = call(&h.app, method, &uri, Some(&session(OWNER)), vec![]).await;
+        assert!(
+            res.status == StatusCode::NOT_FOUND || res.status == StatusCode::METHOD_NOT_ALLOWED,
+            "{uri}: {}",
+            res.status
+        );
     }
 }
 
 #[tokio::test]
 async fn the_apns_hint_is_generic_rate_limited_and_cleans_up() {
-    let h = harness();
-    put_record(&h, 1).await;
-    let push_uri = format!("/owner-kas/v1/routes/{ROUTE}/push");
-    for bad in [
-        json!({ "apns_token": "zz", "environment": "production" }),
-        json!({ "apns_token": APNS_TOKEN, "environment": "staging" }),
-        json!({ "apns_token": APNS_TOKEN, "environment": "development" }),
-    ] {
-        let res = call(
-            &h.app,
-            Method::PUT,
-            &push_uri,
-            Some(&session(OWNER)),
-            serde_json::to_vec(&bad).unwrap(),
-        )
-        .await;
-        assert_eq!(res.status, StatusCode::BAD_REQUEST);
-    }
-    let res = call(
-        &h.app,
-        Method::PUT,
-        &push_uri,
-        Some(&session(OWNER)),
-        serde_json::to_vec(&json!({ "apns_token": APNS_TOKEN, "environment": "production" }))
-            .unwrap(),
-    )
-    .await;
-    assert_eq!(res.status, StatusCode::NO_CONTENT);
-
+    let h = harness_with(Some(Push {
+        apns_token: APNS_TOKEN.into(),
+        environment: "production".into(),
+    }));
     *h.pusher.outcome.lock().unwrap() = Some(PushOutcome::Unregistered);
     let m = Mint::new(ROUTE, now());
     submit(&h, &m, "a").await;
     submit(&h, &m, "b").await;
     // The alert is spawned.
     for _ in 0..50 {
-        if !h.pusher.sent.lock().unwrap().is_empty() {
+        if !h.directory.deleted.lock().unwrap().is_empty() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -541,8 +521,11 @@ async fn the_apns_hint_is_generic_rate_limited_and_cleans_up() {
         sent[0],
         (APNS_TOKEN.into(), "production".into(), ROUTE.into(), m.exp)
     );
-    // Unregistered: the token is gone.
-    assert_eq!(h.routes.0.lock().unwrap()[ROUTE].push, None);
+    // Unregistered: identity is asked to delete it.
+    assert_eq!(
+        *h.directory.deleted.lock().unwrap(),
+        vec![(ROUTE.to_string(), APNS_TOKEN.to_string())]
+    );
 }
 
 #[tokio::test]

@@ -1171,26 +1171,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
     {
         Some(s) => {
-            let dynamodb = match &s.dynamodb_endpoint {
-                // DynamoDB Local: placeholder credentials, as for moderation.
-                Some(endpoint) => {
-                    info!("Owner KAS route store: DynamoDB at {endpoint}");
-                    let conf = aws_sdk_dynamodb::config::Builder::new()
-                        .behavior_version(aws_sdk_dynamodb::config::BehaviorVersion::latest())
-                        .region(aws_sdk_dynamodb::config::Region::new("us-east-1"))
-                        .endpoint_url(endpoint)
-                        .credentials_provider(aws_sdk_dynamodb::config::Credentials::new(
-                            "local",
-                            "local",
-                            None,
-                            None,
-                            "owner-kas-local",
-                        ))
-                        .build();
-                    aws_sdk_dynamodb::Client::from_conf(conf)
-                }
-                None => aws_sdk_dynamodb::Client::new(modules::aws::shared_config().await),
-            };
             let pusher: Option<Arc<dyn owner_kas::apns::Pusher>> = match &s.apns {
                 Some(a) => {
                     let key_pem = std::fs::read_to_string(&a.key_path)
@@ -1209,20 +1189,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     None
                 }
             };
-            let status: Arc<dyn owner_kas::api::CredentialStatus> = if s
-                .credential_status_url
-                .is_empty()
-            {
-                warn!("OWNER_KAS_CREDENTIAL_STATUS_URL=off: route records skip the passkey status check");
-                Arc::new(owner_kas::api::NoCredentialStatus)
-            } else {
-                Arc::new(owner_kas::api::IdentityCredentialStatus::new(
-                    s.credential_status_url.clone(),
-                ))
-            };
             info!(
-                "Owner KAS relay enabled, table={}, issuer={}",
-                s.routes_table, s.issuer
+                "Owner KAS relay enabled, issuer={}, client={}",
+                s.issuer, s.client_id
             );
             owner_kas::api::router(Arc::new(owner_kas::api::OwnerKasState {
                 receivers: owner_kas::token::OwnerKasVerifier {
@@ -1234,16 +1203,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     s.issuer.clone(),
                     s.platform_audience.clone(),
                 ),
-                routes: Arc::new(owner_kas::store::DynamoRouteStore::new(
-                    dynamodb,
-                    s.routes_table.clone(),
+                directory: Arc::new(owner_kas::identity::IdentityDirectory::new(
+                    owner_kas::identity::IdentityDirectoryConfig {
+                        relay_url: s.relay_url.clone(),
+                        push_url: s.push_url.clone(),
+                        token_url: s.token_url.clone(),
+                        client_id: s.client_id.clone(),
+                        client_secret: s.client_secret.clone(),
+                        audience: s.client_audience.clone(),
+                    },
                 )),
                 queue: Arc::new(owner_kas::store::RedisQueueStore::new(
                     server_state.redis_client.clone(),
                 )),
                 pusher,
-                status,
-                passkeys: owner_kas::record::Passkeys::for_rp(&s.passkey_rp_id),
             }))
         }
         None => owner_kas::api::unconfigured_router(),

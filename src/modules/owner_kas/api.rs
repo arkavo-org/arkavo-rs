@@ -1,13 +1,15 @@
-//! `/owner-kas/v1/*` (design §4.2). Receiver routes take only the owner-KAS
-//! bearer; owner routes take only the owner's passkey session CWT. Bodies are
-//! read after the credential verifies, never parsed beyond the Rewrap's
+//! `/owner-kas/v1/*` (design §4.2 at arkavo-ios 43bbd68). Receiver routes
+//! take only the owner-KAS bearer; owner routes take only the owner's passkey
+//! session CWT. Route records and APNs tokens live at identity
+//! (`super::identity`); the relay holds only the short-lived queue. Bodies
+//! are read after the credential verifies, never parsed beyond the Rewrap's
 //! top-level `signed_request_token`, and never logged.
 
 use super::apns::{PushOutcome, Pusher};
-use super::record::{self, Bundle, Passkeys, RecordError, MAX_BUNDLE_BYTES};
+use super::identity::{LookupError, RouteDirectory};
 use super::store::{
-    Enqueued, Limits, NewRequest, Push, QueueStore, RespondError, RouteError, RouteStore,
-    StoredRequest, RETENTION_AFTER_DEADLINE,
+    Enqueued, Limits, NewRequest, Push, QueueStore, RespondError, StoredRequest,
+    RETENTION_AFTER_DEADLINE,
 };
 use super::token::{
     is_bare_subject, is_route_id, new_ulid, verify_signed_request, OwnerKasToken, OwnerKasVerifier,
@@ -15,7 +17,6 @@ use super::token::{
 };
 use crate::modules::license::person_token::PersonTokenVerifier;
 use crate::modules::license::LicenseError;
-use async_trait::async_trait;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -29,107 +30,21 @@ use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use std::time::Duration;
 
 pub const MAX_REWRAP_BYTES: usize = 64 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 16 * 1024;
-const MAX_PUSH_BODY_BYTES: usize = 1024;
 pub const MAX_PENDING_PER_ROUTE: u64 = 64;
 pub const MAX_PENDING_PER_SUBMITTER: u64 = 8;
 pub const RETRY_AFTER_SECS: u64 = 5;
 /// At most one APNs alert per route in this window.
 pub const PUSH_INTERVAL_SECS: u64 = 30;
 
-/// Asks identity whether a passkey credential is still the subject's.
-#[async_trait]
-pub trait CredentialStatus: Send + Sync {
-    async fn check(&self, credential_id: &[u8], sub: &str) -> Result<(), StatusRefusal>;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StatusRefusal {
-    /// Revoked, unknown, or another subject's: 403.
-    Refused(&'static str),
-    /// Identity did not answer: 503.
-    Unavailable,
-}
-
-/// `GET <url>` with `{credentialId}` filled in: 200 `{sub, revoked}` for the
-/// subject and not revoked passes; 404 is unknown (refused); anything else
-/// is unavailable.
-pub struct IdentityCredentialStatus {
-    url_template: String,
-    http: reqwest::Client,
-}
-
-impl IdentityCredentialStatus {
-    pub fn new(url_template: String) -> Self {
-        Self {
-            url_template,
-            http: crate::modules::http_client::builder()
-                .timeout(Duration::from_secs(10))
-                .build()
-                .expect("reqwest client"),
-        }
-    }
-}
-
-#[async_trait]
-impl CredentialStatus for IdentityCredentialStatus {
-    async fn check(&self, credential_id: &[u8], sub: &str) -> Result<(), StatusRefusal> {
-        #[derive(Deserialize)]
-        struct Status {
-            sub: String,
-            revoked: bool,
-        }
-        let url = self
-            .url_template
-            .replace("{credentialId}", &URL_SAFE_NO_PAD.encode(credential_id));
-        let resp = self.http.get(&url).send().await.map_err(|e| {
-            warn!("Passkey credential status unreachable: {}", e.without_url());
-            StatusRefusal::Unavailable
-        })?;
-        match resp.status() {
-            reqwest::StatusCode::OK => {}
-            reqwest::StatusCode::NOT_FOUND => {
-                return Err(StatusRefusal::Refused("passkey credential unknown"))
-            }
-            other => {
-                warn!("Passkey credential status failed: {other}");
-                return Err(StatusRefusal::Unavailable);
-            }
-        }
-        let status: Status = resp.json().await.map_err(|_| StatusRefusal::Unavailable)?;
-        if status.revoked {
-            return Err(StatusRefusal::Refused("passkey credential revoked"));
-        }
-        if status.sub != sub {
-            return Err(StatusRefusal::Refused(
-                "passkey credential belongs to another subject",
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// No status check (`OWNER_KAS_CREDENTIAL_STATUS_URL=off`, development only).
-pub struct NoCredentialStatus;
-
-#[async_trait]
-impl CredentialStatus for NoCredentialStatus {
-    async fn check(&self, _: &[u8], _: &str) -> Result<(), StatusRefusal> {
-        Ok(())
-    }
-}
-
 pub struct OwnerKasState {
     pub receivers: OwnerKasVerifier,
     pub owners: PersonTokenVerifier,
-    pub routes: Arc<dyn RouteStore>,
+    pub directory: Arc<dyn RouteDirectory>,
     pub queue: Arc<dyn QueueStore>,
     pub pusher: Option<Arc<dyn Pusher>>,
-    pub status: Arc<dyn CredentialStatus>,
-    pub passkeys: Passkeys,
 }
 
 type S = State<Arc<OwnerKasState>>;
@@ -142,24 +57,12 @@ pub fn router(state: Arc<OwnerKasState>) -> Router {
         )
         .route("/owner-kas/v1/requests/:request_id", get(poll))
         .route(
-            "/owner-kas/v1/routes/:route_id",
-            get(get_route)
-                .put(put_route)
-                .layer(DefaultBodyLimit::max(MAX_BUNDLE_BYTES)),
-        )
-        .route(
             "/owner-kas/v1/routes/:route_id/requests",
             get(list_requests),
         )
         .route(
             "/owner-kas/v1/requests/:request_id/response",
             put(put_response).layer(DefaultBodyLimit::max(MAX_RESPONSE_BYTES)),
-        )
-        .route(
-            "/owner-kas/v1/routes/:route_id/push",
-            put(put_push)
-                .delete(delete_push)
-                .layer(DefaultBodyLimit::max(MAX_PUSH_BODY_BYTES)),
         )
         .layer(axum::middleware::map_response(no_store))
         .with_state(state)
@@ -247,18 +150,6 @@ fn bad_route(route_id: &str) -> Option<Response> {
     (!is_route_id(route_id)).then(|| err(StatusCode::BAD_REQUEST, "invalid route_id"))
 }
 
-fn route_error(e: RouteError) -> Response {
-    match e {
-        RouteError::NotFound => err(StatusCode::NOT_FOUND, "route not found"),
-        RouteError::OtherOwner => err(StatusCode::FORBIDDEN, "route belongs to another owner"),
-        RouteError::Stale => err(StatusCode::CONFLICT, "seq is not above the stored record's"),
-        RouteError::Unavailable(e) => {
-            warn!("Owner-KAS route store unavailable: {e}");
-            err(StatusCode::SERVICE_UNAVAILABLE, "route store unavailable")
-        }
-    }
-}
-
 fn queue_unavailable(e: String) -> Response {
     warn!("Owner-KAS queue unavailable: {e}");
     err(StatusCode::SERVICE_UNAVAILABLE, "queue unavailable")
@@ -300,10 +191,23 @@ async fn rewrap(
     if !verify_signed_request(&body, &t, now) {
         return err(StatusCode::UNAUTHORIZED, "invalid signed request token");
     }
-    let route = match state.routes.get(&route_id).await {
-        Ok(Some(r)) => r,
-        Ok(None) => return err(StatusCode::NOT_FOUND, "route not found"),
-        Err(e) => return route_error(e),
+    // The route's owner and push token, from identity. Unknown or retired
+    // there: 404. Identity unreachable with nothing cached: 503 and nothing
+    // queued, since a request without its owner could never be listed.
+    let route = match state.directory.route(&route_id).await {
+        Ok(r) => r,
+        Err(LookupError::Unknown) => return err(StatusCode::NOT_FOUND, "route not found"),
+        Err(LookupError::Retired) => {
+            // Sharing is off or the owner is gone: nothing queued for the
+            // route can be answered.
+            if let Err(e) = state.queue.drop_route(&route_id).await {
+                warn!("Owner-KAS retired route's queue not dropped: {e}");
+            }
+            return err(StatusCode::NOT_FOUND, "route not found");
+        }
+        Err(LookupError::Unavailable) => {
+            return retry_after(err(StatusCode::SERVICE_UNAVAILABLE, "owner unavailable"))
+        }
     };
     let authorization = headers
         .get(header::AUTHORIZATION)
@@ -316,6 +220,7 @@ async fn rewrap(
         .enqueue(
             NewRequest {
                 route_id: &route_id,
+                owner_sub: &route.owner_sub,
                 sub: &t.sub,
                 body_sha256_hex: &hash,
                 deadline: t.exp,
@@ -368,13 +273,10 @@ async fn alert(
         .alert(&push.apns_token, &push.environment, &route_id, deadline)
         .await;
     if outcome == PushOutcome::Unregistered {
-        if let Err(e) = state
-            .routes
-            .clear_push_token(&route_id, &push.apns_token)
-            .await
-        {
-            warn!("Owner-KAS unregistered APNs token not removed: {e:?}");
-        }
+        state
+            .directory
+            .delete_push(&route_id, &push.apns_token)
+            .await;
     }
 }
 
@@ -411,104 +313,6 @@ async fn poll(State(state): S, Path(request_id): Path<String>, headers: HeaderMa
     pending(&r.request_id, r.deadline)
 }
 
-/// `GET /owner-kas/v1/routes/{route_id}`: the record as stored.
-async fn get_route(State(state): S, Path(route_id): Path<String>, headers: HeaderMap) -> Response {
-    if let Some(r) = bad_route(&route_id) {
-        return r;
-    }
-    if let Err(r) = receiver(&state, &headers, Some(&route_id), 0).await {
-        return r;
-    }
-    match state.routes.get(&route_id).await {
-        Ok(Some(r)) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "application/json")],
-            r.bundle,
-        )
-            .into_response(),
-        Ok(None) => err(StatusCode::NOT_FOUND, "route not found"),
-        Err(e) => route_error(e),
-    }
-}
-
-/// `PUT /owner-kas/v1/routes/{route_id}`: admit a passkey-signed record.
-async fn put_route(
-    State(state): S,
-    Path(route_id): Path<String>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    if let Some(r) = bad_route(&route_id) {
-        return r;
-    }
-    let sub = match owner(&state, &headers).await {
-        Ok(s) => s,
-        Err(r) => return r,
-    };
-    let Ok(text) = std::str::from_utf8(&body) else {
-        return err(StatusCode::BAD_REQUEST, "body is not UTF-8");
-    };
-    let Ok(bundle) = serde_json::from_str::<Bundle>(text) else {
-        return err(StatusCode::BAD_REQUEST, "body is not a route record bundle");
-    };
-    let verified = match record::verify_bundle(
-        &bundle,
-        &route_id,
-        &sub,
-        &state.receivers.keys,
-        &state.receivers.issuer,
-        &state.passkeys,
-        now(),
-    )
-    .await
-    {
-        Ok(v) => v,
-        Err(RecordError::KeySet) => {
-            return err(StatusCode::SERVICE_UNAVAILABLE, "identity keys unavailable")
-        }
-        Err(RecordError::Invalid(why)) => {
-            return err(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                &format!("invalid route record: {why}"),
-            )
-        }
-    };
-    match state.status.check(&verified.credential_id, &sub).await {
-        Ok(()) => {}
-        Err(StatusRefusal::Refused(why)) => return err(StatusCode::FORBIDDEN, why),
-        Err(StatusRefusal::Unavailable) => {
-            return err(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "credential status unavailable",
-            )
-        }
-    }
-    match state
-        .routes
-        .put_record(&route_id, &sub, verified.record.seq, text)
-        .await
-    {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(json!({ "route_id": route_id, "seq": verified.record.seq })),
-        )
-            .into_response(),
-        Err(e) => route_error(e),
-    }
-}
-
-/// The route, if `sub` owns it.
-// The refusal is the handler's whole response; it is built once per request.
-#[allow(clippy::result_large_err)]
-async fn owned_route(state: &OwnerKasState, route_id: &str, sub: &str) -> Result<(), Response> {
-    match state.routes.get(route_id).await {
-        Ok(Some(r)) if r.owner_sub == sub => Ok(()),
-        Ok(Some(_)) => Err(route_error(RouteError::OtherOwner)),
-        Ok(None) => Err(route_error(RouteError::NotFound)),
-        Err(e) => Err(route_error(e)),
-    }
-}
-
 #[derive(Deserialize)]
 struct After {
     after: Option<String>,
@@ -523,7 +327,8 @@ fn listed(r: &StoredRequest) -> serde_json::Value {
     })
 }
 
-/// `GET /owner-kas/v1/routes/{route_id}/requests?after={request_id}`
+/// `GET /owner-kas/v1/routes/{route_id}/requests?after={request_id}`: the
+/// requests whose recorded owner is the session's; anyone else sees none.
 async fn list_requests(
     State(state): S,
     Path(route_id): Path<String>,
@@ -537,9 +342,6 @@ async fn list_requests(
         Ok(s) => s,
         Err(r) => return r,
     };
-    if let Err(r) = owned_route(&state, &route_id, &sub).await {
-        return r;
-    }
     let after = q.after.filter(|a| is_route_id(a));
     match state
         .queue
@@ -551,11 +353,14 @@ async fn list_requests(
         )
         .await
     {
-        Ok(rs) => Json(json!({
+        Ok(rs) => {
+            let rs: Vec<_> = rs.into_iter().filter(|r| r.owner_sub == sub).collect();
+            Json(json!({
             "requests": rs.iter().map(listed).collect::<Vec<_>>(),
             "cursor": rs.last().map(|r| r.request_id.clone()),
-        }))
-        .into_response(),
+            }))
+            .into_response()
+        }
         Err(e) => queue_unavailable(e),
     }
 }
@@ -581,10 +386,8 @@ async fn put_response(
         Err(e) => return queue_unavailable(e),
     };
     // Someone else's request is not revealed.
-    match state.routes.get(&r.route_id).await {
-        Ok(Some(route)) if route.owner_sub == sub => {}
-        Ok(_) => return not_found(),
-        Err(e) => return route_error(e),
+    if r.owner_sub != sub {
+        return not_found();
     }
     if body.is_empty() {
         return err(StatusCode::BAD_REQUEST, "empty response");
@@ -597,74 +400,6 @@ async fn put_response(
             (StatusCode::GONE, Json(json!({ "status": "expired" }))).into_response()
         }
         Err(RespondError::Unavailable(e)) => queue_unavailable(e),
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PushBody {
-    apns_token: String,
-    environment: String,
-}
-
-fn valid_apns_token(t: &str) -> bool {
-    (64..=200).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-/// `PUT /owner-kas/v1/routes/{route_id}/push`
-async fn put_push(
-    State(state): S,
-    Path(route_id): Path<String>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    if let Some(r) = bad_route(&route_id) {
-        return r;
-    }
-    let sub = match owner(&state, &headers).await {
-        Ok(s) => s,
-        Err(r) => return r,
-    };
-    let Ok(p) = serde_json::from_slice::<PushBody>(&body) else {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "body is not {apns_token, environment}",
-        );
-    };
-    if !valid_apns_token(&p.apns_token) {
-        return err(StatusCode::BAD_REQUEST, "invalid apns_token");
-    }
-    // The APNs key is production-only (arkavo-ios ADR-0074 decision 7):
-    // Xcode development tokens can't be reached.
-    if p.environment != "production" {
-        return err(StatusCode::BAD_REQUEST, "environment must be production");
-    }
-    let push = Push {
-        apns_token: p.apns_token.to_ascii_lowercase(),
-        environment: p.environment,
-    };
-    match state.routes.set_push(&route_id, &sub, &push).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => route_error(e),
-    }
-}
-
-/// `DELETE /owner-kas/v1/routes/{route_id}/push`
-async fn delete_push(
-    State(state): S,
-    Path(route_id): Path<String>,
-    headers: HeaderMap,
-) -> Response {
-    if let Some(r) = bad_route(&route_id) {
-        return r;
-    }
-    let sub = match owner(&state, &headers).await {
-        Ok(s) => s,
-        Err(r) => return r,
-    };
-    match state.routes.clear_push(&route_id, &sub).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => route_error(e),
     }
 }
 
