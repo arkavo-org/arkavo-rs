@@ -20,6 +20,7 @@ pub mod license;
 pub mod media_api;
 pub mod moderation;
 pub mod ntdf_token;
+pub mod owner_kas;
 pub mod platform_proxy;
 pub mod rtmp;
 pub mod secure_keys;

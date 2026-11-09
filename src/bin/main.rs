@@ -14,7 +14,8 @@ mod modules;
 #[cfg(feature = "c2pa_signing")]
 use modules::c2pa_signing;
 use modules::{
-    authzen, cbor_protocol, http_rewrap, media_api, moderation, ntdf_token, platform_proxy,
+    authzen, cbor_protocol, http_rewrap, media_api, moderation, ntdf_token, owner_kas,
+    platform_proxy,
 };
 use opentdf_kas::{
     compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek, NanoTdfVersion,
@@ -1165,6 +1166,62 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         None => moderation::api::unconfigured_router(),
     };
 
+    // Owner KAS relay (arkavo-rs#163) — off unless OWNER_KAS=on.
+    let owner_kas_router = match owner_kas::settings_from_env()
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
+    {
+        Some(s) => {
+            let pusher: Option<Arc<dyn owner_kas::apns::Pusher>> = match &s.apns {
+                Some(a) => {
+                    let key_pem = std::fs::read_to_string(&a.key_path)
+                        .map_err(|e| format!("APNS_KEY_PATH unreadable: {e}"))?;
+                    let pusher = owner_kas::apns::ApnsPusher::new(owner_kas::apns::ApnsConfig {
+                        key_pem,
+                        key_id: a.key_id.clone(),
+                        team_id: a.team_id.clone(),
+                        topic: a.topic.clone(),
+                    })?;
+                    info!("Owner KAS APNs alerts enabled, topic={}", a.topic);
+                    Some(Arc::new(pusher))
+                }
+                None => {
+                    warn!("APNS_KEY_PATH is unset: owner-KAS requests queue without an alert");
+                    None
+                }
+            };
+            info!(
+                "Owner KAS relay enabled, issuer={}, client={}",
+                s.issuer, s.client_id
+            );
+            owner_kas::api::router(Arc::new(owner_kas::api::OwnerKasState {
+                receivers: owner_kas::token::OwnerKasVerifier {
+                    issuer: s.issuer.clone(),
+                    keys: authzen::cose_keys::CoseKeyCache::new(s.cose_keys_url.clone()),
+                },
+                owners: modules::license::person_token::PersonTokenVerifier::new(
+                    authzen::cose_keys::CoseKeyCache::new(s.cose_keys_url.clone()),
+                    s.issuer.clone(),
+                    s.platform_audience.clone(),
+                ),
+                directory: Arc::new(owner_kas::identity::IdentityDirectory::new(
+                    owner_kas::identity::IdentityDirectoryConfig {
+                        relay_url: s.relay_url.clone(),
+                        push_url: s.push_url.clone(),
+                        token_url: s.token_url.clone(),
+                        client_id: s.client_id.clone(),
+                        client_secret: s.client_secret.clone(),
+                        audience: s.client_audience.clone(),
+                    },
+                )),
+                queue: Arc::new(owner_kas::store::RedisQueueStore::new(
+                    server_state.redis_client.clone(),
+                )),
+                pusher,
+            }))
+        }
+        None => owner_kas::api::unconfigured_router(),
+    };
+
     // Media DRM router
     let media_router = Router::new()
         .route(
@@ -1227,6 +1284,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .merge(authz_router)
         .merge(authzen_router)
         .merge(moderation_router)
+        .merge(owner_kas_router)
         .merge(media_router)
         .merge(c2pa_router)
         .layer(
