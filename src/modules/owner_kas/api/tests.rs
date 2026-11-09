@@ -392,25 +392,23 @@ async fn polls_reveal_nothing_to_others() {
 #[tokio::test]
 async fn a_late_poll_is_gone_not_unauthorized() {
     let h = harness();
-    // A token 30 s past its exp is still inside the skew: it queues a request
-    // whose deadline has passed.
-    let mut m = Mint::new(ROUTE, now() - LIFETIME - 30);
-    m.exp = now() - 30;
-    let id = id_of(&submit(&h, &m, "a").await);
+    // A token with 1 s left queues; then its deadline passes.
+    let mut m = Mint::new(ROUTE, now() - LIFETIME + 1);
+    m.exp = now() + 1;
+    let res = submit(&h, &m, "a").await;
+    assert_eq!(res.status, StatusCode::ACCEPTED);
+    let id = id_of(&res);
+    tokio::time::sleep(Duration::from_millis(2100)).await;
     let uri = format!("/owner-kas/v1/requests/{id}");
     let res = call(&h.app, Method::GET, &uri, Some(&m.token()), vec![]).await;
     assert_eq!(res.status, StatusCode::GONE);
     assert_eq!(res.json()["status"], "expired");
-    // Past the skew, the same bearer still reads the 410 within the grace...
+    // Past the skew, the same route and submitter still read the 410 within
+    // the grace...
     let mut late = Mint::new(ROUTE, now() - LIFETIME - 300);
     late.exp = now() - 300;
     let res = call(&h.app, Method::GET, &uri, Some(&late.token()), vec![]).await;
     assert_eq!(res.status, StatusCode::GONE);
-    // ...but cannot queue anything.
-    assert_eq!(
-        submit(&h, &late, "b").await.status,
-        StatusCode::UNAUTHORIZED
-    );
     // The owner's late answer is refused as expired.
     let res = call(
         &h.app,
@@ -421,6 +419,38 @@ async fn a_late_poll_is_gone_not_unauthorized() {
     )
     .await;
     assert_eq!(res.status, StatusCode::GONE);
+}
+
+#[tokio::test]
+async fn a_token_past_its_exp_queues_nothing() {
+    // Inside the 60 s skew the bearer still verifies, but its exp is the
+    // deadline: nothing is queued and no alert is spent (Gitar, PR #164).
+    let h = harness_with(Some(Push {
+        apns_token: APNS_TOKEN.into(),
+        environment: "production".into(),
+    }));
+    let mut m = Mint::new(ROUTE, now() - LIFETIME - 30);
+    m.exp = now() - 30;
+    let res = submit(&h, &m, "a").await;
+    assert_eq!(res.status, StatusCode::UNAUTHORIZED);
+    let list = call(
+        &h.app,
+        Method::GET,
+        &list_uri(),
+        Some(&session(OWNER)),
+        vec![],
+    )
+    .await;
+    assert_eq!(listed_count(&list), 0);
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(h.pusher.sent.lock().unwrap().is_empty());
+    // Way past the skew: refused as before.
+    let mut late = Mint::new(ROUTE, now() - LIFETIME - 300);
+    late.exp = now() - 300;
+    assert_eq!(
+        submit(&h, &late, "b").await.status,
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[tokio::test]

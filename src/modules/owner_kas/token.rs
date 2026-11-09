@@ -264,7 +264,7 @@ pub fn verify_es256_jws(token: &str, key: &p256::ecdsa::VerifyingKey) -> Option<
 
 /// The Rewrap body's top-level `signed_request_token`, verified as an ES256
 /// JWT under the bearer's `cnf` key, with an `exp` no later than the
-/// bearer's and not past. Nothing else in the body is read.
+/// bearer's and still ahead (no skew: it bounds the request's deadline). Nothing else in the body is read.
 pub fn verify_signed_request(body: &[u8], bearer: &OwnerKasToken, now: i64) -> bool {
     #[derive(serde::Deserialize)]
     struct Envelope {
@@ -284,7 +284,7 @@ pub fn verify_signed_request(body: &[u8], bearer: &OwnerKasToken, now: i64) -> b
         return false;
     };
     match claims.get("exp").and_then(serde_json::Value::as_i64) {
-        Some(exp) => exp <= bearer.exp && exp > now - SKEW_SECS,
+        Some(exp) => exp <= bearer.exp && exp > now,
         None => false,
     }
 }
@@ -530,6 +530,8 @@ mod tests {
             &t,
             NOW
         ));
+        // A signed request whose exp is now or past: no skew.
+        assert!(!verify_signed_request(&m.rewrap_body(NOW, "a"), &t, NOW));
         let mut other = Mint::new(ROUTE, NOW);
         other.request_key = request_key(4);
         assert!(!verify_signed_request(

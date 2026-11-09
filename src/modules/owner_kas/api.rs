@@ -188,6 +188,12 @@ async fn rewrap(
         Err(r) => return r,
     };
     let now = now();
+    // The skew lets a bearer verify up to 60 s past its exp, but its exp is
+    // the deadline: a request queued past it could never be answered, and
+    // would take the route's alert slot.
+    if t.exp <= now {
+        return err(StatusCode::UNAUTHORIZED, "owner-KAS token expired");
+    }
     if !verify_signed_request(&body, &t, now) {
         return err(StatusCode::UNAUTHORIZED, "invalid signed request token");
     }
