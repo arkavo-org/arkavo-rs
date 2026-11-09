@@ -66,6 +66,32 @@ pub struct FairPlayKeyServer {
     sdk_version: String,
 }
 
+/// Point the FairPlay SDK at `credentials_path` through the environment, the
+/// only way it takes them: `FAIRPLAY_CREDENTIALS_PATH`, and `FPS_CERT_PATH`
+/// (the certificates JSON) unless it is already set. Without `FPS_CERT_PATH`
+/// the SDK falls back to a path relative to the working directory.
+///
+/// # Safety
+///
+/// The process must have exactly one thread, as for [`std::env::set_var`]:
+/// call it first thing in `main`, before a runtime, logger or any other
+/// thread exists. A concurrent `getenv` (libc's resolver, for one) racing
+/// this write is undefined behaviour.
+pub unsafe fn prepare_sdk_env(credentials_path: &std::path::Path) {
+    // SAFETY: the caller guarantees a single-threaded process.
+    unsafe { std::env::set_var("FAIRPLAY_CREDENTIALS_PATH", credentials_path) };
+    if std::env::var_os("FPS_CERT_PATH").is_none() {
+        let certs = ["certificates.json", "test_certificates.json"]
+            .iter()
+            .map(|name| credentials_path.join(name))
+            .find(|p| p.exists());
+        if let Some(certs) = certs {
+            // SAFETY: as above.
+            unsafe { std::env::set_var("FPS_CERT_PATH", certs) };
+        }
+    }
+}
+
 impl FairPlayKeyServer {
     /// Initialize FairPlay Key Server with credentials directory
     ///
@@ -87,19 +113,8 @@ impl FairPlayKeyServer {
     /// let server = FairPlayKeyServer::new(path).unwrap();
     /// ```
     pub fn new(credentials_path: PathBuf) -> Result<Self, FairPlayError> {
-        // Set environment variable for fpssdk to find certificates
-        std::env::set_var("FAIRPLAY_CREDENTIALS_PATH", &credentials_path);
-        // The SDK itself only reads FPS_CERT_PATH (the certificates JSON file)
-        // and otherwise falls back to a path relative to the working directory.
-        if std::env::var_os("FPS_CERT_PATH").is_none() {
-            let certs = ["certificates.json", "test_certificates.json"]
-                .iter()
-                .map(|name| credentials_path.join(name))
-                .find(|p| p.exists());
-            if let Some(certs) = certs {
-                std::env::set_var("FPS_CERT_PATH", certs);
-            }
-        }
+        // The environment was prepared by `prepare_sdk_env` before any thread
+        // started; this only reports what the SDK will use.
         match std::env::var("FPS_CERT_PATH") {
             Ok(p) => log_at!(Info, "FairPlay certificates: {p}"),
             Err(_) => {

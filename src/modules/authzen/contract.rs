@@ -4,13 +4,13 @@ use crate::modules::authzen::cose_keys::CoseKeyCache;
 use crate::modules::authzen::cwt_verify::test_support::{keypair, mint, mint_map};
 use crate::modules::authzen::facade::{self, FacadeState};
 use crate::modules::platform_proxy::{self, PlatformProxyState};
+use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::post;
-use axum::Router;
 use ciborium::value::Value as Cbor;
 use p256::ecdsa::SigningKey;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -1290,10 +1290,12 @@ async fn mixed_actions_use_get_decision_bulk() {
 
     let received = upstream.received_requests().await.unwrap();
     assert_eq!(received.len(), 1);
-    assert!(received[0]
-        .url
-        .path()
-        .ends_with("/authorization.v2.AuthorizationService/GetDecisionBulk"));
+    assert!(
+        received[0]
+            .url
+            .path()
+            .ends_with("/authorization.v2.AuthorizationService/GetDecisionBulk")
+    );
     assert_bearer(&received[0], &token);
     let got: Value = serde_json::from_slice(&received[0].body).unwrap();
     let expected: Value = serde_json::from_str(include_str!("fixtures/bulk_request.json")).unwrap();

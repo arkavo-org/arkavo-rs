@@ -9,8 +9,8 @@
 
 use bytes::Bytes;
 use opentdf_crypto::tdf::{NanoTdfCollection, NanoTdfCollectionDecryptor};
-use p256::pkcs8::EncodePrivateKey;
 use p256::SecretKey;
+use p256::pkcs8::EncodePrivateKey;
 use rml_amf0::Amf0Value;
 use rml_rtmp::chunk_io::Packet;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
@@ -18,7 +18,7 @@ use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult, StreamMetadata,
 };
 use rml_rtmp::time::RtmpTimestamp;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -27,7 +27,7 @@ use tokio::sync::broadcast;
 use super::encryption::{
     create_decryptor_kas, decrypt_item, encrypt_item, rotation_threshold_reached,
 };
-use super::manifest::{delete_cached_manifest, get_cached_manifest, NanoTdfManifest};
+use super::manifest::{NanoTdfManifest, delete_cached_manifest, get_cached_manifest};
 use super::registry::StreamRegistry;
 use super::stream_events::StreamEventBroadcaster;
 
@@ -275,114 +275,120 @@ impl RtmpSession {
         // Main session loop - handles both socket reads and frame relay for subscribers
         loop {
             // Check if we're a subscriber with an active receiver
-            if self.role == SessionRole::Subscriber {
-                if let Some(ref mut receiver) = self.frame_receiver {
-                    // Send cached metadata and sequence headers to late joiner (once)
-                    if !self.headers_sent {
-                        if let Some(stream_id) = self.subscriber_stream_id {
-                            // Send metadata first (onMetaData) - required by most players
-                            // The metadata now includes custom_fields (like ntdf_header) automatically
-                            if let Some(ref metadata) = self.cached_metadata {
-                                // If we have a cached ntdf_header, add it to the metadata
-                                let mut meta_with_ntdf = metadata.clone();
-                                if let Some(ref ntdf_header) = self.cached_ntdf_header {
-                                    meta_with_ntdf
-                                        .custom_fields
-                                        .insert("ntdf_header".to_string(), ntdf_header.clone());
-                                    nanotdf::info!(
-                                        "Sending cached metadata with ntdf_header to late joiner ({} chars)",
-                                        ntdf_header.len()
-                                    );
-                                } else {
-                                    nanotdf::info!("Sending cached metadata to late joiner");
-                                }
-                                let packet = session
-                                    .send_metadata(stream_id, &meta_with_ntdf)
-                                    .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
-                                socket.write_all(&packet.bytes).await?;
+            if self.role == SessionRole::Subscriber
+                && let Some(ref mut receiver) = self.frame_receiver
+            {
+                // Send cached metadata and sequence headers to late joiner (once)
+                if !self.headers_sent {
+                    if let Some(stream_id) = self.subscriber_stream_id {
+                        // Send metadata first (onMetaData) - required by most players
+                        // The metadata now includes custom_fields (like ntdf_header) automatically
+                        if let Some(ref metadata) = self.cached_metadata {
+                            // If we have a cached ntdf_header, add it to the metadata
+                            let mut meta_with_ntdf = metadata.clone();
+                            if let Some(ref ntdf_header) = self.cached_ntdf_header {
+                                meta_with_ntdf
+                                    .custom_fields
+                                    .insert("ntdf_header".to_string(), ntdf_header.clone());
+                                nanotdf::info!(
+                                    "Sending cached metadata with ntdf_header to late joiner ({} chars)",
+                                    ntdf_header.len()
+                                );
+                            } else {
+                                nanotdf::info!("Sending cached metadata to late joiner");
                             }
-                            // Send video sequence header
-                            if let Some(ref video_header) = self.cached_video_header {
-                                nanotdf::info!("Sending cached video sequence header to late joiner ({} bytes)", video_header.len());
-                                let timestamp = RtmpTimestamp::new(0);
-                                let data = Bytes::from(video_header.clone());
-                                let packet = session
-                                    .send_video_data(stream_id, data, timestamp, false)
+                            let packet = session
+                                .send_metadata(stream_id, &meta_with_ntdf)
+                                .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
+                            socket.write_all(&packet.bytes).await?;
+                        }
+                        // Send video sequence header
+                        if let Some(ref video_header) = self.cached_video_header {
+                            nanotdf::info!(
+                                "Sending cached video sequence header to late joiner ({} bytes)",
+                                video_header.len()
+                            );
+                            let timestamp = RtmpTimestamp::new(0);
+                            let data = Bytes::from(video_header.clone());
+                            let packet = session
+                                .send_video_data(stream_id, data, timestamp, false)
+                                .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
+                            socket.write_all(&packet.bytes).await?;
+                        }
+                        // Send audio sequence header
+                        if let Some(ref audio_header) = self.cached_audio_header {
+                            nanotdf::info!(
+                                "Sending cached audio sequence header to late joiner ({} bytes)",
+                                audio_header.len()
+                            );
+                            let timestamp = RtmpTimestamp::new(0);
+                            let data = Bytes::from(audio_header.clone());
+                            let packet = session
+                                .send_audio_data(stream_id, data, timestamp, false)
+                                .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
+                            socket.write_all(&packet.bytes).await?;
+                        }
+                    }
+                    self.headers_sent = true;
+                }
+
+                // Use select to handle both socket reads and frame reception
+                tokio::select! {
+                    // Handle incoming socket data
+                    read_result = socket.read(&mut buf) => {
+                        let n = read_result?;
+                        if n == 0 {
+                            nanotdf::info!("RTMP connection closed: {}", peer_addr);
+                            break;
+                        }
+
+                        let results = Self::safe_handle_input(&mut session, &buf[..n])?;
+
+                        for result in results {
+                            if let Some(request_id) = self.process_result(&mut socket, &result).await? {
+                                let accept_results = session
+                                    .accept_request(request_id)
                                     .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
-                                socket.write_all(&packet.bytes).await?;
-                            }
-                            // Send audio sequence header
-                            if let Some(ref audio_header) = self.cached_audio_header {
-                                nanotdf::info!("Sending cached audio sequence header to late joiner ({} bytes)", audio_header.len());
-                                let timestamp = RtmpTimestamp::new(0);
-                                let data = Bytes::from(audio_header.clone());
-                                let packet = session
-                                    .send_audio_data(stream_id, data, timestamp, false)
-                                    .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
-                                socket.write_all(&packet.bytes).await?;
+                                Self::send_responses(&mut socket, accept_results).await?;
+                                nanotdf::info!("Request {} accepted", request_id);
                             }
                         }
-                        self.headers_sent = true;
                     }
 
-                    // Use select to handle both socket reads and frame reception
-                    tokio::select! {
-                        // Handle incoming socket data
-                        read_result = socket.read(&mut buf) => {
-                            let n = read_result?;
-                            if n == 0 {
-                                nanotdf::info!("RTMP connection closed: {}", peer_addr);
+                    // Handle frames from publisher
+                    frame_result = receiver.recv() => {
+                        match frame_result {
+                            Ok(frame) => {
+                                // Get stream ID for sending
+                                if let Some(stream_id) = self.subscriber_stream_id {
+                                    let timestamp = RtmpTimestamp::new(frame.timestamp);
+                                    let data = Bytes::from(frame.data);
+
+                                    // Wrap send calls with panic catching (rml_rtmp bug workaround)
+                                    let packet = match frame.frame_type {
+                                        FrameType::Video => {
+                                            Self::safe_send_video(&mut session, stream_id, data, timestamp)?
+                                        }
+                                        FrameType::Audio => {
+                                            Self::safe_send_audio(&mut session, stream_id, data, timestamp)?
+                                        }
+                                    };
+
+                                    // Send the RTMP packet to subscriber
+                                    socket.write_all(&packet.bytes).await?;
+                                }
+                            }
+                            Err(broadcast::error::RecvError::Lagged(n)) => {
+                                nanotdf::warn!("Subscriber lagged, dropped {} frames", n);
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                nanotdf::info!("Publisher stream ended");
                                 break;
                             }
-
-                            let results = Self::safe_handle_input(&mut session, &buf[..n])?;
-
-                            for result in results {
-                                if let Some(request_id) = self.process_result(&mut socket, &result).await? {
-                                    let accept_results = session
-                                        .accept_request(request_id)
-                                        .map_err(|e| SessionError::RtmpError(format!("{:?}", e)))?;
-                                    Self::send_responses(&mut socket, accept_results).await?;
-                                    nanotdf::info!("Request {} accepted", request_id);
-                                }
-                            }
-                        }
-
-                        // Handle frames from publisher
-                        frame_result = receiver.recv() => {
-                            match frame_result {
-                                Ok(frame) => {
-                                    // Get stream ID for sending
-                                    if let Some(stream_id) = self.subscriber_stream_id {
-                                        let timestamp = RtmpTimestamp::new(frame.timestamp);
-                                        let data = Bytes::from(frame.data);
-
-                                        // Wrap send calls with panic catching (rml_rtmp bug workaround)
-                                        let packet = match frame.frame_type {
-                                            FrameType::Video => {
-                                                Self::safe_send_video(&mut session, stream_id, data, timestamp)?
-                                            }
-                                            FrameType::Audio => {
-                                                Self::safe_send_audio(&mut session, stream_id, data, timestamp)?
-                                            }
-                                        };
-
-                                        // Send the RTMP packet to subscriber
-                                        socket.write_all(&packet.bytes).await?;
-                                    }
-                                }
-                                Err(broadcast::error::RecvError::Lagged(n)) => {
-                                    nanotdf::warn!("Subscriber lagged, dropped {} frames", n);
-                                }
-                                Err(broadcast::error::RecvError::Closed) => {
-                                    nanotdf::info!("Publisher stream ended");
-                                    break;
-                                }
-                            }
                         }
                     }
-                    continue;
                 }
+                continue;
             }
 
             // For publishers and subscribers without active stream - just read socket
@@ -422,20 +428,20 @@ impl RtmpSession {
         }
 
         // Cleanup on disconnect
-        if self.role == SessionRole::Publisher {
-            if let Some(ref stream_key) = self.stream_key {
-                // Unregister from stream registry
-                self.stream_registry.unregister_publisher(stream_key).await;
+        if self.role == SessionRole::Publisher
+            && let Some(ref stream_key) = self.stream_key
+        {
+            // Unregister from stream registry
+            self.stream_registry.unregister_publisher(stream_key).await;
 
-                let _ = delete_cached_manifest(&self.redis_client, stream_key).await;
-                nanotdf::info!("Publisher disconnected, cleaned up stream: {}", stream_key);
+            let _ = delete_cached_manifest(&self.redis_client, stream_key).await;
+            nanotdf::info!("Publisher disconnected, cleaned up stream: {}", stream_key);
 
-                // Broadcast stream_stopped event if stream was started
-                if self.started_event_sent {
-                    if let Some(ref broadcaster) = self.event_broadcaster {
-                        broadcaster.stream_stopped(stream_key).await;
-                    }
-                }
+            // Broadcast stream_stopped event if stream was started
+            if self.started_event_sent
+                && let Some(ref broadcaster) = self.event_broadcaster
+            {
+                broadcaster.stream_stopped(stream_key).await;
             }
         }
 
@@ -852,7 +858,7 @@ impl RtmpSession {
         self.frame_count += 1;
 
         // Debug: log timestamps for first 10 frames and every 100th
-        if self.frame_count <= 10 || self.frame_count % 100 == 0 {
+        if self.frame_count <= 10 || self.frame_count.is_multiple_of(100) {
             nanotdf::info!(
                 "📹 Video frame #{}: timestamp={} ms, size={} bytes",
                 self.frame_count,
@@ -867,13 +873,13 @@ impl RtmpSession {
                 self.emit_stream_started_if_needed().await;
 
                 // Check if this is a sequence header and cache it for late joiners
-                if Self::is_video_sequence_header(data) {
-                    if let Some(ref stream_key) = self.stream_key {
-                        nanotdf::info!("Caching video sequence header for {}", stream_key);
-                        self.stream_registry
-                            .set_video_sequence_header(stream_key, data.to_vec())
-                            .await;
-                    }
+                if Self::is_video_sequence_header(data)
+                    && let Some(ref stream_key) = self.stream_key
+                {
+                    nanotdf::info!("Caching video sequence header for {}", stream_key);
+                    self.stream_registry
+                        .set_video_sequence_header(stream_key, data.to_vec())
+                        .await;
                 }
 
                 // Check if this is an NTDF header frame (magic bytes "NTDF" at offset 5)
@@ -979,13 +985,13 @@ impl RtmpSession {
         match self.role {
             SessionRole::Publisher => {
                 // Check if this is a sequence header and cache it for late joiners
-                if Self::is_audio_sequence_header(data) {
-                    if let Some(ref stream_key) = self.stream_key {
-                        nanotdf::info!("Caching audio sequence header for {}", stream_key);
-                        self.stream_registry
-                            .set_audio_sequence_header(stream_key, data.to_vec())
-                            .await;
-                    }
+                if Self::is_audio_sequence_header(data)
+                    && let Some(ref stream_key) = self.stream_key
+                {
+                    nanotdf::info!("Caching audio sequence header for {}", stream_key);
+                    self.stream_registry
+                        .set_audio_sequence_header(stream_key, data.to_vec())
+                        .await;
                 }
 
                 match self.encryption_mode {
@@ -1105,20 +1111,20 @@ impl RtmpSession {
             return;
         }
 
-        if let Some(ref stream_key) = self.stream_key {
-            if let Some(ref broadcaster) = self.event_broadcaster {
-                // Get manifest header if available (for NTDF streams)
-                let manifest_header = self.manifest.as_ref().map(|m| {
-                    base64::Engine::encode(&base64::prelude::BASE64_STANDARD, &m.header_bytes)
-                });
+        if let Some(ref stream_key) = self.stream_key
+            && let Some(ref broadcaster) = self.event_broadcaster
+        {
+            // Get manifest header if available (for NTDF streams)
+            let manifest_header = self.manifest.as_ref().map(|m| {
+                base64::Engine::encode(&base64::prelude::BASE64_STANDARD, &m.header_bytes)
+            });
 
-                broadcaster
-                    .stream_started(stream_key, manifest_header.as_deref(), None)
-                    .await;
+            broadcaster
+                .stream_started(stream_key, manifest_header.as_deref(), None)
+                .await;
 
-                self.started_event_sent = true;
-                nanotdf::info!("Emitted stream_started event for {}", stream_key);
-            }
+            self.started_event_sent = true;
+            nanotdf::info!("Emitted stream_started event for {}", stream_key);
         }
     }
 

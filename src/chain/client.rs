@@ -185,7 +185,7 @@ impl ChainClient {
     /// Storage slot 1 corresponds to the `sessions` field (second field in contract storage,
     /// after `entitlements`).
     fn compute_session_storage_key(&self, session_id: &[u8; 32]) -> Vec<u8> {
-        use blake2::{digest::consts::U32, Blake2b, Digest};
+        use blake2::{Blake2b, Digest, digest::consts::U32};
         use scale::Encode;
 
         // Ink! assigns storage keys based on field order in the contract struct.
@@ -228,7 +228,7 @@ impl ChainClient {
     /// Compute Blake2b 128-bit hash.
     #[allow(dead_code)]
     fn blake2_128(data: &[u8]) -> [u8; 16] {
-        use blake2::{digest::consts::U16, Blake2b, Digest};
+        use blake2::{Blake2b, Digest, digest::consts::U16};
 
         let mut hasher = Blake2b::<U16>::new();
         hasher.update(data);

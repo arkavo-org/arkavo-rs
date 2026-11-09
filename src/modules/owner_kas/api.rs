@@ -8,23 +8,23 @@
 use super::apns::{PushOutcome, Pusher};
 use super::identity::{LookupError, RouteDirectory};
 use super::store::{
-    Enqueued, Limits, NewRequest, Push, QueueStore, RespondError, StoredRequest,
-    RETENTION_AFTER_DEADLINE,
+    Enqueued, Limits, NewRequest, Push, QueueStore, RETENTION_AFTER_DEADLINE, RespondError,
+    StoredRequest,
 };
 use super::token::{
-    is_bare_subject, is_route_id, new_ulid, verify_signed_request, OwnerKasToken, OwnerKasVerifier,
-    TokenError,
+    OwnerKasToken, OwnerKasVerifier, TokenError, is_bare_subject, is_route_id, new_ulid,
+    verify_signed_request,
 };
-use crate::modules::license::person_token::PersonTokenVerifier;
 use crate::modules::license::LicenseError;
+use crate::modules::license::person_token::PersonTokenVerifier;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use nanotdf::warn;
 use serde::Deserialize;
 use serde_json::json;
@@ -117,10 +117,10 @@ async fn receiver(
             return Err(err(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "identity keys unavailable",
-            ))
+            ));
         }
         Err(TokenError::Invalid) => {
-            return Err(err(StatusCode::UNAUTHORIZED, "invalid owner-KAS token"))
+            return Err(err(StatusCode::UNAUTHORIZED, "invalid owner-KAS token"));
         }
     };
     if route_id.is_some_and(|r| r != t.route_id) {
@@ -212,7 +212,7 @@ async fn rewrap(
             return err(StatusCode::NOT_FOUND, "route not found");
         }
         Err(LookupError::Unavailable) => {
-            return retry_after(err(StatusCode::SERVICE_UNAVAILABLE, "owner unavailable"))
+            return retry_after(err(StatusCode::SERVICE_UNAVAILABLE, "owner unavailable"));
         }
     };
     let authorization = headers

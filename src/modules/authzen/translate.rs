@@ -1,11 +1,11 @@
 //! SARC ↔ OpenTDF v2 proto-JSON (claims-mode entity chain only).
 
 use crate::modules::authzen::cwt_subject::{
-    allowlist_environment, device_token_value, devices_bind, devices_from_context,
-    sanitize_patreon, sanitize_patreon_entitlements, tool_value_slug, DecodedClaims, DeviceError,
-    DEVICECHECK_AUD, MAX_FORWARDED_ENTITLEMENTS,
+    DEVICECHECK_AUD, DecodedClaims, DeviceError, MAX_FORWARDED_ENTITLEMENTS, allowlist_environment,
+    device_token_value, devices_bind, devices_from_context, sanitize_patreon,
+    sanitize_patreon_entitlements, tool_value_slug,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 const MCP_TOOL_FQN_PREFIX: &str = "https://arkavo.net/attr/mcp-tool/value/";
@@ -828,9 +828,11 @@ mod tests {
         assert_eq!(ents[3]["claims"]["value"]["region"], json!("us-east-1"));
         assert_eq!(ents[3]["claims"]["value"]["kind"], json!("environment"));
         assert!(ents[3]["claims"]["value"].get("email").is_none());
-        assert!(ents[3]["claims"]["value"]
-            .get("patreon_access_token")
-            .is_none());
+        assert!(
+            ents[3]["claims"]["value"]
+                .get("patreon_access_token")
+                .is_none()
+        );
         assert!(chain.get("token").is_none());
     }
 

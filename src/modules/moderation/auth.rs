@@ -3,12 +3,12 @@
 //! from its `client_credentials` CWT.
 
 use crate::modules::authzen::cose_keys::CoseKeyCache;
-use crate::modules::authzen::cwt_subject::{service_client_id, subject_id_bind, DecodedClaims};
+use crate::modules::authzen::cwt_subject::{DecodedClaims, service_client_id, subject_id_bind};
 use crate::modules::authzen::cwt_verify::{
-    header_kid, verify_header_token, VerifyError, VerifyOpts,
+    VerifyError, VerifyOpts, header_kid, verify_header_token,
 };
-use axum::http::header::AUTHORIZATION;
 use axum::http::HeaderMap;
+use axum::http::header::AUTHORIZATION;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

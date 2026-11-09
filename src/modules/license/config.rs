@@ -6,7 +6,7 @@ use super::pdp::PlatformPdp;
 use super::person_token::PersonTokenVerifier;
 use super::tdf_policy::normalize_kas_url;
 use crate::modules::authzen::cose_keys::CoseKeyCache;
-use rsa::{pkcs8::DecodePrivateKey, RsaPrivateKey, RsaPublicKey};
+use rsa::{RsaPrivateKey, RsaPublicKey, pkcs8::DecodePrivateKey};
 use std::sync::Arc;
 
 pub struct LicenseAuthz {

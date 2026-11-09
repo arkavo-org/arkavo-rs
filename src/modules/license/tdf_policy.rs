@@ -6,10 +6,10 @@
 //! and a `keyBinding` naming its component. Both need at least one data
 //! attribute, every one of them well formed.
 
-use super::strict_json::has_unique_keys;
 use super::LicenseError;
-use base64::engine::general_purpose::STANDARD;
+use super::strict_json::has_unique_keys;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use hmac::{Hmac, Mac};
 use rand_core::OsRng;
 use rsa::{Oaep, RsaPrivateKey};
@@ -373,7 +373,7 @@ pub(super) fn policy_subject(policy: &Value) -> Result<(String, Vec<String>), Li
 mod tests {
     use super::*;
     use rsa::pkcs8::DecodePrivateKey;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     use crate::modules::license::fixtures::fixtures;
 
@@ -907,12 +907,14 @@ mod tests {
             let text =
                 format!(r#"{{"encryptionInformation":{first},"encryptionInformation":{last}}}"#);
             // Without the duplicate, the last one alone is a good manifest.
-            assert!(check_manifest(
-                format!(r#"{{"encryptionInformation":{last}}}"#).as_bytes(),
-                &key(),
-                &kas()
-            )
-            .is_ok());
+            assert!(
+                check_manifest(
+                    format!(r#"{{"encryptionInformation":{last}}}"#).as_bytes(),
+                    &key(),
+                    &kas()
+                )
+                .is_ok()
+            );
             assert_eq!(
                 check_manifest(text.as_bytes(), &key(), &kas()).err(),
                 Some(LicenseError::Forbidden("duplicate JSON key"))

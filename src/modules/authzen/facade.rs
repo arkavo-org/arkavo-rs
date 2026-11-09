@@ -2,27 +2,28 @@
 
 use crate::modules::authzen::cose_keys::CoseKeyCache;
 use crate::modules::authzen::cwt_subject::{
-    devices_from_context, parse_client_ids, service_client_id, DecodedClaims, DEVICECHECK_AUD,
+    DEVICECHECK_AUD, DecodedClaims, devices_from_context, parse_client_ids, service_client_id,
 };
 use crate::modules::authzen::cwt_verify::{
-    header_kid, verify_header_token, VerifyError, VerifyOpts,
+    VerifyError, VerifyOpts, header_kid, verify_header_token,
 };
 use crate::modules::authzen::discovery;
 use crate::modules::authzen::translate::{
-    authzen_decision, bulk_request, chain_len, deny_closed, fulfillable_from_context,
-    get_decision_request, map_action, map_resource, multi_resource_request, parse_bulk_responses,
-    parse_get_decision_response, parse_resource_decisions, reconstruct_chain, ChainMap,
-    ResourceMap, TranslateError, VerifiedDevice, VerifiedDevices, MAX_CHAIN, MAX_EVALUATIONS,
+    ChainMap, MAX_CHAIN, MAX_EVALUATIONS, ResourceMap, TranslateError, VerifiedDevice,
+    VerifiedDevices, authzen_decision, bulk_request, chain_len, deny_closed,
+    fulfillable_from_context, get_decision_request, map_action, map_resource,
+    multi_resource_request, parse_bulk_responses, parse_get_decision_response,
+    parse_resource_decisions, reconstruct_chain,
 };
-use axum::extract::rejection::JsonRejection;
 use axum::extract::State;
+use axum::extract::rejection::JsonRejection;
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use reqwest::redirect::Policy;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
@@ -72,11 +73,7 @@ impl FacadeState {
             .unwrap_or_else(|_| format!("{}/.well-known/cose-keys", issuer.trim_end_matches('/')));
         let pep_client_ids = std::env::var("AUTHZEN_PEP_CLIENT_IDS").ok().and_then(|s| {
             let set = parse_client_ids(&s);
-            if set.is_empty() {
-                None
-            } else {
-                Some(set)
-            }
+            if set.is_empty() { None } else { Some(set) }
         });
         let public_url = std::env::var("AUTHZEN_PUBLIC_URL")
             .ok()
@@ -237,15 +234,15 @@ async fn authenticate_pep(
     let Some(client_id) = service_client_id(&claims) else {
         return Err(PepAuth::Unauthorized);
     };
-    if let Some(want) = &state.expected_aud {
-        if !claims.aud.contains(want) {
-            return Err(PepAuth::Unauthorized);
-        }
+    if let Some(want) = &state.expected_aud
+        && !claims.aud.contains(want)
+    {
+        return Err(PepAuth::Unauthorized);
     }
-    if let Some(allow) = &state.pep_client_ids {
-        if !allow.contains(client_id) {
-            return Err(PepAuth::Forbidden);
-        }
+    if let Some(allow) = &state.pep_client_ids
+        && !allow.contains(client_id)
+    {
+        return Err(PepAuth::Forbidden);
     }
     Ok((claims, token.to_string()))
 }
@@ -699,7 +696,7 @@ async fn evaluations(
                 StatusCode::BAD_REQUEST,
                 "evaluations must be an array",
                 &rid,
-            )
+            );
         }
     };
     if entries.len() > MAX_EVALUATIONS {

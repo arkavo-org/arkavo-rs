@@ -1,19 +1,19 @@
 use crate::modules::crypto;
 use axum::{
+    Json,
     extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
-use nanotdf::chain::{ChainValidationRequest, SessionValidator, ValidationError};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use nanotdf::BinaryParser;
+use nanotdf::chain::{ChainValidationRequest, SessionValidator, ValidationError};
 use nanotdf::{error, info, warn};
 use opentdf_kas::{
-    compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek, rewrap_dek_simple,
-    NanoTdfVersion,
+    NanoTdfVersion, compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek,
+    rewrap_dek_simple,
 };
-use p256::{ecdh::EphemeralSecret, PublicKey as P256PublicKey, SecretKey};
+use p256::{PublicKey as P256PublicKey, SecretKey, ecdh::EphemeralSecret};
 use rand_core::OsRng;
 use rsa::{Oaep, RsaPrivateKey};
 use serde::{Deserialize, Serialize};
@@ -646,7 +646,7 @@ fn public_key_to_pem(public_key: &P256PublicKey) -> Result<String, ErrorResponse
 
 // Re-export base64 crate for this module
 mod base64 {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
 
     pub fn encode(data: &[u8]) -> String {
         STANDARD.encode(data)

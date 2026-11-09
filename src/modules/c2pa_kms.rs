@@ -51,7 +51,7 @@ where
             Ok(value) => return Ok(value),
             Err(ConnectError::Invalid(e)) => return Err(e),
             Err(ConnectError::Unavailable(e)) if attempt == attempts => {
-                return Err(format!("{} (gave up after {} attempts)", e, attempts))
+                return Err(format!("{} (gave up after {} attempts)", e, attempts));
             }
             Err(ConnectError::Unavailable(e)) => {
                 warn!(
@@ -266,30 +266,38 @@ pub mod tests {
     #[test]
     fn only_a_p256_signing_key_is_accepted() {
         let ok = [SigningAlgorithmSpec::EcdsaSha256];
-        assert!(check_key_type(
-            Some(&KeySpec::EccNistP256),
-            Some(&KeyUsageType::SignVerify),
-            &ok
-        )
-        .is_ok());
-        assert!(check_key_type(
-            Some(&KeySpec::EccNistP256),
-            Some(&KeyUsageType::KeyAgreement),
-            &[]
-        )
-        .is_err());
-        assert!(check_key_type(
-            Some(&KeySpec::EccNistP384),
-            Some(&KeyUsageType::SignVerify),
-            &[SigningAlgorithmSpec::EcdsaSha384]
-        )
-        .is_err());
-        assert!(check_key_type(
-            Some(&KeySpec::EccNistP256),
-            Some(&KeyUsageType::SignVerify),
-            &[]
-        )
-        .is_err());
+        assert!(
+            check_key_type(
+                Some(&KeySpec::EccNistP256),
+                Some(&KeyUsageType::SignVerify),
+                &ok
+            )
+            .is_ok()
+        );
+        assert!(
+            check_key_type(
+                Some(&KeySpec::EccNistP256),
+                Some(&KeyUsageType::KeyAgreement),
+                &[]
+            )
+            .is_err()
+        );
+        assert!(
+            check_key_type(
+                Some(&KeySpec::EccNistP384),
+                Some(&KeyUsageType::SignVerify),
+                &[SigningAlgorithmSpec::EcdsaSha384]
+            )
+            .is_err()
+        );
+        assert!(
+            check_key_type(
+                Some(&KeySpec::EccNistP256),
+                Some(&KeyUsageType::SignVerify),
+                &[]
+            )
+            .is_err()
+        );
         assert!(check_key_type(None, Some(&KeyUsageType::SignVerify), &ok).is_err());
     }
 

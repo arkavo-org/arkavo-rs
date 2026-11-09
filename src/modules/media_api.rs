@@ -4,16 +4,15 @@
 /// session management, and rental window tracking.
 use crate::modules::fairplay::MediaProtocol;
 use crate::modules::http_rewrap::RewrapState;
+use crate::modules::license::LicenseError;
 use crate::modules::license::issuer::{IssueError, IssuedLicense, LicenseContentType};
 use crate::modules::license::person_token::Person;
 use crate::modules::license::tdf_policy::{CheckedPolicy, ComponentKind, PolicyKeys};
-use crate::modules::license::LicenseError;
 use axum::{
-    async_trait,
+    Json, async_trait,
     extract::{ConnectInfo, FromRequestParts, Path, State},
-    http::{request::Parts, StatusCode},
+    http::{StatusCode, request::Parts},
     response::{IntoResponse, Response},
-    Json,
 };
 use base64::Engine;
 use chrono::Utc;
@@ -429,7 +428,7 @@ pub async fn media_key_request(
             return Err(LicenseError::Forbidden(
                 "TDF3 media keys are disabled pending policy enforcement",
             )
-            .into())
+            .into());
         }
         None => return Err(LicenseError::BadRequest("spcData is required").into()),
     }
@@ -886,8 +885,8 @@ mod license_pipeline_tests {
     use super::*;
     use crate::modules::authzen::cose_keys::CoseKeyCache;
     use crate::modules::license::config::LicenseAuthz;
-    use crate::modules::license::issuer::test_support::FakeIssuer;
     use crate::modules::license::issuer::LicenseContentType;
+    use crate::modules::license::issuer::test_support::FakeIssuer;
     use crate::modules::license::pdp::PlatformPdp;
     use crate::modules::license::person_token::{Person, PersonTokenVerifier};
     use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey};
@@ -981,10 +980,12 @@ mod license_pipeline_tests {
                 "s".into(),
             )
             .unwrap(),
-            kas_urls: vec![crate::modules::license::tdf_policy::normalize_kas_url(
-                "https://platform.arkavo.net",
-            )
-            .unwrap()],
+            kas_urls: vec![
+                crate::modules::license::tdf_policy::normalize_kas_url(
+                    "https://platform.arkavo.net",
+                )
+                .unwrap(),
+            ],
             lease_secs: 3600,
             envelope_keys: Some(Arc::new(
                 crate::modules::license::key_envelope::EnvelopeKeys::new(
@@ -1682,10 +1683,10 @@ mod session_auth_tests {
     use crate::modules::authzen::cose_keys::CoseKeyCache;
     use crate::modules::authzen::cwt_verify::test_support::{keypair, mint_map};
     use crate::modules::license::person_token::PersonTokenVerifier;
+    use axum::Router;
     use axum::body::Body;
     use axum::http::Request;
     use axum::routing::{delete, post};
-    use axum::Router;
     use ciborium::value::Value;
     use serde_json::json;
     use tower::ServiceExt;

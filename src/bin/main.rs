@@ -18,7 +18,7 @@ use modules::{
     platform_proxy,
 };
 use opentdf_kas::{
-    compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek, NanoTdfVersion,
+    NanoTdfVersion, compute_nanotdf_salt, custom_ecdh, detect_nanotdf_version, rewrap_dek,
 };
 
 use crate::contracts::content_rating::content_rating::{
@@ -28,22 +28,21 @@ use crate::contracts::geo_fence_contract::geo_fence_contract::Geofence3D;
 use crate::contracts::{contract_simple_abac, geo_fence_contract};
 use crate::schemas::event_generated::arkavo::{Event, EventData};
 use crate::schemas::metadata_generated::arkavo;
-use crate::schemas::metadata_generated::arkavo::{root_as_metadata, Metadata};
+use crate::schemas::metadata_generated::arkavo::{Metadata, root_as_metadata};
 use async_nats::Message as NatsMessage;
 use async_nats::{Client as NatsClient, PublishError};
-use axum::extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
+use axum::extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use flatbuffers::root;
 use futures_util::{SinkExt, StreamExt};
-use jsonwebtoken::{decode, DecodingKey, Validation};
-use nanotdf::{error, info, warn};
+use jsonwebtoken::{DecodingKey, Validation, decode};
 use nanotdf::{BinaryParser, PolicyType, ProtocolEnum, ResourceLocator};
-use once_cell::sync::OnceCell;
+use nanotdf::{error, info, warn};
 use p256::ecdh::EphemeralSecret;
-use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
+use p256::{PublicKey, SecretKey, elliptic_curve::sec1::ToEncodedPoint};
 use rand_core::{OsRng, RngCore};
 use redis::AsyncCommands;
 use redis::Client as RedisClient;
@@ -52,10 +51,11 @@ use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 use tokio::fs;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::Message;
 use tower::ServiceExt;
@@ -259,7 +259,7 @@ struct KasKeys {
     private_key: Vec<u8>,
 }
 
-static KAS_KEYS: OnceCell<Arc<KasKeys>> = OnceCell::new();
+static KAS_KEYS: OnceLock<Arc<KasKeys>> = OnceLock::new();
 
 /// Middleware for logging HTTP requests
 async fn log_request_middleware(
@@ -317,64 +317,62 @@ async fn ws_handler(
         return refusal;
     }
     // Check for NTDF token in Authorization header
-    if let Some(auth_header) = headers.get(AUTHORIZATION) {
-        if let Ok(auth_str) = auth_header.to_str() {
-            if auth_str.starts_with("NTDF ") {
-                // Validate NTDF token
-                match get_kas_private_key_bytes() {
-                    Some(kas_key_bytes) => {
-                        let kas_key_array: [u8; 32] = match kas_key_bytes.try_into() {
-                            Ok(arr) => arr,
-                            Err(_) => {
-                                warn!("Invalid KAS private key length");
-                                return (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    "Server configuration error",
-                                )
-                                    .into_response();
-                            }
-                        };
-                        let kas_private_key = match SecretKey::from_bytes(&kas_key_array.into()) {
-                            Ok(key) => key,
-                            Err(_) => {
-                                warn!("Invalid KAS private key");
-                                return (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    "Server configuration error",
-                                )
-                                    .into_response();
-                            }
-                        };
-
-                        match ntdf_token::validate_ntdf_token(
-                            auth_str,
-                            &kas_private_key,
-                            &state.server_state.settings.ntdf_expected_audience,
-                        ) {
-                            Ok(claims) => {
-                                info!("NTDF token validated: sub_id={}", claims.sub_id_hex());
-                                return ws
-                                    .on_upgrade(move |socket| {
-                                        handle_websocket_axum_with_ntdf(socket, state, claims)
-                                    })
-                                    .into_response();
-                            }
-                            Err(e) => {
-                                warn!("NTDF token validation failed: {:?}", e);
-                                return (
-                                    StatusCode::UNAUTHORIZED,
-                                    format!("Invalid NTDF token: {}", e),
-                                )
-                                    .into_response();
-                            }
-                        }
+    if let Some(auth_header) = headers.get(AUTHORIZATION)
+        && let Ok(auth_str) = auth_header.to_str()
+        && auth_str.starts_with("NTDF ")
+    {
+        // Validate NTDF token
+        match get_kas_private_key_bytes() {
+            Some(kas_key_bytes) => {
+                let kas_key_array: [u8; 32] = match kas_key_bytes.try_into() {
+                    Ok(arr) => arr,
+                    Err(_) => {
+                        warn!("Invalid KAS private key length");
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "Server configuration error",
+                        )
+                            .into_response();
                     }
-                    None => {
-                        warn!("KAS private key not initialized");
-                        return (StatusCode::INTERNAL_SERVER_ERROR, "Server not ready")
+                };
+                let kas_private_key = match SecretKey::from_bytes(&kas_key_array.into()) {
+                    Ok(key) => key,
+                    Err(_) => {
+                        warn!("Invalid KAS private key");
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "Server configuration error",
+                        )
+                            .into_response();
+                    }
+                };
+
+                match ntdf_token::validate_ntdf_token(
+                    auth_str,
+                    &kas_private_key,
+                    &state.server_state.settings.ntdf_expected_audience,
+                ) {
+                    Ok(claims) => {
+                        info!("NTDF token validated: sub_id={}", claims.sub_id_hex());
+                        return ws
+                            .on_upgrade(move |socket| {
+                                handle_websocket_axum_with_ntdf(socket, state, claims)
+                            })
+                            .into_response();
+                    }
+                    Err(e) => {
+                        warn!("NTDF token validation failed: {:?}", e);
+                        return (
+                            StatusCode::UNAUTHORIZED,
+                            format!("Invalid NTDF token: {}", e),
+                        )
                             .into_response();
                     }
                 }
+            }
+            None => {
+                warn!("KAS private key not initialized");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Server not ready").into_response();
             }
         }
     }
@@ -605,7 +603,27 @@ async fn apple_app_site_association_handler(
     )
 }
 
+/// The FairPlay credentials directory: `FAIRPLAY_CREDENTIALS_PATH`, or the
+/// SDK's bundled sample credentials.
+#[cfg(feature = "fairplay")]
+fn fairplay_credentials_path() -> std::path::PathBuf {
+    std::env::var_os("FAIRPLAY_CREDENTIALS_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            "./vendor/FairPlay_Streaming_Server_SDK_26/Development/Key_Server_Module/credentials"
+                .into()
+        })
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // First, while this is the only thread: the FairPlay SDK reads its paths
+    // from the environment, and setting it once threads exist (the stderr
+    // scrubber's, tokio's, the resolver's) races their getenv.
+    #[cfg(feature = "fairplay")]
+    // SAFETY: no other thread exists yet.
+    unsafe {
+        fairplay_wrapper::prepare_sdk_env(&fairplay_credentials_path())
+    };
     // Before anything writes to stderr: the FairPlay SDK's error lines can carry the
     // license request (#83)
     #[cfg(all(feature = "fairplay", unix))]
@@ -862,13 +880,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         use modules::fairplay::FairPlayHandler;
         use std::path::PathBuf;
 
-        let credentials_path = std::env::var("FAIRPLAY_CREDENTIALS_PATH").unwrap_or_else(|_| {
+        if std::env::var_os("FAIRPLAY_CREDENTIALS_PATH").is_none() {
             nanotdf::warn!("FAIRPLAY_CREDENTIALS_PATH not set, using default");
-            "./vendor/FairPlay_Streaming_Server_SDK_26/Development/Key_Server_Module/credentials"
-                .to_string()
-        });
-
-        match FairPlayHandler::new(PathBuf::from(credentials_path)) {
+        }
+        match FairPlayHandler::new(fairplay_credentials_path()) {
             Ok(handler) => {
                 nanotdf::info!("FairPlay handler initialized successfully");
                 Arc::new(handler)
@@ -989,8 +1004,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _c2pa_signing_state: Option<Arc<()>> = None;
 
     use axum::{
-        routing::{delete, get, post},
         Router,
+        routing::{delete, get, post},
     };
 
     // OpenTDF compatibility router — either local handlers or forwarded
@@ -1342,7 +1357,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         } else {
-            warn!("http3 feature is enabled but TLS is disabled; HTTP/3 (QUIC) requires TLS and will NOT start");
+            warn!(
+                "http3 feature is enabled but TLS is disabled; HTTP/3 (QUIC) requires TLS and will NOT start"
+            );
             (app, None)
         }
     };
@@ -1600,9 +1617,11 @@ fn verify_token(
         Ok(token_data.claims)
     } else {
         // Production mode - proper JWT validation
-        let mut validation = Validation::default();
-        validation.validate_exp = true;
-        validation.validate_aud = false; // Can be enabled if audience is specified
+        let mut validation = Validation {
+            validate_exp: true,
+            validate_aud: false, // Can be enabled if audience is specified
+            ..Default::default()
+        };
 
         // Load the public key for verification
         let public_key_path = settings.jwt_public_key_path.as_ref().ok_or_else(|| {
@@ -1803,64 +1822,63 @@ async fn handle_rewrap(
             locator = policy.get_locator().clone();
 
             // Fetch remote policy if HTTP/HTTPS URL
-            if let Some(ref loc) = locator {
-                if loc.protocol_enum == ProtocolEnum::Http
-                    || loc.protocol_enum == ProtocolEnum::Https
-                {
-                    info!("Fetching remote policy from: {}", loc.body);
-                    // TODO: Implement actual HTTP fetch of remote policy
-                    // For now, return error indicating feature not complete
-                    error!("Remote policy fetching not yet implemented");
-                    return Some(
-                        ErrorResponse::invalid_format(
-                            "Remote policy fetching via HTTP/HTTPS not yet implemented",
-                        )
-                        .to_message(),
-                    );
+            if let Some(ref loc) = locator
+                && (loc.protocol_enum == ProtocolEnum::Http
+                    || loc.protocol_enum == ProtocolEnum::Https)
+            {
+                info!("Fetching remote policy from: {}", loc.body);
+                // TODO: Implement actual HTTP fetch of remote policy
+                // For now, return error indicating feature not complete
+                error!("Remote policy fetching not yet implemented");
+                return Some(
+                    ErrorResponse::invalid_format(
+                        "Remote policy fetching via HTTP/HTTPS not yet implemented",
+                    )
+                    .to_message(),
+                );
 
-                    // Future implementation:
-                    // match reqwest::get(&loc.body).await {
-                    //     Ok(response) => {
-                    //         match response.bytes().await {
-                    //             Ok(bytes) => {
-                    //                 metadata = match root_as_metadata(&bytes) {
-                    //                     Ok(meta) => Some(meta),
-                    //                     Err(e) => {
-                    //                         error!("Failed to parse remote policy metadata: {}", e);
-                    //                         return Some(
-                    //                             ErrorResponse::invalid_format(format!(
-                    //                                 "Invalid remote policy metadata: {}",
-                    //                                 e
-                    //                             ))
-                    //                             .to_message(),
-                    //                         );
-                    //                     }
-                    //                 };
-                    //             }
-                    //             Err(e) => {
-                    //                 error!("Failed to read remote policy response: {}", e);
-                    //                 return Some(
-                    //                     ErrorResponse::invalid_format(format!(
-                    //                         "Failed to fetch remote policy: {}",
-                    //                         e
-                    //                     ))
-                    //                     .to_message(),
-                    //                 );
-                    //             }
-                    //         }
-                    //     }
-                    //     Err(e) => {
-                    //         error!("Failed to fetch remote policy: {}", e);
-                    //         return Some(
-                    //             ErrorResponse::invalid_format(format!(
-                    //                 "Failed to fetch remote policy: {}",
-                    //                 e
-                    //             ))
-                    //             .to_message(),
-                    //         );
-                    //     }
-                    // }
-                }
+                // Future implementation:
+                // match reqwest::get(&loc.body).await {
+                //     Ok(response) => {
+                //         match response.bytes().await {
+                //             Ok(bytes) => {
+                //                 metadata = match root_as_metadata(&bytes) {
+                //                     Ok(meta) => Some(meta),
+                //                     Err(e) => {
+                //                         error!("Failed to parse remote policy metadata: {}", e);
+                //                         return Some(
+                //                             ErrorResponse::invalid_format(format!(
+                //                                 "Invalid remote policy metadata: {}",
+                //                                 e
+                //                             ))
+                //                             .to_message(),
+                //                         );
+                //                     }
+                //                 };
+                //             }
+                //             Err(e) => {
+                //                 error!("Failed to read remote policy response: {}", e);
+                //                 return Some(
+                //                     ErrorResponse::invalid_format(format!(
+                //                         "Failed to fetch remote policy: {}",
+                //                         e
+                //                     ))
+                //                     .to_message(),
+                //                 );
+                //             }
+                //         }
+                //     }
+                //     Err(e) => {
+                //         error!("Failed to fetch remote policy: {}", e);
+                //         return Some(
+                //             ErrorResponse::invalid_format(format!(
+                //                 "Failed to fetch remote policy: {}",
+                //                 e
+                //             ))
+                //             .to_message(),
+                //         );
+                //     }
+                // }
             }
         }
         PolicyType::Embedded => {
@@ -1986,185 +2004,185 @@ async fn handle_rewrap(
         info!("No policy binding present");
     }
 
-    if let Some(locator) = &locator {
-        if locator.protocol_enum == ProtocolEnum::SharedResource {
-            info!("Evaluating contract: {}", locator.body.clone());
-            if !locator.body.is_empty() {
-                //  "Verified 18+"
-                let claims_result = match connection_state.claims_lock.read() {
-                    Ok(read_lock) => match read_lock.clone() {
-                        Some(value) => Ok(value.sub),
-                        None => Err("Error: Clone cannot be performed"),
-                    },
-                    Err(_) => Err("Error: Read lock cannot be obtained"),
-                };
-                let verified_age_result = match connection_state
-                    .claims_lock
-                    .read()
-                    .expect("Error: Read lock cannot be obtained")
-                    .clone()
-                {
-                    Some(claims) => Ok(claims.age == "Verified 18+"),
-                    None => Err("Error: Claims data not available"),
-                };
-                // geo_fence_contract
-                if locator
-                    .body
-                    .contains("5H6sLwXKBv3cdm5VVRxrvA8p5cux2Rrni5CQ4GRyYKo4b9B4")
-                {
-                    info!("Processing geofence contract");
-                    let _contract = geo_fence_contract::geo_fence_contract::GeoFenceContract::new();
+    if let Some(locator) = &locator
+        && locator.protocol_enum == ProtocolEnum::SharedResource
+    {
+        info!("Evaluating contract: {}", locator.body.clone());
+        if !locator.body.is_empty() {
+            //  "Verified 18+"
+            let claims_result = match connection_state.claims_lock.read() {
+                Ok(read_lock) => match read_lock.clone() {
+                    Some(value) => Ok(value.sub),
+                    None => Err("Error: Clone cannot be performed"),
+                },
+                Err(_) => Err("Error: Read lock cannot be obtained"),
+            };
+            let verified_age_result = match connection_state
+                .claims_lock
+                .read()
+                .expect("Error: Read lock cannot be obtained")
+                .clone()
+            {
+                Some(claims) => Ok(claims.age == "Verified 18+"),
+                None => Err("Error: Claims data not available"),
+            };
+            // geo_fence_contract
+            if locator
+                .body
+                .contains("5H6sLwXKBv3cdm5VVRxrvA8p5cux2Rrni5CQ4GRyYKo4b9B4")
+            {
+                info!("Processing geofence contract");
+                let _contract = geo_fence_contract::geo_fence_contract::GeoFenceContract::new();
 
-                    // Parse geofence bounds from policy body
-                    // Expected format: 6 f64 values (48 bytes total)
-                    // min_lat, max_lat, min_lon, max_lon, min_alt, max_alt
-                    let _geofence = if let Some(body) = policy_body {
-                        if body.len() >= 48 {
-                            // Parse 6 f64 values from little-endian bytes
-                            let mut values = [0f64; 6];
-                            for (i, value) in values.iter_mut().enumerate() {
-                                let start = i * 8;
-                                let bytes = &body[start..start + 8];
-                                *value = f64::from_le_bytes(bytes.try_into().unwrap_or([0u8; 8]));
-                            }
-                            Geofence3D {
-                                min_latitude: values[0],
-                                max_latitude: values[1],
-                                min_longitude: values[2],
-                                max_longitude: values[3],
-                                min_altitude: values[4],
-                                max_altitude: values[5],
-                            }
-                        } else {
-                            error!(
-                                "Policy body too small for geofence data: {} bytes (expected 48)",
-                                body.len()
-                            );
-                            return Some(
-                                ErrorResponse::invalid_format(
-                                    "Geofence policy body must contain 48 bytes (6 f64 values)",
-                                )
-                                .to_message(),
-                            );
+                // Parse geofence bounds from policy body
+                // Expected format: 6 f64 values (48 bytes total)
+                // min_lat, max_lat, min_lon, max_lon, min_alt, max_alt
+                let _geofence = if let Some(body) = policy_body {
+                    if body.len() >= 48 {
+                        // Parse 6 f64 values from little-endian bytes
+                        let mut values = [0f64; 6];
+                        for (i, value) in values.iter_mut().enumerate() {
+                            let start = i * 8;
+                            let bytes = &body[start..start + 8];
+                            *value = f64::from_le_bytes(bytes.try_into().unwrap_or([0u8; 8]));
+                        }
+                        Geofence3D {
+                            min_latitude: values[0],
+                            max_latitude: values[1],
+                            min_longitude: values[2],
+                            max_longitude: values[3],
+                            min_altitude: values[4],
+                            max_altitude: values[5],
                         }
                     } else {
-                        error!("Geofence policy missing body data");
-                        return Some(
-                            ErrorResponse::invalid_format("Geofence policy requires body data")
-                                .to_message(),
+                        error!(
+                            "Policy body too small for geofence data: {} bytes (expected 48)",
+                            body.len()
                         );
-                    };
-
-                    // Extract coordinates from JWT claims
-                    // TODO: Add latitude/longitude/altitude fields to Claims struct
-                    // For now, return error indicating feature not complete
-                    error!("Geofence coordinate extraction from JWT claims not yet implemented");
+                        return Some(
+                            ErrorResponse::invalid_format(
+                                "Geofence policy body must contain 48 bytes (6 f64 values)",
+                            )
+                            .to_message(),
+                        );
+                    }
+                } else {
+                    error!("Geofence policy missing body data");
                     return Some(
+                        ErrorResponse::invalid_format("Geofence policy requires body data")
+                            .to_message(),
+                    );
+                };
+
+                // Extract coordinates from JWT claims
+                // TODO: Add latitude/longitude/altitude fields to Claims struct
+                // For now, return error indicating feature not complete
+                error!("Geofence coordinate extraction from JWT claims not yet implemented");
+                return Some(
                         ErrorResponse::invalid_format(
                             "Geofence validation requires location fields in JWT claims (feature incomplete)",
                         )
                         .to_message(),
                     );
 
-                    // Future implementation once Claims struct has location fields:
-                    // let coordinate = match connection_state.claims_lock.read() {
-                    //     Ok(read_lock) => match read_lock.clone() {
-                    //         Some(claims) => geo_fence_contract::geo_fence_contract::Coordinate3D {
-                    //             latitude: claims.latitude,
-                    //             longitude: claims.longitude,
-                    //             altitude: claims.altitude,
-                    //         },
-                    //         None => {
-                    //             return Some(ErrorResponse::policy_denied(
-                    //                 "Geofence validation requires authentication"
-                    //             ).to_message());
-                    //         }
-                    //     },
-                    //     Err(_) => {
-                    //         return Some(ErrorResponse::policy_denied(
-                    //             "Failed to read authentication claims"
-                    //         ).to_message());
-                    //     }
-                    // };
-                    //
-                    // if !contract.is_within_geofence(geofence, coordinate) {
-                    //     error!("Geofence policy denied access - location outside allowed area");
-                    //     let total_time = start_time.elapsed();
-                    //     log_timing(settings, "Time to deny (geofence)", total_time);
-                    //     return Some(
-                    //         ErrorResponse::policy_denied(
-                    //             "Access denied - location outside permitted geofence",
-                    //         )
-                    //         .to_message(),
-                    //     );
-                    // }
-                    // info!("Geofence validation passed");
+                // Future implementation once Claims struct has location fields:
+                // let coordinate = match connection_state.claims_lock.read() {
+                //     Ok(read_lock) => match read_lock.clone() {
+                //         Some(claims) => geo_fence_contract::geo_fence_contract::Coordinate3D {
+                //             latitude: claims.latitude,
+                //             longitude: claims.longitude,
+                //             altitude: claims.altitude,
+                //         },
+                //         None => {
+                //             return Some(ErrorResponse::policy_denied(
+                //                 "Geofence validation requires authentication"
+                //             ).to_message());
+                //         }
+                //     },
+                //     Err(_) => {
+                //         return Some(ErrorResponse::policy_denied(
+                //             "Failed to read authentication claims"
+                //         ).to_message());
+                //     }
+                // };
+                //
+                // if !contract.is_within_geofence(geofence, coordinate) {
+                //     error!("Geofence policy denied access - location outside allowed area");
+                //     let total_time = start_time.elapsed();
+                //     log_timing(settings, "Time to deny (geofence)", total_time);
+                //     return Some(
+                //         ErrorResponse::policy_denied(
+                //             "Access denied - location outside permitted geofence",
+                //         )
+                //         .to_message(),
+                //     );
+                // }
+                // info!("Geofence validation passed");
+            }
+            // content_rating
+            else if locator
+                .body
+                .contains("5HKLo6CKbt1Z5dU4wZ3MiufeZzjM6JGwKUWUQ6a91fmuA6RB")
+            {
+                println!("contract content rating");
+                let contract = ContentRating::new();
+                // Parse the content rating data from the policy body
+                // get entitlements
+                let age_level = if verified_age_result.unwrap_or(false) {
+                    AgeLevel::Adults
+                } else {
+                    AgeLevel::Kids
+                };
+                if metadata.is_none() {
+                    println!("metadata is null");
+                    return None;
                 }
-                // content_rating
-                else if locator
-                    .body
-                    .contains("5HKLo6CKbt1Z5dU4wZ3MiufeZzjM6JGwKUWUQ6a91fmuA6RB")
-                {
-                    println!("contract content rating");
-                    let contract = ContentRating::new();
-                    // Parse the content rating data from the policy body
-                    // get entitlements
-                    let age_level = if verified_age_result.unwrap_or(false) {
-                        AgeLevel::Adults
-                    } else {
-                        AgeLevel::Kids
-                    };
-                    if metadata.is_none() {
-                        println!("metadata is null");
-                        return None;
-                    }
-                    let rating_data = metadata.unwrap().rating()?;
-                    let rating = Rating {
-                        violent: convert_rating_level(rating_data.violent()),
-                        sexual: convert_rating_level(rating_data.sexual()),
-                        profane: convert_rating_level(rating_data.profane()),
-                        substance: convert_rating_level(rating_data.substance()),
-                        hate: convert_rating_level(rating_data.hate()),
-                        harm: convert_rating_level(rating_data.harm()),
-                        mature: convert_rating_level(rating_data.mature()),
-                        bully: convert_rating_level(rating_data.bully()),
-                    };
-                    // Format age level before check_content consumes it
-                    let age_level_str = format!("{:?}", age_level);
-                    if !contract.check_content(age_level, rating) {
-                        error!(
-                            "Content rating policy denied access for age level: {}",
+                let rating_data = metadata.unwrap().rating()?;
+                let rating = Rating {
+                    violent: convert_rating_level(rating_data.violent()),
+                    sexual: convert_rating_level(rating_data.sexual()),
+                    profane: convert_rating_level(rating_data.profane()),
+                    substance: convert_rating_level(rating_data.substance()),
+                    hate: convert_rating_level(rating_data.hate()),
+                    harm: convert_rating_level(rating_data.harm()),
+                    mature: convert_rating_level(rating_data.mature()),
+                    bully: convert_rating_level(rating_data.bully()),
+                };
+                // Format age level before check_content consumes it
+                let age_level_str = format!("{:?}", age_level);
+                if !contract.check_content(age_level, rating) {
+                    error!(
+                        "Content rating policy denied access for age level: {}",
+                        age_level_str
+                    );
+                    return Some(
+                        ErrorResponse::policy_denied(format!(
+                            "Content not suitable for age level: {}",
                             age_level_str
-                        );
-                        return Some(
-                            ErrorResponse::policy_denied(format!(
-                                "Content not suitable for age level: {}",
-                                age_level_str
-                            ))
-                            .to_message(),
-                        );
-                    }
+                        ))
+                        .to_message(),
+                    );
                 }
-                // simple_abac
-                else if locator
-                    .body
-                    .contains("5Cqk3ERPToSMuY8UoKJtcmo4fs1iVyQpq6ndzWzpzWezAF1W")
+            }
+            // simple_abac
+            else if locator
+                .body
+                .contains("5Cqk3ERPToSMuY8UoKJtcmo4fs1iVyQpq6ndzWzpzWezAF1W")
+            {
+                let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
+                if claims_result.is_ok()
+                    && !contract.check_access(claims_result.unwrap(), locator.body.clone())
                 {
-                    let contract = contract_simple_abac::simple_abac::SimpleAbac::new();
-                    if claims_result.is_ok()
-                        && !contract.check_access(claims_result.unwrap(), locator.body.clone())
-                    {
-                        error!("ABAC policy denied access for user claims");
-                        // timing
-                        let total_time = start_time.elapsed();
-                        log_timing(settings, "Time to deny (ABAC)", total_time);
-                        return Some(
-                            ErrorResponse::policy_denied(
-                                "Access denied by attribute-based access control policy",
-                            )
-                            .to_message(),
-                        );
-                    }
+                    error!("ABAC policy denied access for user claims");
+                    // timing
+                    let total_time = start_time.elapsed();
+                    log_timing(settings, "Time to deny (ABAC)", total_time);
+                    return Some(
+                        ErrorResponse::policy_denied(
+                            "Access denied by attribute-based access control policy",
+                        )
+                        .to_message(),
+                    );
                 }
             }
         }
@@ -2305,7 +2323,7 @@ async fn handle_chain_rewrap(
     header: &[u8],
     chain: cbor_protocol::ChainValidation,
 ) -> Option<Message> {
-    use cbor_protocol::{CborResponse, CBOR_MESSAGE_TYPE};
+    use cbor_protocol::{CBOR_MESSAGE_TYPE, CborResponse};
     use nanotdf::chain::{ChainValidationRequest, ValidationError};
 
     let start_time = Instant::now();
@@ -2595,7 +2613,7 @@ async fn handle_cbor_key_exchange(
     connection_state: &Arc<ConnectionState>,
     public_key: &[u8],
 ) -> Option<Message> {
-    use cbor_protocol::{CborResponse, CBOR_MESSAGE_TYPE};
+    use cbor_protocol::{CBOR_MESSAGE_TYPE, CborResponse};
 
     // Check if session already established
     {
@@ -2679,7 +2697,7 @@ async fn handle_cbor_key_exchange(
 
 /// Helper to create a CBOR error response message.
 fn cbor_error_response(code: &str, message: &str) -> Message {
-    use cbor_protocol::{CborResponse, CBOR_MESSAGE_TYPE};
+    use cbor_protocol::{CBOR_MESSAGE_TYPE, CborResponse};
 
     let response = CborResponse::error(code, message);
     match response.encode() {
@@ -3071,8 +3089,8 @@ fn init_kas_keys(key_path: &str) -> Result<(), Box<dyn std::error::Error>> {
 fn load_rsa_key(
     key_path: &str,
 ) -> Result<(rsa::RsaPrivateKey, String), Box<dyn std::error::Error>> {
-    use rsa::pkcs8::DecodePrivateKey;
     use rsa::RsaPublicKey;
+    use rsa::pkcs8::DecodePrivateKey;
 
     let pem_content = std::fs::read_to_string(key_path)?;
 
@@ -3261,25 +3279,24 @@ fn validate_config(settings: &ServerSettings) -> Result<(), Box<dyn std::error::
     if !settings.jwt_validation_disabled && settings.jwt_public_key_path.is_none() {
         return Err("JWT_PUBLIC_KEY_PATH must be set when JWT validation is enabled".into());
     }
-    if let Some(ref jwt_key_path) = settings.jwt_public_key_path {
-        if !std::path::Path::new(jwt_key_path).exists() {
-            return Err(format!("JWT public key file not found: {}", jwt_key_path).into());
-        }
+    if let Some(ref jwt_key_path) = settings.jwt_public_key_path
+        && !std::path::Path::new(jwt_key_path).exists()
+    {
+        return Err(format!("JWT public key file not found: {}", jwt_key_path).into());
     }
 
     // Validate Chain RPC URL format (only if configured)
-    if let Some(ref chain_url) = settings.chain_rpc_url {
-        if !chain_url.starts_with("ws://")
-            && !chain_url.starts_with("wss://")
-            && !chain_url.starts_with("http://")
-            && !chain_url.starts_with("https://")
-        {
-            return Err(format!(
-                "CHAIN_RPC_URL must be a valid WebSocket or HTTP URL: {}",
-                chain_url
-            )
-            .into());
-        }
+    if let Some(ref chain_url) = settings.chain_rpc_url
+        && !chain_url.starts_with("ws://")
+        && !chain_url.starts_with("wss://")
+        && !chain_url.starts_with("http://")
+        && !chain_url.starts_with("https://")
+    {
+        return Err(format!(
+            "CHAIN_RPC_URL must be a valid WebSocket or HTTP URL: {}",
+            chain_url
+        )
+        .into());
     }
 
     info!("✓ Configuration validation passed");
@@ -3627,7 +3644,7 @@ mod tests {
             None => {
                 return Err(Box::new(std::io::Error::other(
                     "Could not convert to array.",
-                )))
+                )));
             }
         };
         let server_secret_key = SecretKey::from_bytes(&kas_private_key_array.into())

@@ -319,7 +319,7 @@ impl SuspensionStore for DynamoSuspensionStore {
                         });
                     match reasons {
                         Some(r) if condition_failed(&r, 0) => {
-                            return Err(StoreError::StatusChanged)
+                            return Err(StoreError::StatusChanged);
                         }
                         // Another writer changed the suspension, or a concurrent
                         // transaction held an item: read it again.
@@ -327,7 +327,7 @@ impl SuspensionStore for DynamoSuspensionStore {
                         _ => {
                             return Err(unavailable(aws_sdk_dynamodb::error::DisplayErrorContext(
                                 e,
-                            )))
+                            )));
                         }
                     }
                 }
@@ -952,20 +952,24 @@ mod dynamodb_local {
         );
 
         // Together: the report is actioned and the account suspended.
-        assert!(store
-            .suspend_with_report(&first, &actioned(&r1), Status::Received)
-            .await
-            .unwrap());
+        assert!(
+            store
+                .suspend_with_report(&first, &actioned(&r1), Status::Received)
+                .await
+                .unwrap()
+        );
         assert_eq!(
             reports.get(&r1.id).await.unwrap().unwrap().status,
             Status::Actioned
         );
         assert_eq!(store.get("creator-a").await.unwrap(), Some(first.clone()));
         // A second report while suspended keeps the first record.
-        assert!(!store
-            .suspend_with_report(&suspension(&r2, 200), &actioned(&r2), Status::Received)
-            .await
-            .unwrap());
+        assert!(
+            !store
+                .suspend_with_report(&suspension(&r2, 200), &actioned(&r2), Status::Received)
+                .await
+                .unwrap()
+        );
         assert_eq!(store.get("creator-a").await.unwrap(), Some(first.clone()));
         // The suspension item stays out of the moderators' queues.
         let (queue, _) = reports.list(Status::Actioned, 10, None).await.unwrap();

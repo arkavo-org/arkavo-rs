@@ -1,5 +1,5 @@
-use p256::pkcs8::DecodePublicKey;
 use p256::PublicKey;
+use p256::pkcs8::DecodePublicKey;
 use std::error::Error;
 
 // ==================== Utility Functions ====================

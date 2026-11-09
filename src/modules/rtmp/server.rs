@@ -6,10 +6,10 @@
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
+use super::DEFAULT_RTMP_PORT;
 use super::registry::StreamRegistry;
 use super::session::RtmpSession;
 use super::stream_events::StreamEventBroadcaster;
-use super::DEFAULT_RTMP_PORT;
 
 /// RTMP server configuration and state
 pub struct RtmpServer {

@@ -536,17 +536,21 @@ mod tests {
             let u = update(json!({"status": s, "actions": ["takedown"]}));
             assert!(u.apply(&done, "m", 1_200).is_err(), "{s}");
         }
-        assert!(update(json!({"status": "received"}))
-            .apply(&r, "m", 1_100)
-            .is_err());
+        assert!(
+            update(json!({"status": "received"}))
+                .apply(&r, "m", 1_100)
+                .is_err()
+        );
     }
 
     #[test]
     fn actions_follow_status_and_target() {
         let r = record();
-        assert!(update(json!({"status": "actioned"}))
-            .apply(&r, "m", 1)
-            .is_err());
+        assert!(
+            update(json!({"status": "actioned"}))
+                .apply(&r, "m", 1)
+                .is_err()
+        );
         assert!(
             update(json!({"status": "reviewing", "actions": ["suspend"]}))
                 .apply(&r, "m", 1)

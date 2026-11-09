@@ -125,12 +125,11 @@ impl IdentityDirectory {
 
     async fn service_token(&self, force: bool) -> Option<String> {
         let mut guard = self.token.lock().await;
-        if !force {
-            if let Some((t, exp)) = guard.as_ref() {
-                if Instant::now() + REFRESH_MARGIN < *exp {
-                    return Some(t.clone());
-                }
-            }
+        if !force
+            && let Some((t, exp)) = guard.as_ref()
+            && Instant::now() + REFRESH_MARGIN < *exp
+        {
+            return Some(t.clone());
         }
         let mut form = vec![("grant_type", "client_credentials".to_string())];
         if let Some(aud) = &self.config.audience {
@@ -214,10 +213,10 @@ impl IdentityDirectory {
 impl RouteDirectory for IdentityDirectory {
     async fn route(&self, route_id: &str) -> Result<RouteInfo, LookupError> {
         let cached = self.cache.lock().await.get(route_id).cloned();
-        if let Some((at, info)) = &cached {
-            if at.elapsed() < FRESH {
-                return Ok(info.clone());
-            }
+        if let Some((at, info)) = &cached
+            && at.elapsed() < FRESH
+        {
+            return Ok(info.clone());
         }
         match self.fetch(route_id).await {
             Ok(info) => {
@@ -243,14 +242,13 @@ impl RouteDirectory for IdentityDirectory {
     }
 
     async fn delete_push(&self, route_id: &str, apns_token: &str) {
-        if let Some((_, info)) = self.cache.lock().await.get_mut(route_id) {
-            if info
+        if let Some((_, info)) = self.cache.lock().await.get_mut(route_id)
+            && info
                 .push
                 .as_ref()
                 .is_some_and(|p| p.apns_token == apns_token)
-            {
-                info.push = None;
-            }
+        {
+            info.push = None;
         }
         let Some(token) = self.service_token(false).await else {
             return;

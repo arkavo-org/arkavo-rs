@@ -210,8 +210,8 @@ mod tests {
 
     // Generate test keypair for P-256
     fn generate_test_keypair() -> (Vec<u8>, Vec<u8>) {
-        use p256::pkcs8::EncodePrivateKey;
         use p256::SecretKey;
+        use p256::pkcs8::EncodePrivateKey;
         use rand_core::OsRng;
 
         let secret = SecretKey::random(&mut OsRng);

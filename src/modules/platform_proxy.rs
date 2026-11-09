@@ -6,11 +6,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::Json;
 use axum::body::{Body, Bytes};
 use axum::extract::{Query, Request, State};
-use axum::http::{header, HeaderMap, HeaderName, StatusCode};
+use axum::http::{HeaderMap, HeaderName, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -162,12 +162,12 @@ pub(crate) fn strip_proxy_headers(headers: &mut HeaderMap) {
     // for this specific message. Collect them before mutating, since the next
     // loop removes Connection itself.
     let mut connection_listed: Vec<HeaderName> = Vec::new();
-    if let Some(conn) = headers.get(header::CONNECTION) {
-        if let Ok(val) = conn.to_str() {
-            for name in val.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                if let Ok(hn) = HeaderName::from_str(name) {
-                    connection_listed.push(hn);
-                }
+    if let Some(conn) = headers.get(header::CONNECTION)
+        && let Ok(val) = conn.to_str()
+    {
+        for name in val.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            if let Ok(hn) = HeaderName::from_str(name) {
+                connection_listed.push(hn);
             }
         }
     }
@@ -387,12 +387,12 @@ mod mode_tests {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use axum::{routing::any, Router};
+    use axum::{Router, routing::any};
     use reqwest::Client;
     use tokio::net::TcpListener;
     use wiremock::{
-        matchers::{header, method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{header, method, path},
     };
 
     /// Build an arks-side server with the proxy mounted at `/kas/v2/rewrap`
@@ -715,7 +715,7 @@ mod integration_tests {
 #[cfg(test)]
 mod header_tests {
     use super::*;
-    use axum::http::{header, HeaderMap, HeaderName, HeaderValue};
+    use axum::http::{HeaderMap, HeaderName, HeaderValue, header};
 
     #[test]
     fn strip_hop_by_hop_removes_rfc7230_headers() {

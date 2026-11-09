@@ -5,16 +5,16 @@
 //!
 //! Wire format: `Authorization: NTDF <Z85-encoded-nanotdf>`
 
-use aes_gcm::aead::generic_array::GenericArray;
-use aes_gcm::aead::KeyInit;
-use aes_gcm::aead::{Aead, Key};
 use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::KeyInit;
+use aes_gcm::aead::generic_array::GenericArray;
+use aes_gcm::aead::{Aead, Key};
 use hkdf::Hkdf;
 use nanotdf::{debug, info, warn};
 use opentdf_kas::custom_ecdh;
 use opentdf_protocol::binary::BinaryRead;
 use opentdf_protocol::binary::BinaryWrite;
-use opentdf_protocol::nanotdf::{Header, HKDF_SALT};
+use opentdf_protocol::nanotdf::{HKDF_SALT, Header};
 use p256::{PublicKey, SecretKey};
 use sha2::Sha256;
 use std::io::{Cursor, Read};

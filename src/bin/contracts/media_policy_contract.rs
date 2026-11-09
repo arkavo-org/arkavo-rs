@@ -179,10 +179,10 @@ pub mod media_policy {
             }
 
             // If manifest is present, validate it
-            if let Some(ref manifest) = content.c2pa_manifest {
-                if !manifest.is_valid {
-                    return Err(Error::C2paValidationFailed);
-                }
+            if let Some(ref manifest) = content.c2pa_manifest
+                && !manifest.is_valid
+            {
+                return Err(Error::C2paValidationFailed);
             }
 
             Ok(())
@@ -357,9 +357,11 @@ pub mod media_policy {
 
             // Should pass with active subscription
             entitlement.subscription_status = SubscriptionStatus::Active;
-            assert!(contract
-                .validate_access(entitlement, content, device, 0, [b'U', b'S'], 0)
-                .is_ok());
+            assert!(
+                contract
+                    .validate_access(entitlement, content, device, 0, [b'U', b'S'], 0)
+                    .is_ok()
+            );
         }
 
         #[ink::test]
@@ -406,9 +408,11 @@ pub mod media_policy {
             );
 
             // Should pass when under limit
-            assert!(contract
-                .validate_access(entitlement, content, device, 1, [b'U', b'S'], 0)
-                .is_ok());
+            assert!(
+                contract
+                    .validate_access(entitlement, content, device, 1, [b'U', b'S'], 0)
+                    .is_ok()
+            );
         }
 
         #[ink::test]
@@ -449,16 +453,18 @@ pub mod media_policy {
             };
 
             // Should pass within playback window
-            assert!(contract
-                .validate_access(
-                    entitlement.clone(),
-                    content.clone(),
-                    device.clone(),
-                    0,
-                    [b'U', b'S'],
-                    1100 + 10000
-                )
-                .is_ok());
+            assert!(
+                contract
+                    .validate_access(
+                        entitlement.clone(),
+                        content.clone(),
+                        device.clone(),
+                        0,
+                        [b'U', b'S'],
+                        1100 + 10000
+                    )
+                    .is_ok()
+            );
 
             // Should fail after playback window expires (48h after first play)
             assert_eq!(
@@ -519,9 +525,11 @@ pub mod media_policy {
 
             // Should pass with HDCP Type 1
             device.supports_hdcp_type_1 = true;
-            assert!(contract
-                .validate_access(entitlement, content, device, 0, [b'U', b'S'], 0)
-                .is_ok());
+            assert!(
+                contract
+                    .validate_access(entitlement, content, device, 0, [b'U', b'S'], 0)
+                    .is_ok()
+            );
         }
     }
 }

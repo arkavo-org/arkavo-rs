@@ -537,6 +537,13 @@ export MEDIA_METRICS_SUBJECT=media.metrics
 - KAS Public Key: `http://localhost:8443/kas/v2/kas_public_key`
 - Media Key Request: `http://localhost:8443/media/v1/key-request`
 
+## Versioning
+
+- **Every PR bumps `version` in `Cargo.toml`** (and the matching `arkavo-rs` entry in `Cargo.lock`, via `cargo update -p arkavo-rs --offline` or any build), so the version in the build log names what is running.
+- Semver while pre-1.0: a new feature, route or configuration variable, or a change to an external contract → minor (`0.9.5` → `0.10.0`); a fix, refactor, dependency, docs or CI change → patch (`0.10.0` → `0.10.1`).
+- Say the new version in the PR title, e.g. `feat(x): … (0.10.0)`. If `main` moves past your version before merging, re-bump above it.
+- Tag the merge commit `v<version>` when it is deployed.
+
 ## Important: Vendor Directory
 
 - `vendor/fpssdk/` contains Apple copyrighted FairPlay SDK code — **NEVER modify these files**
