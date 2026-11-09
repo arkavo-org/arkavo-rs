@@ -603,7 +603,27 @@ async fn apple_app_site_association_handler(
     )
 }
 
+/// The FairPlay credentials directory: `FAIRPLAY_CREDENTIALS_PATH`, or the
+/// SDK's bundled sample credentials.
+#[cfg(feature = "fairplay")]
+fn fairplay_credentials_path() -> std::path::PathBuf {
+    std::env::var_os("FAIRPLAY_CREDENTIALS_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            "./vendor/FairPlay_Streaming_Server_SDK_26/Development/Key_Server_Module/credentials"
+                .into()
+        })
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // First, while this is the only thread: the FairPlay SDK reads its paths
+    // from the environment, and setting it once threads exist (the stderr
+    // scrubber's, tokio's, the resolver's) races their getenv.
+    #[cfg(feature = "fairplay")]
+    // SAFETY: no other thread exists yet.
+    unsafe {
+        fairplay_wrapper::prepare_sdk_env(&fairplay_credentials_path())
+    };
     // Before anything writes to stderr: the FairPlay SDK's error lines can carry the
     // license request (#83)
     #[cfg(all(feature = "fairplay", unix))]
@@ -860,13 +880,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         use modules::fairplay::FairPlayHandler;
         use std::path::PathBuf;
 
-        let credentials_path = std::env::var("FAIRPLAY_CREDENTIALS_PATH").unwrap_or_else(|_| {
+        if std::env::var_os("FAIRPLAY_CREDENTIALS_PATH").is_none() {
             nanotdf::warn!("FAIRPLAY_CREDENTIALS_PATH not set, using default");
-            "./vendor/FairPlay_Streaming_Server_SDK_26/Development/Key_Server_Module/credentials"
-                .to_string()
-        });
-
-        match FairPlayHandler::new(PathBuf::from(credentials_path)) {
+        }
+        match FairPlayHandler::new(fairplay_credentials_path()) {
             Ok(handler) => {
                 nanotdf::info!("FairPlay handler initialized successfully");
                 Arc::new(handler)

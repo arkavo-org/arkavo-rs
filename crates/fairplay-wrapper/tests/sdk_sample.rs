@@ -25,6 +25,10 @@ fn issue_sample(name: &str, content_type: ContentType) -> Option<CkcResponse> {
         .decode(item["spc"].as_str().unwrap())
         .unwrap();
 
+    static ENV: std::sync::Once = std::sync::Once::new();
+    // SAFETY: test-only. Both tests prepare the same values once, and nothing
+    // in this test binary reads the environment concurrently with it.
+    ENV.call_once(|| unsafe { fairplay_wrapper::prepare_sdk_env(&ksm.join("credentials")) });
     let server = FairPlayKeyServer::new(ksm.join("credentials")).expect("credentials");
     let response = server
         .process_spc(SpcRequest {
