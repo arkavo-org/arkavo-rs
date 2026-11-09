@@ -100,7 +100,7 @@ impl ChainValidator {
             alg => {
                 return Err(ValidationError::SignatureInvalid {
                     reason: format!("Unsupported algorithm: {}", alg),
-                })
+                });
             }
         };
 

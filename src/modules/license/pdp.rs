@@ -3,7 +3,7 @@
 
 use super::LicenseError;
 use reqwest::redirect::Policy;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
@@ -71,9 +71,10 @@ impl PlatformPdp {
         let mut guard = self.service_token.lock().await;
         if !force
             && let Some((t, exp)) = guard.as_ref()
-                && Instant::now() + REFRESH_MARGIN < *exp {
-                    return Ok(t.clone());
-                }
+            && Instant::now() + REFRESH_MARGIN < *exp
+        {
+            return Ok(t.clone());
+        }
         let resp = self
             .http
             .post(&self.token_url)
@@ -175,7 +176,7 @@ mod tests {
     }
 
     async fn token_mock(server: &MockServer, times: u64) {
-        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
         let expected = format!(
             "Basic {}",
             STANDARD.encode(format!("{CLIENT_ID}:{}", test_secret()))

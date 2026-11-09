@@ -11,23 +11,23 @@
 
 use super::auth::{AuthError, SessionVerifier};
 use super::report::{
-    identifier, normalised_note, Action, InvalidReport, ReportRecord, ReportSubmission, Status,
-    StatusUpdate,
+    Action, InvalidReport, ReportRecord, ReportSubmission, Status, StatusUpdate, identifier,
+    normalised_note,
 };
 use super::store::{Cursor, Inserted, Lift, ReportStore, StoreError, Suspension, SuspensionStore};
 use crate::modules::authzen::cwt_subject::subject_id_bind;
 use async_trait::async_trait;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use nanotdf::{error, info, warn};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -482,7 +482,7 @@ pub async fn update_report(
                 return err_json(
                     StatusCode::BAD_REQUEST,
                     "a suspend note is at most 1024 characters",
-                )
+                );
             }
             Some(_) => {}
         }
@@ -611,10 +611,10 @@ pub async fn get_suspension(
     {
         Ok(_) => {}
         Err(AuthError::Unauthenticated) => {
-            return err_json(StatusCode::UNAUTHORIZED, "service credential required")
+            return err_json(StatusCode::UNAUTHORIZED, "service credential required");
         }
         Err(AuthError::Forbidden) => {
-            return err_json(StatusCode::FORBIDDEN, "not a suspension reader")
+            return err_json(StatusCode::FORBIDDEN, "not a suspension reader");
         }
         Err(e) => return auth_fail(e),
     }
@@ -1435,13 +1435,14 @@ mod tests {
         let (status, _, body) = call(&h.app, "PATCH", &uri, Some(&m), Some(action)).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["status"], "actioned");
-        assert!(h
-            .notes
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|n| n.0 == "moderation.actions.takedown"));
+        assert!(
+            h.notes
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|n| n.0 == "moderation.actions.takedown")
+        );
     }
 
     #[tokio::test]

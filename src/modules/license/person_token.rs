@@ -5,10 +5,10 @@
 use super::LicenseError;
 use crate::modules::authzen::cose_keys::CoseKeyCache;
 use crate::modules::authzen::cwt_verify::{
-    header_kid, verify_header_token, VerifyError, VerifyOpts,
+    VerifyError, VerifyOpts, header_kid, verify_header_token,
 };
-use axum::http::header::AUTHORIZATION;
 use axum::http::HeaderMap;
+use axum::http::header::AUTHORIZATION;
 
 const PASSKEY_AUD: &str = "arkavo";
 
@@ -75,7 +75,7 @@ impl PersonTokenVerifier {
         let key = match self.keys.resolve(&kid).await {
             Ok(k) => k,
             Err(VerifyError::KeySet) => {
-                return Err(LicenseError::Unavailable("identity keys unavailable"))
+                return Err(LicenseError::Unavailable("identity keys unavailable"));
             }
             Err(_) => return Err(LicenseError::Unauthenticated("unknown signing key")),
         };

@@ -6,17 +6,17 @@
 /// This enables efficient workflows where multi-gigabyte video files don't need to be uploaded
 /// for signing - only metadata and pre-computed hashes are transmitted.
 use axum::{
+    Json,
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
-use c2pa::assertions::{c2pa_action, Action, Actions, DigitalSourceType, SoftwareAgent};
+use c2pa::assertions::{Action, Actions, DigitalSourceType, SoftwareAgent, c2pa_action};
 use c2pa::{Builder, ClaimGeneratorInfo, Context, HashRange, Reader, SigningAlg};
 
 use super::c2pa_kms::{
-    connect_with_retry, DigestSigner, KmsKey, RemoteKeySigner, CONNECT_ATTEMPTS,
-    CONNECT_FIRST_RETRY,
+    CONNECT_ATTEMPTS, CONNECT_FIRST_RETRY, DigestSigner, KmsKey, RemoteKeySigner,
+    connect_with_retry,
 };
 use super::license::person_token::PersonTokenVerifier;
 use axum::http::HeaderMap;
@@ -138,7 +138,7 @@ impl C2paConfig {
             Err(_) => {
                 return Err(
                     "C2PA_SIGNER not set (kms for production, file for development)".to_string(),
-                )
+                );
             }
         };
 
@@ -184,7 +184,9 @@ impl C2paConfig {
             ),
             Err(_) => {
                 if tsa_url.is_some() {
-                    warn!("C2PA_TSA_TRUST_ANCHORS_PATH not set: /c2pa/v1/validate will report every timestamp untrusted");
+                    warn!(
+                        "C2PA_TSA_TRUST_ANCHORS_PATH not set: /c2pa/v1/validate will report every timestamp untrusted"
+                    );
                 }
                 String::new()
             }
@@ -508,7 +510,7 @@ pub async fn sign_manifest(
                 StatusCode::BAD_REQUEST,
                 "exclusion_ranges must be exactly one range with box_type \"uuid\" covering the C2PA manifest box",
                 serde_json::json!({}),
-            )
+            );
         }
     };
 
@@ -1591,10 +1593,12 @@ mod tests {
         assert_eq!(info["name"], "Arkavo Creator");
         assert_eq!(info["version"], "1.4.2");
         assert_eq!(info["specVersion"], C2PA_SPEC_VERSION);
-        assert!(info["org.arkavo.signer"]
-            .as_str()
-            .unwrap()
-            .starts_with("arks/"));
+        assert!(
+            info["org.arkavo.signer"]
+                .as_str()
+                .unwrap()
+                .starts_with("arks/")
+        );
 
         let info = generator("ArkavoKit c2pa-sign");
         assert_eq!(info["name"], "Arkavo Creator");
@@ -2309,10 +2313,10 @@ mod sign_endpoint_tests {
     use super::*;
     use crate::modules::authzen::cose_keys::CoseKeyCache;
     use crate::modules::authzen::cwt_verify::test_support::{keypair, mint_map};
+    use axum::Router;
     use axum::body::Body;
     use axum::http::Request;
     use axum::routing::post;
-    use axum::Router;
     use ciborium::value::Value;
     use tower::ServiceExt;
 
@@ -2674,7 +2678,7 @@ mod sign_endpoint_tests {
     }
 
     fn device_state(limit: usize) -> Arc<C2paSigningState> {
-        use crate::modules::c2pa_device::{tests::CREATOR, DeviceTokenVerifier};
+        use crate::modules::c2pa_device::{DeviceTokenVerifier, tests::CREATOR};
         let mut config = tests::make_test_config();
         config.require_device = true;
         config.device_app_ids = crate::modules::c2pa_device::parse_app_ids(CREATOR);

@@ -106,9 +106,10 @@ impl CoseKeyCache {
         {
             let cache = self.cache.read().await;
             if let Some(last) = cache.last_fetch
-                && last.elapsed() < self.refresh_throttle() {
-                    return Ok(());
-                }
+                && last.elapsed() < self.refresh_throttle()
+            {
+                return Ok(());
+            }
         }
 
         let _guard = self.fetch_lock.lock().await;
@@ -116,9 +117,10 @@ impl CoseKeyCache {
         {
             let cache = self.cache.read().await;
             if let Some(last) = cache.last_fetch
-                && last.elapsed() < self.refresh_throttle() {
-                    return Ok(());
-                }
+                && last.elapsed() < self.refresh_throttle()
+            {
+                return Ok(());
+            }
         }
 
         let resp = self.http.get(url).send().await.map_err(|e| {

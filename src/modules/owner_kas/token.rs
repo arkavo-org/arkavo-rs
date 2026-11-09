@@ -13,12 +13,12 @@
 
 use crate::modules::authzen::cose_keys::CoseKeyCache;
 use crate::modules::authzen::cwt_verify::VerifyError;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ciborium::value::Value;
-use coset::{iana, CborSerializable};
-use p256::ecdsa::signature::Verifier;
+use coset::{CborSerializable, iana};
 use p256::ecdsa::Signature;
+use p256::ecdsa::signature::Verifier;
 
 /// The protected header's `content type` (label 3).
 pub const CONTENT_TYPE: &str = "application/owner-kas+cwt";
@@ -293,8 +293,8 @@ pub fn verify_signed_request(body: &[u8], bearer: &OwnerKasToken, now: i64) -> b
 pub(crate) mod test_support {
     use super::*;
     use coset::{CoseSign1Builder, HeaderBuilder};
-    use p256::ecdsa::signature::Signer;
     use p256::ecdsa::SigningKey;
+    use p256::ecdsa::signature::Signer;
 
     pub const ISS: &str = "https://identity.arkavo.net";
     pub const KID: &[u8] = b"identity-test";

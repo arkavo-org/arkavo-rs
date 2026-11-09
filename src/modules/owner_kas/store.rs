@@ -325,9 +325,11 @@ impl QueueStore for RedisQueueStore {
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
             if let Some(r) = self.load(&mut conn, &id).await?
-                && r.response.is_none() && r.deadline >= now {
-                    out.push(r);
-                }
+                && r.response.is_none()
+                && r.deadline >= now
+            {
+                out.push(r);
+            }
         }
         Ok(out)
     }

@@ -9,8 +9,8 @@ use std::io::BufReader;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::extract::ConnectInfo;
 use axum::Router;
+use axum::extract::ConnectInfo;
 use bytes::Buf;
 use http::{Method, StatusCode};
 use nanotdf::{debug, info};
@@ -244,11 +244,12 @@ async fn handle_h3_request(
         .headers
         .contains_key(http::header::CONTENT_LENGTH)
         && let Some(len) = http_body::Body::size_hint(&resp_body).exact()
-            && let Ok(value) = http::HeaderValue::from_str(&len.to_string()) {
-                resp_parts
-                    .headers
-                    .insert(http::header::CONTENT_LENGTH, value);
-            }
+        && let Ok(value) = http::HeaderValue::from_str(&len.to_string())
+    {
+        resp_parts
+            .headers
+            .insert(http::header::CONTENT_LENGTH, value);
+    }
 
     stream
         .send_response(http::Response::from_parts(resp_parts, ()))
@@ -258,9 +259,10 @@ async fn handle_h3_request(
         use http_body_util::BodyExt;
         while let Some(frame) = resp_body.frame().await {
             if let Ok(data) = frame?.into_data()
-                && !data.is_empty() {
-                    stream.send_data(data).await?;
-                }
+                && !data.is_empty()
+            {
+                stream.send_data(data).await?;
+            }
         }
     }
     stream.finish().await?;

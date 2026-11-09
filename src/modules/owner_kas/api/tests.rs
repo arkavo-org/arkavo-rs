@@ -1,13 +1,13 @@
 use super::*;
 use crate::modules::authzen::cose_keys::CoseKeyCache;
 use crate::modules::authzen::cwt_verify::test_support::mint_map;
-use crate::modules::owner_kas::identity::memory::MemoryDirectory;
 use crate::modules::owner_kas::identity::RouteInfo;
+use crate::modules::owner_kas::identity::memory::MemoryDirectory;
 use crate::modules::owner_kas::store::memory::MemoryQueue;
-use crate::modules::owner_kas::token::test_support::{
-    identity_key, request_key, Mint, ISS, KID, ROUTE, SUB,
-};
 use crate::modules::owner_kas::token::LIFETIME_SECONDS as LIFETIME;
+use crate::modules::owner_kas::token::test_support::{
+    ISS, KID, Mint, ROUTE, SUB, identity_key, request_key,
+};
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Method, Request};

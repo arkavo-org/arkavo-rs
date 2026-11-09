@@ -16,7 +16,7 @@
 use crate::modules::authzen::cose_keys::CoseKeyCache;
 use crate::modules::authzen::cwt_subject::DEVICECHECK_AUD;
 use crate::modules::authzen::cwt_verify::{
-    header_kid, verify_header_token, VerifyError, VerifyOpts,
+    VerifyError, VerifyOpts, header_kid, verify_header_token,
 };
 use crate::modules::license::person_token::Person;
 use axum::http::HeaderMap;

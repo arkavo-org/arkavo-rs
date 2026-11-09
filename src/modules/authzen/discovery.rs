@@ -1,6 +1,6 @@
 //! AuthZEN well-known discovery document (profile MUST; no search in v1).
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub fn document(policy_decision_point: &str) -> Value {
     let base = policy_decision_point.trim_end_matches('/');

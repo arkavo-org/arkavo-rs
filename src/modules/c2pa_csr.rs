@@ -17,8 +17,8 @@
 use crate::modules::c2pa_kms::DigestSigner;
 use p256::pkcs8::DecodePublicKey;
 use rcgen::{
-    CertificateParams, CustomExtension, DistinguishedName, DnType, KeyPair, RemoteKeyPair,
-    SignatureAlgorithm, PKCS_ECDSA_P256_SHA256,
+    CertificateParams, CustomExtension, DistinguishedName, DnType, KeyPair, PKCS_ECDSA_P256_SHA256,
+    RemoteKeyPair, SignatureAlgorithm,
 };
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -220,7 +220,7 @@ pub async fn run_cli(args: Vec<String>) -> Result<(), String> {
                 return Err(format!(
                     "give exactly one of --kms-key-id and --key-file\n\n{}",
                     USAGE
-                ))
+                ));
             }
         };
 
@@ -337,7 +337,9 @@ mod tests {
         // 1.3.6.1.4.1.62558.2.1: 62558 needs three base-128 groups
         assert_eq!(
             oid(OID_KP_C2PA_CLAIM_SIGNING),
-            [0x06, 0x0a, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x83, 0xe8, 0x5e, 0x02, 0x01]
+            [
+                0x06, 0x0a, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x83, 0xe8, 0x5e, 0x02, 0x01
+            ]
         );
         assert_eq!(
             oid(OID_KP_EMAIL_PROTECTION),

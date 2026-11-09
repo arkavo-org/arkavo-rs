@@ -1,14 +1,14 @@
 //! Arkavo FairPlay key-envelope profile over a single standard OpenTDF segment.
 //! The consumer receives a CKC only. Neither the envelope nor its keys are returned.
+use super::LicenseError;
 use super::strict_json::has_unique_keys;
 use super::tdf_policy::{
-    component_shape, policy_subject, unwrap_key, verify_policy_binding, CheckedComponent,
-    CheckedPolicy, PolicyKeys, COMPONENTS_KEY, FORBIDDEN_MANIFEST, KEY_BINDING_PREFIX,
+    COMPONENTS_KEY, CheckedComponent, CheckedPolicy, FORBIDDEN_MANIFEST, KEY_BINDING_PREFIX,
+    PolicyKeys, component_shape, policy_subject, unwrap_key, verify_policy_binding,
 };
-use super::LicenseError;
-use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
-use base64::engine::general_purpose::STANDARD;
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use hmac::{Hmac, Mac};
 use rsa::pkcs8::EncodePublicKey;
 use rsa::{RsaPrivateKey, RsaPublicKey};
@@ -291,9 +291,10 @@ fn safe_name(name: &str) -> bool {
         if let Some(index) = name
             .strip_prefix(&format!("{track}-segment"))
             .and_then(|s| s.strip_suffix(".m4s"))
-            && let Ok(number) = index.parse::<u32>() {
-                return number <= 4092 && number.to_string() == index;
-            }
+            && let Ok(number) = index.parse::<u32>()
+        {
+            return number <= 4092 && number.to_string() == index;
+        }
     }
     false
 }
@@ -305,7 +306,7 @@ pub(crate) mod tests {
     use crate::modules::license::tdf_policy::check_manifest_with_payload;
     use rand_core::OsRng;
     use rsa::Oaep;
-    use rsa::{pkcs1::DecodeRsaPrivateKey, pkcs8::DecodePrivateKey, RsaPublicKey};
+    use rsa::{RsaPublicKey, pkcs1::DecodeRsaPrivateKey, pkcs8::DecodePrivateKey};
     use serde_json::json;
     use sha1::Sha1;
 

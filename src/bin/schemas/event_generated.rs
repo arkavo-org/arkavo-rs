@@ -97,18 +97,22 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for Action {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-            let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
-            Self(b)
-        }}
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            unsafe {
+                let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
+                Self(b)
+            }
+        }
     }
 
     impl flatbuffers::Push for Action {
         type Output = Action;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
-            flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }}
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            unsafe {
+                flatbuffers::emplace_scalar::<i8>(dst, self.0);
+            }
+        }
     }
 
     impl flatbuffers::EndianScalar for Action {
@@ -204,18 +208,22 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for ActionStatus {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-            let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
-            Self(b)
-        }}
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            unsafe {
+                let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
+                Self(b)
+            }
+        }
     }
 
     impl flatbuffers::Push for ActionStatus {
         type Output = ActionStatus;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
-            flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }}
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            unsafe {
+                flatbuffers::emplace_scalar::<i8>(dst, self.0);
+            }
+        }
     }
 
     impl flatbuffers::EndianScalar for ActionStatus {
@@ -307,18 +315,22 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for EntityType {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-            let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
-            Self(b)
-        }}
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            unsafe {
+                let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
+                Self(b)
+            }
+        }
     }
 
     impl flatbuffers::Push for EntityType {
         type Output = EntityType;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
-            flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }}
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            unsafe {
+                flatbuffers::emplace_scalar::<i8>(dst, self.0);
+            }
+        }
     }
 
     impl flatbuffers::EndianScalar for EntityType {
@@ -402,18 +414,22 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for AttributeType {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-            let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
-            Self(b)
-        }}
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            unsafe {
+                let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
+                Self(b)
+            }
+        }
     }
 
     impl flatbuffers::Push for AttributeType {
         type Output = AttributeType;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
-            flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }}
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            unsafe {
+                flatbuffers::emplace_scalar::<i8>(dst, self.0);
+            }
+        }
     }
 
     impl flatbuffers::EndianScalar for AttributeType {
@@ -505,18 +521,22 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for EventData {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-            let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
-            Self(b)
-        }}
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            unsafe {
+                let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
+                Self(b)
+            }
+        }
     }
 
     impl flatbuffers::Push for EventData {
         type Output = EventData;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
-            flatbuffers::emplace_scalar::<u8>(dst, self.0);
-        }}
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            unsafe {
+                flatbuffers::emplace_scalar::<u8>(dst, self.0);
+            }
+        }
     }
 
     impl flatbuffers::EndianScalar for EventData {
@@ -557,11 +577,13 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for UserEvent<'a> {
         type Inner = UserEvent<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-            Self {
-                _tab: flatbuffers::Table::new(buf, loc),
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            unsafe {
+                Self {
+                    _tab: flatbuffers::Table::new(buf, loc),
+                }
             }
-        }}
+        }
     }
 
     impl<'a> UserEvent<'a> {
@@ -810,11 +832,13 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for CacheEvent<'a> {
         type Inner = CacheEvent<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-            Self {
-                _tab: flatbuffers::Table::new(buf, loc),
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            unsafe {
+                Self {
+                    _tab: flatbuffers::Table::new(buf, loc),
+                }
             }
-        }}
+        }
     }
 
     impl<'a> CacheEvent<'a> {
@@ -1006,11 +1030,13 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for RouteEvent<'a> {
         type Inner = RouteEvent<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-            Self {
-                _tab: flatbuffers::Table::new(buf, loc),
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            unsafe {
+                Self {
+                    _tab: flatbuffers::Table::new(buf, loc),
+                }
             }
-        }}
+        }
     }
 
     impl<'a> RouteEvent<'a> {
@@ -1297,11 +1323,13 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for Event<'a> {
         type Inner = Event<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-            Self {
-                _tab: flatbuffers::Table::new(buf, loc),
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            unsafe {
+                Self {
+                    _tab: flatbuffers::Table::new(buf, loc),
+                }
             }
-        }}
+        }
     }
 
     impl<'a> Event<'a> {
@@ -1638,16 +1666,16 @@ pub mod arkavo {
     /// Assumes, without verification, that a buffer of bytes contains a Event and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid `Event`.
-    pub unsafe fn root_as_event_unchecked(buf: &[u8]) -> Event<'_> { unsafe {
-        flatbuffers::root_unchecked::<Event>(buf)
-    }}
+    pub unsafe fn root_as_event_unchecked(buf: &[u8]) -> Event<'_> {
+        unsafe { flatbuffers::root_unchecked::<Event>(buf) }
+    }
     #[inline]
     /// Assumes, without verification, that a buffer of bytes contains a size prefixed Event and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid size prefixed `Event`.
-    pub unsafe fn size_prefixed_root_as_event_unchecked(buf: &[u8]) -> Event<'_> { unsafe {
-        flatbuffers::size_prefixed_root_unchecked::<Event>(buf)
-    }}
+    pub unsafe fn size_prefixed_root_as_event_unchecked(buf: &[u8]) -> Event<'_> {
+        unsafe { flatbuffers::size_prefixed_root_unchecked::<Event>(buf) }
+    }
     #[inline]
     pub fn finish_event_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(
         fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,

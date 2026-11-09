@@ -71,9 +71,10 @@ impl ApnsPusher {
         let mut cached = self.token.lock().await;
         if !renew
             && let Some((t, at)) = cached.as_ref()
-                && at.elapsed() < PROVIDER_TOKEN_TTL {
-                    return Some(t.clone());
-                }
+            && at.elapsed() < PROVIDER_TOKEN_TTL
+        {
+            return Some(t.clone());
+        }
         let header = serde_json::json!({ "alg": "ES256", "kid": self.config.key_id });
         let claims = serde_json::json!({
             "iss": self.config.team_id,

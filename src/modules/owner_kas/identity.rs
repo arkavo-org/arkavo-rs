@@ -127,9 +127,10 @@ impl IdentityDirectory {
         let mut guard = self.token.lock().await;
         if !force
             && let Some((t, exp)) = guard.as_ref()
-                && Instant::now() + REFRESH_MARGIN < *exp {
-                    return Some(t.clone());
-                }
+            && Instant::now() + REFRESH_MARGIN < *exp
+        {
+            return Some(t.clone());
+        }
         let mut form = vec![("grant_type", "client_credentials".to_string())];
         if let Some(aud) = &self.config.audience {
             form.push(("audience", aud.clone()));
@@ -213,9 +214,10 @@ impl RouteDirectory for IdentityDirectory {
     async fn route(&self, route_id: &str) -> Result<RouteInfo, LookupError> {
         let cached = self.cache.lock().await.get(route_id).cloned();
         if let Some((at, info)) = &cached
-            && at.elapsed() < FRESH {
-                return Ok(info.clone());
-            }
+            && at.elapsed() < FRESH
+        {
+            return Ok(info.clone());
+        }
         match self.fetch(route_id).await {
             Ok(info) => {
                 let mut cache = self.cache.lock().await;
@@ -245,9 +247,9 @@ impl RouteDirectory for IdentityDirectory {
                 .push
                 .as_ref()
                 .is_some_and(|p| p.apns_token == apns_token)
-            {
-                info.push = None;
-            }
+        {
+            info.push = None;
+        }
         let Some(token) = self.service_token(false).await else {
             return;
         };

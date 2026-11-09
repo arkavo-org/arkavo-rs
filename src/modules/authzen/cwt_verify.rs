@@ -6,8 +6,8 @@
 #![allow(dead_code)]
 
 use crate::modules::authzen::cwt_subject::{Aud, DecodedClaims};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ciborium::value::Value;
 use coset::{CborSerializable, CoseSign1, TaggedCborSerializable};
 use p256::ecdsa::signature::Verifier;
@@ -91,9 +91,10 @@ pub fn verify_tagged_bytes(
         return Err(VerifyError::MissingProtectedKid);
     }
     if let Some(want) = opts.expected_kid
-        && sign1.protected.header.key_id.as_slice() != want {
-            return Err(VerifyError::UnknownKid);
-        }
+        && sign1.protected.header.key_id.as_slice() != want
+    {
+        return Err(VerifyError::UnknownKid);
+    }
     sign1
         .verify_signature(b"", |sig, data| {
             let sig = Signature::from_slice(sig).map_err(|_| ())?;
@@ -110,13 +111,15 @@ pub fn verify_tagged_bytes(
     let payload = sign1.payload.as_deref().ok_or(VerifyError::Malformed)?;
     let claims = parse_claims(payload)?;
     if let Some(want) = opts.expected_iss
-        && claims.iss != want {
-            return Err(VerifyError::Issuer);
-        }
+        && claims.iss != want
+    {
+        return Err(VerifyError::Issuer);
+    }
     if let Some(want) = opts.expected_aud
-        && !claims.aud.contains(want) {
-            return Err(VerifyError::Audience);
-        }
+        && !claims.aud.contains(want)
+    {
+        return Err(VerifyError::Audience);
+    }
     if claims.iat > claims.exp {
         return Err(VerifyError::Malformed);
     }
@@ -127,9 +130,10 @@ pub fn verify_tagged_bytes(
         return Err(VerifyError::NotYetValid);
     }
     if let Some(nbf) = claims.nbf
-        && (nbf as i64) > opts.now + SKEW_SECS {
-            return Err(VerifyError::NotYetValid);
-        }
+        && (nbf as i64) > opts.now + SKEW_SECS
+    {
+        return Err(VerifyError::NotYetValid);
+    }
     Ok(claims)
 }
 
@@ -364,9 +368,9 @@ fn cbor_to_json(v: &Value) -> serde_json::Value {
 #[cfg(test)]
 pub mod test_support {
     use super::*;
-    use coset::{iana, CoseSign1Builder, HeaderBuilder};
-    use p256::ecdsa::signature::Signer;
+    use coset::{CoseSign1Builder, HeaderBuilder, iana};
     use p256::ecdsa::SigningKey;
+    use p256::ecdsa::signature::Signer;
 
     pub fn keypair() -> (SigningKey, VerifyingKey) {
         let sk = SigningKey::from_slice(&[0x17u8; 32]).expect("scalar");
