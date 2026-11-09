@@ -333,7 +333,7 @@ dependencies = [
 
 [[package]]
 name = "arkavo-rs"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "aes-gcm",
  "async-nats",
@@ -342,7 +342,7 @@ dependencies = [
  "aws-sdk-dynamodb",
  "aws-sdk-kms",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "blake2",
  "bs58",
  "bytes",
@@ -372,9 +372,6 @@ dependencies = [
  "libc",
  "log",
  "moka",
- "mp4parse",
- "once_cell",
- "opentdf",
  "opentdf-crypto",
  "opentdf-kas",
  "opentdf-protocol",
@@ -382,7 +379,6 @@ dependencies = [
  "p384 0.13.1",
  "parity-scale-codec",
  "pem 3.0.6",
- "pkcs8 0.10.2",
  "quinn",
  "rand_core 0.6.4",
  "rcgen",
@@ -408,7 +404,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "tower 0.4.13",
- "twox-hash 1.6.3",
+ "twox-hash 2.1.5",
  "unicode-segmentation",
  "url",
  "uuid",
@@ -751,7 +747,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faac5829c2b74c28f830747e7818ccfb684261b5f48a1118b1e2a13d36dfab13"
 dependencies = [
  "aws-lc-sys",
- "untrusted 0.7.1",
  "zeroize",
 ]
 
@@ -1296,15 +1291,6 @@ name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
-
-[[package]]
-name = "bitreader"
-version = "0.3.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "886559b1e163d56c765bc3a985febb4eee8009f625244511d8ee3c432e08c066"
-dependencies = [
- "cfg-if",
-]
 
 [[package]]
 name = "bitvec"
@@ -2880,7 +2866,7 @@ checksum = "4a61bffc6f807b136c3efeeac295edde2c65b1e345de7ea777e75f63de7436c6"
 name = "fairplay-wrapper"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "env_logger 0.11.11",
  "fpssdk",
  "hex",
@@ -2888,15 +2874,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
-]
-
-[[package]]
-name = "fallible_collections"
-version = "0.4.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a88c69768c0a15262df21899142bc6df9b9b823546d4b4b9a7bc2d6c448ec6fd"
-dependencies = [
- "hashbrown 0.13.2",
 ]
 
 [[package]]
@@ -3360,15 +3337,6 @@ checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
 name = "hashbrown"
-version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43a3c133739dddd0d2990f9a4bdf8eb4b21ef50e4851ca85ab661199821d510e"
-dependencies = [
- "ahash",
-]
-
-[[package]]
-name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
@@ -3594,7 +3562,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots",
 ]
 
 [[package]]
@@ -4400,11 +4367,10 @@ dependencies = [
 
 [[package]]
 name = "jsonwebtoken"
-version = "10.4.0"
+version = "11.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eba32bfb4ffdeaca3e34431072faf01745c9b26d25504aa7a6cf5684334fc4fc"
+checksum = "e75fe14a82d81e5f5af639997db37d8b96045938a7ac6ab18cdbe1c7467e05e1"
 dependencies = [
- "aws-lc-rs",
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
  "getrandom 0.2.17",
@@ -4681,20 +4647,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mp4parse"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63a35203d3c6ce92d5251c77520acb2e57108c88728695aa883f70023624c570"
-dependencies = [
- "bitreader",
- "byteorder",
- "fallible_collections",
- "log",
- "num-traits",
- "static_assertions",
-]
-
-[[package]]
 name = "multi-stash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4965,38 +4917,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "opentdf"
-version = "0.16.1"
-source = "git+https://github.com/arkavo-org/opentdf-rs?tag=0.16.1#7cdc9451a216525d62c4f01443410749fe44476d"
-dependencies = [
- "aes-gcm",
- "aws-lc-rs",
- "base64 0.22.1",
- "chrono",
- "ed25519-dalek 2.2.0",
- "jsonwebtoken",
- "opentdf-crypto",
- "opentdf-protocol",
- "pem 3.0.6",
- "rand 0.8.8",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "url",
- "uuid",
- "zip",
-]
-
-[[package]]
 name = "opentdf-crypto"
 version = "0.16.1"
 source = "git+https://github.com/arkavo-org/opentdf-rs?tag=0.16.1#7cdc9451a216525d62c4f01443410749fe44476d"
 dependencies = [
  "aes",
  "aes-gcm",
- "aws-lc-rs",
  "base64 0.22.1",
  "hkdf",
  "hmac 0.12.1",
@@ -5005,7 +4931,6 @@ dependencies = [
  "p256 0.13.2",
  "p384 0.13.1",
  "p521 0.13.3",
- "pem 3.0.6",
  "pkcs8 0.10.2",
  "rand 0.8.8",
  "serde",
@@ -6084,7 +6009,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots",
 ]
 
 [[package]]
@@ -6123,7 +6047,7 @@ dependencies = [
  "cfg-if",
  "getrandom 0.2.17",
  "libc",
- "untrusted 0.9.0",
+ "untrusted",
  "windows-sys 0.52.0",
 ]
 
@@ -6331,7 +6255,7 @@ dependencies = [
  "aws-lc-rs",
  "ring",
  "rustls-pki-types",
- "untrusted 0.9.0",
+ "untrusted",
 ]
 
 [[package]]
@@ -8283,12 +8207,6 @@ checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "untrusted"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
-
-[[package]]
-name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
@@ -9089,14 +9007,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec2e3161de27091f18a831d9494e9c53378a34833af5c1dda35ad85849da18d6"
 dependencies = [
  "crc32fast",
- "flate2",
  "getrandom 0.4.3",
  "indexmap 2.14.2",
  "memchr",
  "nix",
  "typed-path",
  "windows-sys 0.61.2",
- "zopfli",
 ]
 
 [[package]]
@@ -9110,15 +9026,3 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
-
-[[package]]
-name = "zopfli"
-version = "0.8.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aaf7fc5d30c28483d93805c4a5e12b05bbb52407fa67c5f8bd552374cd01fb11"
-dependencies = [
- "bumpalo",
- "crc32fast",
- "log",
- "simd-adler32",
-]

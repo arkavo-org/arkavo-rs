@@ -179,11 +179,10 @@ pub mod media_policy {
             }
 
             // If manifest is present, validate it
-            if let Some(ref manifest) = content.c2pa_manifest {
-                if !manifest.is_valid {
+            if let Some(ref manifest) = content.c2pa_manifest
+                && !manifest.is_valid {
                     return Err(Error::C2paValidationFailed);
                 }
-            }
 
             Ok(())
         }

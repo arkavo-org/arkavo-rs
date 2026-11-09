@@ -69,13 +69,11 @@ impl PlatformPdp {
 
     async fn service_token(&self, force: bool) -> Result<String, LicenseError> {
         let mut guard = self.service_token.lock().await;
-        if !force {
-            if let Some((t, exp)) = guard.as_ref() {
-                if Instant::now() + REFRESH_MARGIN < *exp {
+        if !force
+            && let Some((t, exp)) = guard.as_ref()
+                && Instant::now() + REFRESH_MARGIN < *exp {
                     return Ok(t.clone());
                 }
-            }
-        }
         let resp = self
             .http
             .post(&self.token_url)

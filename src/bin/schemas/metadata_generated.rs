@@ -77,18 +77,18 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for RatingLevel {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
             Self(b)
-        }
+        }}
     }
 
     impl flatbuffers::Push for RatingLevel {
         type Output = RatingLevel;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
             flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }
+        }}
     }
 
     impl flatbuffers::EndianScalar for RatingLevel {
@@ -204,18 +204,18 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for FormatType {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
             Self(b)
-        }
+        }}
     }
 
     impl flatbuffers::Push for FormatType {
         type Output = FormatType;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
             flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }
+        }}
     }
 
     impl flatbuffers::EndianScalar for FormatType {
@@ -315,18 +315,18 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for DataEncoding {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
             Self(b)
-        }
+        }}
     }
 
     impl flatbuffers::Push for DataEncoding {
         type Output = DataEncoding;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
             flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }
+        }}
     }
 
     impl flatbuffers::EndianScalar for DataEncoding {
@@ -434,18 +434,18 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for ArchiveType {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
             Self(b)
-        }
+        }}
     }
 
     impl flatbuffers::Push for ArchiveType {
         type Output = ArchiveType;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
             flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }
+        }}
     }
 
     impl flatbuffers::EndianScalar for ArchiveType {
@@ -484,11 +484,11 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for Rating<'a> {
         type Inner = Rating<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             Self {
                 _tab: flatbuffers::Table::new(buf, loc),
             }
-        }
+        }}
     }
 
     impl<'a> Rating<'a> {
@@ -752,11 +752,11 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for Purpose<'a> {
         type Inner = Purpose<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             Self {
                 _tab: flatbuffers::Table::new(buf, loc),
             }
-        }
+        }}
     }
 
     impl<'a> Purpose<'a> {
@@ -1034,11 +1034,11 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for FormatInfo<'a> {
         type Inner = FormatInfo<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             Self {
                 _tab: flatbuffers::Table::new(buf, loc),
             }
-        }
+        }}
     }
 
     impl<'a> FormatInfo<'a> {
@@ -1199,11 +1199,11 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for ArchiveInfo<'a> {
         type Inner = ArchiveInfo<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             Self {
                 _tab: flatbuffers::Table::new(buf, loc),
             }
-        }
+        }}
     }
 
     impl<'a> ArchiveInfo<'a> {
@@ -1364,11 +1364,11 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for ContentFormat<'a> {
         type Inner = ContentFormat<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             Self {
                 _tab: flatbuffers::Table::new(buf, loc),
             }
-        }
+        }}
     }
 
     impl<'a> ContentFormat<'a> {
@@ -1536,11 +1536,11 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for Metadata<'a> {
         type Inner = Metadata<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             Self {
                 _tab: flatbuffers::Table::new(buf, loc),
             }
-        }
+        }}
     }
 
     impl<'a> Metadata<'a> {
@@ -1924,16 +1924,16 @@ pub mod arkavo {
     /// Assumes, without verification, that a buffer of bytes contains a Metadata and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid `Metadata`.
-    pub unsafe fn root_as_metadata_unchecked(buf: &[u8]) -> Metadata<'_> {
+    pub unsafe fn root_as_metadata_unchecked(buf: &[u8]) -> Metadata<'_> { unsafe {
         flatbuffers::root_unchecked::<Metadata>(buf)
-    }
+    }}
     #[inline]
     /// Assumes, without verification, that a buffer of bytes contains a size prefixed Metadata and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid size prefixed `Metadata`.
-    pub unsafe fn size_prefixed_root_as_metadata_unchecked(buf: &[u8]) -> Metadata<'_> {
+    pub unsafe fn size_prefixed_root_as_metadata_unchecked(buf: &[u8]) -> Metadata<'_> { unsafe {
         flatbuffers::size_prefixed_root_unchecked::<Metadata>(buf)
-    }
+    }}
     #[inline]
     pub fn finish_metadata_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(
         fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,

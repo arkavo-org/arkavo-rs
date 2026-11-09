@@ -200,11 +200,10 @@ pub fn sanitize_patreon(p: &Value) -> Value {
     }
     // Only a creator may carry campaign_id. An absent, mis-cased or non-string
     // role redacts rather than passing the field through.
-    if obj.get("role").and_then(Value::as_str) == Some("creator") {
-        if let Some(v) = obj.get("campaign_id") {
+    if obj.get("role").and_then(Value::as_str) == Some("creator")
+        && let Some(v) = obj.get("campaign_id") {
             out.insert("campaign_id".into(), v.clone());
         }
-    }
     Value::Object(out)
 }
 
@@ -401,11 +400,10 @@ pub fn context_agent(claims: &DecodedClaims, platform_audience: Option<&str>) ->
     if let Some(id) = claims.client_id.as_deref().filter(|s| !s.is_empty()) {
         return Some(id.to_string());
     }
-    if let Some(rest) = claims.sub.strip_prefix("client:") {
-        if !rest.is_empty() {
+    if let Some(rest) = claims.sub.strip_prefix("client:")
+        && !rest.is_empty() {
             return Some(rest.to_string());
         }
-    }
     let members: Vec<&str> = match &claims.aud {
         Aud::One(s) => vec![s.as_str()],
         Aud::Many(v) => v.iter().map(String::as_str).collect(),

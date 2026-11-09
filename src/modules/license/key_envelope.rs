@@ -291,11 +291,9 @@ fn safe_name(name: &str) -> bool {
         if let Some(index) = name
             .strip_prefix(&format!("{track}-segment"))
             .and_then(|s| s.strip_suffix(".m4s"))
-        {
-            if let Ok(number) = index.parse::<u32>() {
+            && let Ok(number) = index.parse::<u32>() {
                 return number <= 4092 && number.to_string() == index;
             }
-        }
     }
     false
 }

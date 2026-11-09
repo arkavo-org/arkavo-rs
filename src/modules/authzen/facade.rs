@@ -237,16 +237,14 @@ async fn authenticate_pep(
     let Some(client_id) = service_client_id(&claims) else {
         return Err(PepAuth::Unauthorized);
     };
-    if let Some(want) = &state.expected_aud {
-        if !claims.aud.contains(want) {
+    if let Some(want) = &state.expected_aud
+        && !claims.aud.contains(want) {
             return Err(PepAuth::Unauthorized);
         }
-    }
-    if let Some(allow) = &state.pep_client_ids {
-        if !allow.contains(client_id) {
+    if let Some(allow) = &state.pep_client_ids
+        && !allow.contains(client_id) {
             return Err(PepAuth::Forbidden);
         }
-    }
     Ok((claims, token.to_string()))
 }
 

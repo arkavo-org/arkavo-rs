@@ -41,7 +41,7 @@ use futures_util::{SinkExt, StreamExt};
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use nanotdf::{error, info, warn};
 use nanotdf::{BinaryParser, PolicyType, ProtocolEnum, ResourceLocator};
-use once_cell::sync::OnceCell;
+use std::sync::OnceLock;
 use p256::ecdh::EphemeralSecret;
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use rand_core::{OsRng, RngCore};
@@ -259,7 +259,7 @@ struct KasKeys {
     private_key: Vec<u8>,
 }
 
-static KAS_KEYS: OnceCell<Arc<KasKeys>> = OnceCell::new();
+static KAS_KEYS: OnceLock<Arc<KasKeys>> = OnceLock::new();
 
 /// Middleware for logging HTTP requests
 async fn log_request_middleware(
@@ -317,9 +317,9 @@ async fn ws_handler(
         return refusal;
     }
     // Check for NTDF token in Authorization header
-    if let Some(auth_header) = headers.get(AUTHORIZATION) {
-        if let Ok(auth_str) = auth_header.to_str() {
-            if auth_str.starts_with("NTDF ") {
+    if let Some(auth_header) = headers.get(AUTHORIZATION)
+        && let Ok(auth_str) = auth_header.to_str()
+            && auth_str.starts_with("NTDF ") {
                 // Validate NTDF token
                 match get_kas_private_key_bytes() {
                     Some(kas_key_bytes) => {
@@ -376,8 +376,6 @@ async fn ws_handler(
                     }
                 }
             }
-        }
-    }
 
     // No NTDF token - allow for backward compatibility
     ws.on_upgrade(move |socket| handle_websocket_axum(socket, state))
@@ -1600,9 +1598,11 @@ fn verify_token(
         Ok(token_data.claims)
     } else {
         // Production mode - proper JWT validation
-        let mut validation = Validation::default();
-        validation.validate_exp = true;
-        validation.validate_aud = false; // Can be enabled if audience is specified
+        let mut validation = Validation {
+            validate_exp: true,
+            validate_aud: false, // Can be enabled if audience is specified
+            ..Default::default()
+        };
 
         // Load the public key for verification
         let public_key_path = settings.jwt_public_key_path.as_ref().ok_or_else(|| {
@@ -1803,9 +1803,9 @@ async fn handle_rewrap(
             locator = policy.get_locator().clone();
 
             // Fetch remote policy if HTTP/HTTPS URL
-            if let Some(ref loc) = locator {
-                if loc.protocol_enum == ProtocolEnum::Http
-                    || loc.protocol_enum == ProtocolEnum::Https
+            if let Some(ref loc) = locator
+                && (loc.protocol_enum == ProtocolEnum::Http
+                    || loc.protocol_enum == ProtocolEnum::Https)
                 {
                     info!("Fetching remote policy from: {}", loc.body);
                     // TODO: Implement actual HTTP fetch of remote policy
@@ -1861,7 +1861,6 @@ async fn handle_rewrap(
                     //     }
                     // }
                 }
-            }
         }
         PolicyType::Embedded => {
             info!("Processing embedded policy");
@@ -1986,8 +1985,8 @@ async fn handle_rewrap(
         info!("No policy binding present");
     }
 
-    if let Some(locator) = &locator {
-        if locator.protocol_enum == ProtocolEnum::SharedResource {
+    if let Some(locator) = &locator
+        && locator.protocol_enum == ProtocolEnum::SharedResource {
             info!("Evaluating contract: {}", locator.body.clone());
             if !locator.body.is_empty() {
                 //  "Verified 18+"
@@ -2168,7 +2167,6 @@ async fn handle_rewrap(
                 }
             }
         }
-    }
     // Deserialize the public key sent by the client
     let tdf_ephemeral_public_key = match PublicKey::from_sec1_bytes(tdf_ephemeral_key_bytes) {
         Ok(key) => key,
@@ -3261,15 +3259,14 @@ fn validate_config(settings: &ServerSettings) -> Result<(), Box<dyn std::error::
     if !settings.jwt_validation_disabled && settings.jwt_public_key_path.is_none() {
         return Err("JWT_PUBLIC_KEY_PATH must be set when JWT validation is enabled".into());
     }
-    if let Some(ref jwt_key_path) = settings.jwt_public_key_path {
-        if !std::path::Path::new(jwt_key_path).exists() {
+    if let Some(ref jwt_key_path) = settings.jwt_public_key_path
+        && !std::path::Path::new(jwt_key_path).exists() {
             return Err(format!("JWT public key file not found: {}", jwt_key_path).into());
         }
-    }
 
     // Validate Chain RPC URL format (only if configured)
-    if let Some(ref chain_url) = settings.chain_rpc_url {
-        if !chain_url.starts_with("ws://")
+    if let Some(ref chain_url) = settings.chain_rpc_url
+        && !chain_url.starts_with("ws://")
             && !chain_url.starts_with("wss://")
             && !chain_url.starts_with("http://")
             && !chain_url.starts_with("https://")
@@ -3280,7 +3277,6 @@ fn validate_config(settings: &ServerSettings) -> Result<(), Box<dyn std::error::
             )
             .into());
         }
-    }
 
     info!("✓ Configuration validation passed");
     Ok(())

@@ -88,7 +88,12 @@ impl FairPlayKeyServer {
     /// ```
     pub fn new(credentials_path: PathBuf) -> Result<Self, FairPlayError> {
         // Set environment variable for fpssdk to find certificates
-        std::env::set_var("FAIRPLAY_CREDENTIALS_PATH", &credentials_path);
+        // SAFETY: called once while arks starts up, before it serves requests
+        // or reads these variables anywhere else. Edition 2024 marks set_var
+        // unsafe because another thread reading the environment at the same
+        // time is undefined behaviour; the SDK only takes them from the
+        // environment.
+        unsafe { std::env::set_var("FAIRPLAY_CREDENTIALS_PATH", &credentials_path) };
         // The SDK itself only reads FPS_CERT_PATH (the certificates JSON file)
         // and otherwise falls back to a path relative to the working directory.
         if std::env::var_os("FPS_CERT_PATH").is_none() {
@@ -97,7 +102,8 @@ impl FairPlayKeyServer {
                 .map(|name| credentials_path.join(name))
                 .find(|p| p.exists());
             if let Some(certs) = certs {
-                std::env::set_var("FPS_CERT_PATH", certs);
+                // SAFETY: as above.
+                unsafe { std::env::set_var("FPS_CERT_PATH", certs) };
             }
         }
         match std::env::var("FPS_CERT_PATH") {

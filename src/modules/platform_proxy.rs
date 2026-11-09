@@ -162,15 +162,14 @@ pub(crate) fn strip_proxy_headers(headers: &mut HeaderMap) {
     // for this specific message. Collect them before mutating, since the next
     // loop removes Connection itself.
     let mut connection_listed: Vec<HeaderName> = Vec::new();
-    if let Some(conn) = headers.get(header::CONNECTION) {
-        if let Ok(val) = conn.to_str() {
+    if let Some(conn) = headers.get(header::CONNECTION)
+        && let Ok(val) = conn.to_str() {
             for name in val.split(',').map(str::trim).filter(|s| !s.is_empty()) {
                 if let Ok(hn) = HeaderName::from_str(name) {
                     connection_listed.push(hn);
                 }
             }
         }
-    }
     for h in &connection_listed {
         headers.remove(h);
     }

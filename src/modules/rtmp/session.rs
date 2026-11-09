@@ -275,8 +275,8 @@ impl RtmpSession {
         // Main session loop - handles both socket reads and frame relay for subscribers
         loop {
             // Check if we're a subscriber with an active receiver
-            if self.role == SessionRole::Subscriber {
-                if let Some(ref mut receiver) = self.frame_receiver {
+            if self.role == SessionRole::Subscriber
+                && let Some(ref mut receiver) = self.frame_receiver {
                     // Send cached metadata and sequence headers to late joiner (once)
                     if !self.headers_sent {
                         if let Some(stream_id) = self.subscriber_stream_id {
@@ -383,7 +383,6 @@ impl RtmpSession {
                     }
                     continue;
                 }
-            }
 
             // For publishers and subscribers without active stream - just read socket
             let n = socket.read(&mut buf).await?;
@@ -422,8 +421,8 @@ impl RtmpSession {
         }
 
         // Cleanup on disconnect
-        if self.role == SessionRole::Publisher {
-            if let Some(ref stream_key) = self.stream_key {
+        if self.role == SessionRole::Publisher
+            && let Some(ref stream_key) = self.stream_key {
                 // Unregister from stream registry
                 self.stream_registry.unregister_publisher(stream_key).await;
 
@@ -431,13 +430,11 @@ impl RtmpSession {
                 nanotdf::info!("Publisher disconnected, cleaned up stream: {}", stream_key);
 
                 // Broadcast stream_stopped event if stream was started
-                if self.started_event_sent {
-                    if let Some(ref broadcaster) = self.event_broadcaster {
+                if self.started_event_sent
+                    && let Some(ref broadcaster) = self.event_broadcaster {
                         broadcaster.stream_stopped(stream_key).await;
                     }
-                }
             }
-        }
 
         Ok(())
     }
@@ -852,7 +849,7 @@ impl RtmpSession {
         self.frame_count += 1;
 
         // Debug: log timestamps for first 10 frames and every 100th
-        if self.frame_count <= 10 || self.frame_count % 100 == 0 {
+        if self.frame_count <= 10 || self.frame_count.is_multiple_of(100) {
             nanotdf::info!(
                 "📹 Video frame #{}: timestamp={} ms, size={} bytes",
                 self.frame_count,
@@ -867,14 +864,13 @@ impl RtmpSession {
                 self.emit_stream_started_if_needed().await;
 
                 // Check if this is a sequence header and cache it for late joiners
-                if Self::is_video_sequence_header(data) {
-                    if let Some(ref stream_key) = self.stream_key {
+                if Self::is_video_sequence_header(data)
+                    && let Some(ref stream_key) = self.stream_key {
                         nanotdf::info!("Caching video sequence header for {}", stream_key);
                         self.stream_registry
                             .set_video_sequence_header(stream_key, data.to_vec())
                             .await;
                     }
-                }
 
                 // Check if this is an NTDF header frame (magic bytes "NTDF" at offset 5)
                 if Self::is_ntdf_header_frame(data) {
@@ -979,14 +975,13 @@ impl RtmpSession {
         match self.role {
             SessionRole::Publisher => {
                 // Check if this is a sequence header and cache it for late joiners
-                if Self::is_audio_sequence_header(data) {
-                    if let Some(ref stream_key) = self.stream_key {
+                if Self::is_audio_sequence_header(data)
+                    && let Some(ref stream_key) = self.stream_key {
                         nanotdf::info!("Caching audio sequence header for {}", stream_key);
                         self.stream_registry
                             .set_audio_sequence_header(stream_key, data.to_vec())
                             .await;
                     }
-                }
 
                 match self.encryption_mode {
                     EncryptionMode::Encrypted => {
@@ -1105,8 +1100,8 @@ impl RtmpSession {
             return;
         }
 
-        if let Some(ref stream_key) = self.stream_key {
-            if let Some(ref broadcaster) = self.event_broadcaster {
+        if let Some(ref stream_key) = self.stream_key
+            && let Some(ref broadcaster) = self.event_broadcaster {
                 // Get manifest header if available (for NTDF streams)
                 let manifest_header = self.manifest.as_ref().map(|m| {
                     base64::Engine::encode(&base64::prelude::BASE64_STANDARD, &m.header_bytes)
@@ -1119,7 +1114,6 @@ impl RtmpSession {
                 self.started_event_sent = true;
                 nanotdf::info!("Emitted stream_started event for {}", stream_key);
             }
-        }
     }
 
     /// Extract ntdf_header from AMF0 values (from @setDataFrame or onMetaData)

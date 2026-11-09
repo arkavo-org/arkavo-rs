@@ -53,9 +53,11 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         const NAME: &str = "ARKS_ENV_FLAG_TEST_NON_UTF8";
         assert_eq!(from_env(NAME), Ok(false));
-        std::env::set_var(NAME, std::ffi::OsStr::from_bytes(b"tr\xffue"));
+        // SAFETY: a test-only variable no other test reads.
+        unsafe { std::env::set_var(NAME, std::ffi::OsStr::from_bytes(b"tr\xffue")) };
         let result = from_env(NAME);
-        std::env::remove_var(NAME);
+        // SAFETY: as above.
+        unsafe { std::env::remove_var(NAME) };
         assert!(result.unwrap_err().contains(NAME));
     }
 }

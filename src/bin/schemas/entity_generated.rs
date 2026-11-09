@@ -73,18 +73,18 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for ActivityLevel {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
             Self(b)
-        }
+        }}
     }
 
     impl flatbuffers::Push for ActivityLevel {
         type Output = ActivityLevel;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
             flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }
+        }}
     }
 
     impl flatbuffers::EndianScalar for ActivityLevel {
@@ -180,18 +180,18 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for MediaType {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
             Self(b)
-        }
+        }}
     }
 
     impl flatbuffers::Push for MediaType {
         type Output = MediaType;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
             flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }
+        }}
     }
 
     impl flatbuffers::EndianScalar for MediaType {
@@ -279,18 +279,18 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for LocationLevel {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
             Self(b)
-        }
+        }}
     }
 
     impl flatbuffers::Push for LocationLevel {
         type Output = LocationLevel;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
             flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }
+        }}
     }
 
     impl flatbuffers::EndianScalar for LocationLevel {
@@ -390,18 +390,18 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for IdentityAssuranceLevel {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
             Self(b)
-        }
+        }}
     }
 
     impl flatbuffers::Push for IdentityAssuranceLevel {
         type Output = IdentityAssuranceLevel;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
             flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }
+        }}
     }
 
     impl flatbuffers::EndianScalar for IdentityAssuranceLevel {
@@ -488,18 +488,18 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for EncryptionLevel {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
             Self(b)
-        }
+        }}
     }
 
     impl flatbuffers::Push for EncryptionLevel {
         type Output = EncryptionLevel;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
             flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }
+        }}
     }
 
     impl flatbuffers::EndianScalar for EncryptionLevel {
@@ -586,18 +586,18 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for StreamLevel {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
             Self(b)
-        }
+        }}
     }
 
     impl flatbuffers::Push for StreamLevel {
         type Output = StreamLevel;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
             flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }
+        }}
     }
 
     impl flatbuffers::EndianScalar for StreamLevel {
@@ -693,18 +693,18 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for ExpertLevel {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
             Self(b)
-        }
+        }}
     }
 
     impl flatbuffers::Push for ExpertLevel {
         type Output = ExpertLevel;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
             flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }
+        }}
     }
 
     impl flatbuffers::EndianScalar for ExpertLevel {
@@ -804,18 +804,18 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for TrustLevel {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
             Self(b)
-        }
+        }}
     }
 
     impl flatbuffers::Push for TrustLevel {
         type Output = TrustLevel;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
             flatbuffers::emplace_scalar::<i8>(dst, self.0);
-        }
+        }}
     }
 
     impl flatbuffers::EndianScalar for TrustLevel {
@@ -903,18 +903,18 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for Entity {
         type Inner = Self;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
             Self(b)
-        }
+        }}
     }
 
     impl flatbuffers::Push for Entity {
         type Output = Entity;
         #[inline]
-        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
             flatbuffers::emplace_scalar::<u8>(dst, self.0);
-        }
+        }}
     }
 
     impl flatbuffers::EndianScalar for Entity {
@@ -955,11 +955,11 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for PublicId<'a> {
         type Inner = PublicId<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             Self {
                 _tab: flatbuffers::Table::new(buf, loc),
             }
-        }
+        }}
     }
 
     impl<'a> PublicId<'a> {
@@ -1072,11 +1072,11 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for Account<'a> {
         type Inner = Account<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             Self {
                 _tab: flatbuffers::Table::new(buf, loc),
             }
-        }
+        }}
     }
 
     impl<'a> Account<'a> {
@@ -1248,11 +1248,11 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for Stream<'a> {
         type Inner = Stream<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             Self {
                 _tab: flatbuffers::Table::new(buf, loc),
             }
-        }
+        }}
     }
 
     impl<'a> Stream<'a> {
@@ -1523,11 +1523,11 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for Thought<'a> {
         type Inner = Thought<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             Self {
                 _tab: flatbuffers::Table::new(buf, loc),
             }
-        }
+        }}
     }
 
     impl<'a> Thought<'a> {
@@ -1767,11 +1767,11 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for Profile<'a> {
         type Inner = Profile<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             Self {
                 _tab: flatbuffers::Table::new(buf, loc),
             }
-        }
+        }}
     }
 
     impl<'a> Profile<'a> {
@@ -2048,11 +2048,11 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for Activity<'a> {
         type Inner = Activity<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             Self {
                 _tab: flatbuffers::Table::new(buf, loc),
             }
-        }
+        }}
     }
 
     impl<'a> Activity<'a> {
@@ -2234,11 +2234,11 @@ pub mod arkavo {
     impl<'a> flatbuffers::Follow<'a> for EntityRoot<'a> {
         type Inner = EntityRoot<'a>;
         #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
             Self {
                 _tab: flatbuffers::Table::new(buf, loc),
             }
-        }
+        }}
     }
 
     impl<'a> EntityRoot<'a> {
@@ -2517,16 +2517,16 @@ pub mod arkavo {
     /// Assumes, without verification, that a buffer of bytes contains a EntityRoot and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid `EntityRoot`.
-    pub unsafe fn root_as_entity_root_unchecked(buf: &[u8]) -> EntityRoot<'_> {
+    pub unsafe fn root_as_entity_root_unchecked(buf: &[u8]) -> EntityRoot<'_> { unsafe {
         flatbuffers::root_unchecked::<EntityRoot>(buf)
-    }
+    }}
     #[inline]
     /// Assumes, without verification, that a buffer of bytes contains a size prefixed EntityRoot and returns it.
     /// # Safety
     /// Callers must trust the given bytes do indeed contain a valid size prefixed `EntityRoot`.
-    pub unsafe fn size_prefixed_root_as_entity_root_unchecked(buf: &[u8]) -> EntityRoot<'_> {
+    pub unsafe fn size_prefixed_root_as_entity_root_unchecked(buf: &[u8]) -> EntityRoot<'_> { unsafe {
         flatbuffers::size_prefixed_root_unchecked::<EntityRoot>(buf)
-    }
+    }}
     #[inline]
     pub fn finish_entity_root_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(
         fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
