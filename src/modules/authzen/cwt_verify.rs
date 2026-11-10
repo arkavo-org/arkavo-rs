@@ -22,6 +22,9 @@ pub enum VerifyError {
     Malformed,
     UnsupportedAlg,
     UnsupportedCritical,
+    /// The token carries a COSE content type: it is a typed token for another
+    /// verifier (e.g. `application/owner-kas+cwt`), never a general CWT.
+    ContentType,
     MissingProtectedKid,
     UnknownKid,
     Signature,
@@ -86,6 +89,12 @@ pub fn verify_tagged_bytes(
     // it does not understand. This verifier processes only `alg` and `kid`.
     if !sign1.protected.header.crit.is_empty() {
         return Err(VerifyError::UnsupportedCritical);
+    }
+    // A content type marks a token minted for one verifier (the owner-KAS
+    // token, the game-server token). Identity's verifier refuses any; so does
+    // this one, so audience is never the only thing keeping a typed token out.
+    if sign1.protected.header.content_type.is_some() || sign1.unprotected.content_type.is_some() {
+        return Err(VerifyError::ContentType);
     }
     if sign1.protected.header.key_id.is_empty() {
         return Err(VerifyError::MissingProtectedKid);
@@ -729,6 +738,55 @@ mod tests {
         assert!(matches!(
             verify_header_token(&t, &vk, opts()),
             Err(VerifyError::UnsupportedCritical)
+        ));
+    }
+
+    /// A typed token (owner-KAS, game server) is refused whatever its claims.
+    #[test]
+    fn reject_protected_content_type() {
+        let (sk, vk) = keypair();
+        let protected = coset::HeaderBuilder::new()
+            .algorithm(coset::iana::Algorithm::ES256)
+            .key_id(KID.to_vec())
+            .content_type("application/owner-kas+cwt".to_string())
+            .build();
+        let t = super::test_support::mint_with_protected(&sk, protected, base_entries());
+        assert!(matches!(
+            verify_header_token(&t, &vk, opts()),
+            Err(VerifyError::ContentType)
+        ));
+    }
+
+    /// The unprotected header is unsigned, but a content type there is refused too.
+    #[test]
+    fn reject_unprotected_content_type() {
+        use p256::ecdsa::{Signature, signature::Signer};
+        let (sk, vk) = keypair();
+        let mut payload = Vec::new();
+        ciborium::ser::into_writer(&Value::Map(base_entries()), &mut payload).unwrap();
+        let sign1 = coset::CoseSign1Builder::new()
+            .protected(
+                coset::HeaderBuilder::new()
+                    .algorithm(coset::iana::Algorithm::ES256)
+                    .key_id(KID.to_vec())
+                    .build(),
+            )
+            .unprotected(
+                coset::HeaderBuilder::new()
+                    .content_format(coset::iana::CoapContentFormat::Cwt)
+                    .build(),
+            )
+            .payload(payload)
+            .create_signature(b"", |to_sign| {
+                let sig: Signature = sk.sign(to_sign);
+                sig.to_bytes().to_vec()
+            })
+            .build();
+        let mut out = CWT_TAG_PREFIX.to_vec();
+        out.extend_from_slice(&sign1.to_vec().unwrap());
+        assert!(matches!(
+            verify_header_token(&URL_SAFE_NO_PAD.encode(out), &vk, opts()),
+            Err(VerifyError::ContentType)
         ));
     }
 
